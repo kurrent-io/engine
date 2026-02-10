@@ -3,3 +3,5 @@ node_modules
 build/
 dist/
 src/library.gen.ts
+quickjs/
+*.so

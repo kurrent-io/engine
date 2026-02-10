@@ -353,7 +353,7 @@ export class OverlayStorage {
     return yield* this.#withTxn(fx, fn);
   }
 
-  *withRTxn<T>(fx: FutureContext, fn: (txn: WTxn) => Future<T>): Future<T> {
+  *withRTxn<T>(fx: FutureContext, fn: (txn: RTxn) => Future<T>): Future<T> {
     return yield* this.#withTxn(fx, fn);
   }
 }
@@ -387,5 +387,106 @@ class OverlayTxn {
   del(key: string, cb: (result: StorageDone) => void): void {
     this.#updates[key] = undefined;
     cb({value: true});
+  }
+}
+
+//
+
+/* ExternalCallbackStorage implements storage entirely via callback functions. */
+export class ExternalCallbackStorage {
+  #txn: (writable: boolean, cb: (result: StorageValue) => void) => unknown;
+  #commit: (txn: unknown, cb: (result: StorageDone) => void) => void;
+  #abort: (txn: unknown, cb: () => void) => void;
+  #get: (txn: unknown, key: string, cb: (result: StorageValue) => void) => void;
+  #set: (txn: unknown, key: string, value: unknown, cb: (result: StorageDone) => void) => void;
+  #del: (txn: unknown, key: string, cb: (result: StorageDone) => void) => void;
+
+  constructor(
+    // txn returns an opaque value that gets passed to the other callbacks
+    txn: (writable: boolean, cb: (result: StorageValue) => void) => unknown,
+    // commit commits a transaction, or returns an error.
+    commit: (txn: unknown, cb: (result: StorageDone) => void) => void,
+    // abort aborts the transaction.  It is not allowed to return an error.
+    abort: (txn: unknown, cb: () => void) => void,
+    // get gets a value
+    get: (txn: unknown, key: string, cb: (result: StorageValue) => void) => void,
+    // set sets a value
+    set: (txn: unknown, key: string, value: unknown, cb: (result: StorageDone) => void) => void,
+    // del deletes a value
+    del: (txn: unknown, key: string, cb: (result: StorageDone) => void) => void,
+  ) {
+    this.#txn = txn;
+    this.#commit = commit;
+    this.#abort = abort;
+    this.#get = get;
+    this.#set = set;
+    this.#del = del;
+  }
+
+  *#withTxn<T>(
+    fx: FutureContext, writable: bool, fn: (txn: WTxn) => Future<T>,
+  ): Future<T> {
+    // create the transaction
+    let txnVal: unknown;
+    let txnReady = false;
+    this.#txn(writable, (result) => {
+      if ("err" in result) {
+        fx.throw(result.err);
+      } else {
+        txnVal = txn.value;
+        txnReady = true;
+        fx.wakeup();
+      }
+    });
+    while (!txnReady) yield;
+
+    const txn: WTxn = {
+      get(key: string, cb: (result: StorageValue) => void): void {
+        return this.#get(txnVal, key, cb);
+      },
+      set(key: string, value: unknown, cb: (result: StorageDone) => void): void {
+        return this.#set(txnVal, key, cb);
+      },
+      del(key: string, cb: (result: StorageDone) => void): void {
+        return this.#del(txnVal, key, cb);
+      }
+    };
+
+    let result: T;
+    try {
+      result = yield* fn(txn);
+    } catch (e: unknown) {
+      // abort and re-throw error
+      let abortReady = false;
+      this.#abort(txnVal, () => {
+        abortReady = true;
+        fx.wakeup();
+      }):
+      while(!abortReady) yield;
+      throw e;
+    }
+
+    // try to commit
+    let commitOk = false;
+    let commitReady = false;
+    this.#commit(txnVal, (result) => {
+      if ("err" in result) {
+        fx.throw(result.err);
+      } else {
+        commitReady = true;
+        fx.wakeup();
+      }
+    });
+    while (!commitReady) yield;
+
+    return result;
+  }
+
+  *withWTxn<T>(_fx: FutureContext, fn: (txn: WTxn) => Future<T>): Future<T> {
+    return yield* this.#withTxn(fn, true);
+  }
+
+  *withRTxn<T>(_fx: FutureContext, fn: (txn: RTxn) => Future<T>): Future<T> {
+    return yield* this.#withTxn(fn, false);
   }
 }

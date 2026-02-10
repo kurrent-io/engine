@@ -1,4 +1,14 @@
-import STPyV8
+import _quickjs
 
-with STPyV8.JSContext() as js:
-    print(js.eval("setTimeout(() => 5 + 5)"))
+q = _quickjs.QuickJS()
+q.eval("let x = {a: [], b: 2}")
+a = q.eval('x')
+print('a:', a)
+b = q.eval('x')
+print('b:', b)
+print("-----")
+print('a.a', a.a)
+print('b.a', b.a)
+print("-----")
+print('a.b', a.b)
+print('b.b', b.b)

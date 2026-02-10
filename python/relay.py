@@ -214,59 +214,21 @@ def wrap_generator(g):
 
     return next
 
-"""
-typescript wrapper of python generator:
 
-function*(qx: QX): QueryGenerator<T> {
-    g = <get-python-wrapped-generator>()
-    let ans = null;
-    while(true) {
-        const {val, done} = g(ans)
-        if (done) return val;
-        ans = yield val;
-    }
-}
+########
 
-// moving towards C function implementation
-function(qx: QX): QueryGenerator<T> {
-    g = <get-python-wrapped-generator>()
-    return {next: g}
-}
+# Let's try to imagine a reference-based interface.  Maybe this will be more obvious how our goja
+# interface should work too.
+
+class ProtoMeta(type):
+    def __init__(self, name, supers, classdict):
+        super().__init__(name, supers, classdict)
+        # every combination of input args/kwargs will result in a stable, unique object
+        self._instances = {}
 
 
-function(qx: QX): QueryGenerator<T> {
-}
-
-
-
-type QueryFunction<QX, T> = (qx: QX, prev: T | undefined, prevIsValid: boolean)
-
-export type QueryFunction<QX, T> = (qx: QX, prev: T | undefined, prevIsValid: boolean) => QueryGenerator<T>;
-
-"""
-
-# returned by framework.new_query(func)
-class Query:
-    def __init__(self, func, _close):
-        self.func = func
-        self._close = _close
-        self.subs = []
-
-    def close(self):
-        self._close()
-
-    def subscribe(self, hook):
-        self.subs.append(hook)
-        # return unsubscribe function
-        return lambda: self.subs = [s for s in self.subs if s != hook]
-
-# export interface Query<T> {
-#   awaitResult(): QueryGenerator<T>
-#   subscribe(callback: (val: T) => void): () => void;
-#   close(): void;
-# }
-
-# How would this work?
-# A python Query object would create a
-
-# The python subscription object would have
+class Book(ProtoMeta):
+    id: str
+    isbn: str
+    restricted: bool
+    status: None | BookStatusCheckout | BookStatusHold
