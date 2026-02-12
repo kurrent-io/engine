@@ -72,7 +72,28 @@ typedef struct {
     JSContext *ctx;
     JSValue jsval;
     PyObject *weakreflist;
+    PyObject *cache;
 } py_jsvalue_t;
+
+// a wrapper around a Function, whose __call__() method calls the Function with the provided `this`
+typedef struct {
+    PyObject_HEAD;
+    PyObject *this;
+    py_jsvalue_t *function;
+} py_method_t;
+
+static void py_jsvalue_dealloc(py_jsvalue_t *self){
+    JSContext *ctx = self->ctx;
+    if(!JS_IsUninitialized(self->jsval)){
+        JS_FreeValue(ctx, self->jsval);
+        self->jsval = JS_UNINITIALIZED;
+    }
+    if(self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject*)self);
+    Py_CLEAR(self->cache);
+    Py_TYPE(self)->tp_free((PyObject*)self);
+    // also decrement the QuickJS object
+    Py_DECREF((PyObject*)JS_GetContextOpaque(ctx));
+}
 
 static PyObject *py_jsvalue_new(PyTypeObject *type, JSContext *ctx, JSValue jsval) {
     // increment reference count to save our parameter
@@ -86,19 +107,14 @@ static PyObject *py_jsvalue_new(PyTypeObject *type, JSContext *ctx, JSValue jsva
     // we keep a reference to the QuickJS so we free our data before QuickJS
     // frees the js context
     Py_INCREF((PyObject*)JS_GetContextOpaque(ctx));
-    return (PyObject*)out;
-}
 
-static void py_jsvalue_dealloc(py_jsvalue_t *self){
-    JSContext *ctx = self->ctx;
-    if(!JS_IsUninitialized(self->jsval)){
-        JS_FreeValue(ctx, self->jsval);
-        self->jsval = JS_UNINITIALIZED;
+    out->cache = PyDict_New();
+    if(!out->cache){
+        py_jsvalue_dealloc(out);
+        return NULL;
     }
-    if(self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject*)self);
-    Py_TYPE(self)->tp_free((PyObject*)self);
-    // also decrement the QuickJS object
-    Py_DECREF((PyObject*)JS_GetContextOpaque(ctx));
+
+    return (PyObject*)out;
 }
 
 static PyTypeObject py_quickjs_type;
@@ -107,7 +123,8 @@ static PyTypeObject py_array_type;
 static PyTypeObject py_function_type;
 static PyTypeObject py_method_type;
 
-static PyObject *js2py(JSContext *ctx, JSValue val) {
+// borrows val
+static PyObject *js2py(JSContext *ctx, JSValueConst val) {
     int tag = JS_VALUE_GET_TAG(val);
     switch(tag){
         case JS_TAG_UNDEFINED:
@@ -253,100 +270,133 @@ done:
     return out;
 }
 
+// borrows val
+static JSValue py2js(JSContext *ctx, PyObject *val) {
+    // is object a singleton?
+    if(val == Py_False){
+        return JS_FALSE;
+    }
+    if(val == Py_True){
+        return JS_TRUE;
+    }
+    if(val == Py_None){
+        return JS_NULL;
+    }
 
-// static JSValue PyObject *py2js(JSContext *ctx, PyObject *val) {
-//     PyObject *items = NULL;
-//     PyObject *fast = NULL;
-//     PyObject *key = NULL;
-//     PyObject *val = NULL;
-//
-//     // is object a singleton?
-//     if(obj == Py_False){
-//         lua_pushboolean(L, false);
-//         goto done;
-//     }
-//     if(obj == Py_True){
-//         lua_pushboolean(L, true);
-//         goto done;
-//     }
-//     if(obj == Py_None){
-//         lua_pushnil(L);
-//         goto done;
-//     }
-//
-//     // is object a string?
-//     if(PyObject_IsSubclass(obj, PyUnicode_Type)){
-//         Py_ssize_t keylen;
-//         const char *keystr = PyUnicode_AsUTF8AndSize(key, &keylen);
-//         if(!keystr) ...
-//         lua_pushlstring(L, keystr, (size_t)keylen);
-//         goto done;
-//     }
-//
-//     // is object a list or a tuple?
-//     if(
-//         PyObject_IsSubclass(obj, PyList_Type)
-//         || PyObject_IsSubclass(obj, PyTuple_Type)
-//     ){
-//         PyObject *fast = PySequence_Fast(obj);
-//         if(!fast) ...
-//         Py_ssize_t len = PySequence_Fast_GET_SIZE(fast);
-//         if(len < 0) ...
-//         // create the lua table
-//         lua_createtable(L, (int)len, 0);
-//         // iterate through key/value pairs
-//         for(Py_ssize_t i = 0; i < len; i++){
-//             PyObject *item = PySequence_Fast_GET_ITEM(fast, i);
-//             // convert value (recurse)
-//             python2lua(L, item);
-//             // add it to the lua table
-//             lua_Integer index = i + 1;
-//             lua_rawseti(L, -2, index);
-//         }
-//         goto done;
-//     }
-//
-//     // is object a dict?
-//     if(PyObject_IsSubclass(obj, PyDict_Type)){
-//         items = PyMapping_Items(obj);
-//         if(!items) ...
-//         PyObject *fast = PySequence_Fast(items);
-//         if(!fast) ...
-//         Py_ssize_t len = PySequence_Fast_GET_SIZE(fast);
-//         if(len < 0) ...
-//         // create the lua table
-//         lua_createtable(L, 0, (int)len);
-//         // iterate through key/value pairs
-//         for(Py_ssize_t i = 0; i < len; i++){
-//             PyObject *item = PySequence_Fast_GET_ITEM(fast, i);
-//             key = PySequence_ITEM(item, 0);
-//             val = PySequence_ITEM(item, 1);
-//             // extract key
-//             Py_ssize_t keylen;
-//             const char *keystr = PyUnicode_AsUTF8AndSize(key, &keylen);
-//             if(!keystr) ...
-//             lua_pushlstring(L, keystr, (size_t)keylen);
-//             // convert value (recurse)
-//             python2lua(L, val);
-//             // add it to the lua table
-//             lua_rawset(L, -3);
-//             // done with this key/value pair
-//             Py_DECREF(key);
-//             Py_DECREF(val);
-//             key = NULL;
-//             val = NULL;
-//         }
-//         goto done;
-//     }
-//
-//     // XXX: throw an unhandled type exception
-//
-// done:
-//     Py_XDECREF(items);
-//     Py_XDECREF(fast);
-//     Py_XDECREF(key);
-//     Py_XDECREF(val);
-// }
+    // is object a string?
+    int isinstance;
+    if((isinstance = PyObject_IsInstance(val, (PyObject*)&PyUnicode_Type))){
+        if(isinstance < 0) goto done;
+        Py_ssize_t len;
+        const char *str = PyUnicode_AsUTF8AndSize(val, &len);
+        return JS_NewStringLen(ctx, str, (size_t)len);
+    }
+
+    // is object a _quickjs.Object?
+    if((isinstance = PyObject_IsInstance(val, (PyObject*)&py_object_type))){
+        if(isinstance < 0) goto done;
+        // just return the underlying object
+        return JS_DupValue(ctx, ((py_jsvalue_t*)val)->jsval);
+    }
+
+    PyObject *items = NULL;
+    PyObject *fast = NULL;
+    JSValue jsout = JS_UNINITIALIZED;
+
+    bool success = false;
+
+    // is object a list or a tuple?
+    if(
+        PyObject_IsInstance(val, (PyObject*)&PyList_Type)
+        || PyObject_IsInstance(val, (PyObject*)&PyTuple_Type)
+    ){
+        // create array output
+        jsout = JS_NewArray(ctx);
+        if(JS_IsException(jsout)){
+            js_exception(ctx);
+            goto done;
+        }
+        // iterate through items
+        fast = PySequence_Fast(val, "found sequence which is neither tuple nor list");
+        if(!fast) goto done;
+        Py_ssize_t len = PySequence_Fast_GET_SIZE(fast);
+        if(len < 0) goto done;
+        for(Py_ssize_t i = 0; i < len; i++){
+            PyObject *borrowed = PySequence_Fast_GET_ITEM(fast, i);
+            // convert value (recurse)
+            JSValue jsitem = py2js(ctx, borrowed);
+            if(JS_IsException(jsitem)){
+                js_exception(ctx);
+                goto done;
+            }
+            int ret = JS_DefinePropertyValueUint32(ctx, jsout, (uint32_t)i, jsitem, JS_PROP_C_W_E);
+            if(ret){
+                js_exception(ctx);
+                goto done;
+            }
+        }
+
+        success = true;
+        goto done;
+    }
+
+    // is object a dict?
+    if((isinstance = PyObject_IsInstance(val, (PyObject*)&PyDict_Type))){
+        if(isinstance < 0) goto done;
+        // create plain object output
+        jsout = JS_NewObject(ctx);
+        if(JS_IsException(jsout)){
+            js_exception(ctx);
+            goto done;
+        }
+
+        // iterate through key/value pairs
+        items = PyMapping_Items(val);
+        if(!items) goto done;
+        Py_ssize_t len = PyList_GET_SIZE(fast);
+        for(Py_ssize_t i = 0; i < len; i++){
+            // kv, key, and value are all borrowed
+            PyObject *kv = PyList_GET_ITEM(items, i);
+            PyObject *pykey = PyTuple_GET_ITEM(kv, 0);
+            PyObject *pyval = PyTuple_GET_ITEM(kv, 1);
+            // key must be a string
+            isinstance = PyObject_IsInstance(val, (PyObject*)&PyUnicode_Type);
+            if(isinstance < 0) goto done;
+            if(!isinstance){
+                PyErr_SetString(quickjs_error, "only string keys are allowed on dict objects");
+                goto done;
+            }
+            const char *key = PyUnicode_AsUTF8(pykey);
+            if(!key) goto done;
+            // recurse for the value
+            JSValue jsval = py2js(ctx, pyval);
+            if(JS_IsException(jsval)){
+                js_exception(ctx);
+                goto done;
+            }
+            // set value on ouptut
+            int ret = JS_DefinePropertyValueStr(ctx, jsout, key, jsval, JS_PROP_C_W_E);
+            if(ret){
+                js_exception(ctx);
+                goto done;
+            }
+        }
+
+        success = true;
+        goto done;
+    }
+
+    PyErr_SetString(quickjs_error, "unsupported type in python->javascript conversion");
+
+done:
+    Py_CLEAR(items);
+    Py_CLEAR(fast);
+    if(!success){
+        if(!JS_IsUninitialized(jsout)) JS_FreeValue(ctx, jsout);
+        jsout = JS_EXCEPTION;
+    }
+    return jsout;
+}
 
 
 /*
@@ -446,7 +496,6 @@ static PyObject *py_quickjs_eval(py_quickjs_t *self, PyObject *args, PyObject *k
     const char *script;
     int flags = 0;
 
-
     char *kwnames[] = {
         "script",
         "flags",
@@ -498,71 +547,10 @@ static PyTypeObject py_quickjs_type = {
 
 static int py_object_init(py_jsvalue_t *self, PyObject *args, PyObject *kwds){
     (void)self;
-    (void)args;
-    (void)kwds;
+    Py_CLEAR(args);
+    Py_CLEAR(kwds);
     PyErr_SetString(quickjs_error, "Object can only be created in C code");
     return -1;
-}
-
-static char * const py_object_getattr_doc =
-    "__getattr__(key: string) -> Any";
-static PyObject *py_object_getattr(py_jsvalue_t *self, PyObject *args){
-    const char *key = "";
-    int ret = PyArg_ParseTuple(args, "s", &key);
-    if(!ret) return NULL;
-    printf("here in __getattr__\n");
-
-    /*
-        def __getattr__(self, name: str) -> typing.Any:
-            out, ok = self._jsobj.get(name)
-            if ok:
-                # automatically convert functions to methods
-                if isinstance(out, Function):
-                    out = Method(out, self)
-                # use self as a cache
-                setattr(self, name, out)
-            return out
-       */
-
-    PyObject *out = NULL;
-    bool success = false;
-
-    JSValue jsval = JS_GetPropertyStr(self->ctx, self->jsval, key);
-    if(JS_IsException(jsval)) return js_exception(self->ctx);
-
-    // did we get something?
-    if(JS_IsUndefined(jsval)){
-        PyErr_SetString(PyExc_KeyError, "no such key");
-        goto done;
-    }
-
-    // convert to python object
-    out = js2py(self->ctx, jsval);
-
-    // automatically convert functions to methods
-    ret = PyObject_IsInstance(out, (PyObject*)&py_function_type);
-    if(ret < 0){
-        goto done;
-    }
-    if(ret){
-        PyObject *args = PyTuple_Pack(2, out, (PyObject*)self);
-        out = PyObject_CallObject((PyObject*)&py_method_type, args);
-        if(!out) goto done;
-    }
-
-    // now cache the result on self
-    ret = PyObject_SetAttrString((PyObject*)self, key, out);
-    if(ret < 0){
-        goto done;
-    }
-
-    success = true;
-
-done:
-    JS_FreeValue(self->ctx, jsval);
-    if(!success) Py_CLEAR(out);
-
-    return out;
 }
 
 // TODO:
@@ -582,13 +570,14 @@ done:
 //
 // But maybe this is enough, and it's almost done, so maybe we'll finish this
 // and see how it goes.
+//
+// Maybe we just only cache simple attributes?  The complex attributes already have their own form
+// of caching.
 
 static PyObject *py_object_getattro(py_jsvalue_t *self, PyObject *attr){
     (void)self;
     const char *key = PyUnicode_AsUTF8(attr);
     if(!key) return NULL;
-
-    // TODO: check cache
 
     JSValue jsval = JS_GetPropertyStr(self->ctx, self->jsval, key);
     if(JS_IsException(jsval)){
@@ -597,6 +586,14 @@ static PyObject *py_object_getattro(py_jsvalue_t *self, PyObject *attr){
 
     PyObject *out = NULL;
     bool success = false;
+
+    // check cache
+    out = PyDict_GetItemString(self->cache, key);
+    if(out){
+        // cache hit
+        Py_INCREF(out);
+        return out;
+    }
 
     // did we get something?
     if(JS_IsUndefined(jsval)){
@@ -608,23 +605,25 @@ static PyObject *py_object_getattro(py_jsvalue_t *self, PyObject *attr){
     out = js2py(self->ctx, jsval);
 
     // automatically convert functions to methods
-    int ret = PyObject_IsInstance(out, (PyObject*)&py_function_type);
-    if(ret < 0){
-        JS_FreeValue(self->ctx, jsval);
-        Py_CLEAR(out);
-        return NULL;
-    }
-    if(ret){
+    int isinstance;
+    if((isinstance = PyObject_IsInstance(out, (PyObject*)&py_function_type))){
+        if(isinstance < 0) goto done;
+        Py_INCREF((PyObject*)self);
         PyObject *args = PyTuple_Pack(2, out, (PyObject*)self);
+        if(!args){
+            out = NULL;
+            goto done;
+        }
         out = PyObject_CallObject((PyObject*)&py_method_type, args);
+        if(!out) goto done;
     }
 
-    // TODO: set cache
-    // ret = PyObject_SetAttrString((PyObject*)self, key, out);
-    // if(ret < 0){
-    //     // XXX
-    //     return NULL;
-    // }
+    // Cache all types on self.  If there is a circular reference in javascript, we can create
+    // space leaks in python since we haven't enabling GC on this python object.  But that seems
+    // unlikely, at least for now.
+    Py_INCREF(out);
+    int ret = PyDict_SetItemString(self->cache, key, out);
+    if(ret) goto done;
 
     success = true;
 
@@ -637,12 +636,12 @@ done:
 
 
 static PyMethodDef py_object_methods[] = {
-    {
-        .ml_name = "__getattr__",
-        .ml_meth = (PyCFunction)(void*)py_object_getattr,
-        .ml_flags = METH_VARARGS,
-        .ml_doc = py_object_getattr_doc,
-    },
+    // {
+    //     .ml_name = "__getattr__",
+    //     .ml_meth = (PyCFunction)(void*)py_object_getattr,
+    //     .ml_flags = METH_VARARGS,
+    //     .ml_doc = py_object_getattr_doc,
+    // },
     {NULL}, // sentinel
 };
 
@@ -669,8 +668,8 @@ static PyTypeObject py_object_type = {
 
 static int py_array_init(py_jsvalue_t *self, PyObject *args, PyObject *kwds){
     (void)self;
-    (void)args;
-    (void)kwds;
+    Py_CLEAR(args);
+    Py_CLEAR(kwds);
     PyErr_SetString(quickjs_error, "Array can only be created in C code");
     return -1;
 }
@@ -706,19 +705,121 @@ static PyTypeObject py_array_type = {
 
 static int py_function_init(py_jsvalue_t *self, PyObject *args, PyObject *kwds){
     (void)self;
-    (void)args;
-    (void)kwds;
+    Py_CLEAR(args);
+    Py_CLEAR(kwds);
     PyErr_SetString(quickjs_error, "Function can only be created in C code");
     return -1;
 }
 
+// base implementation; consumes this and args (even if skip is nonzero)
+static PyObject *call_function(py_jsvalue_t *self, PyObject *this, PyObject *args, Py_ssize_t skip){
+    PyObject *out = NULL;
+    JSValue *jsargs = NULL;
+    int iargs = 0;
+    JSValue jsret = JS_UNINITIALIZED;
+    JSValue jsthis = JS_UNINITIALIZED;
+
+    // convert this
+    jsthis = py2js(self->ctx, this);
+    if(JS_IsException(jsthis)){
+        js_exception(self->ctx);
+        goto done;
+    }
+
+    // convert args
+    Py_ssize_t nargs = PyTuple_GET_SIZE(args);
+    jsargs = malloc(sizeof(*jsargs) * (size_t)(nargs - skip));
+    if(!jsargs){
+        PyErr_SetString(quickjs_error, "error allocating memory for call");
+        goto done;
+    }
+    for(Py_ssize_t i = skip; i < nargs; i++){
+        // get arg (borrowed)
+        PyObject *borrowed = PyTuple_GetItem(args, i);
+        if(!borrowed) goto done;
+        // construct js value
+        jsret = py2js(self->ctx, borrowed);
+        if(JS_IsException(jsret)){
+            js_exception(self->ctx);
+            goto done;
+        }
+        // place in array
+        jsargs[iargs++] = jsret;
+        jsret = JS_UNINITIALIZED;
+    }
+
+    // make the call
+    jsret = JS_Call(self->ctx, self->jsval, jsthis, iargs, jsargs);
+    // mark all args as consumed
+    iargs = 0;
+    if(JS_IsException(jsret)){
+        js_exception(self->ctx);
+        goto done;
+    }
+
+    // convert return value to python
+    out = js2py(self->ctx, jsret);
+
+done:
+    if(!JS_IsUndefined(jsthis)) JS_FreeValue(self->ctx, jsthis);
+    if(!JS_IsUndefined(jsret)) JS_FreeValue(self->ctx, jsret);
+    // free any args we converted
+    for(Py_ssize_t i = 0; i < iargs; i++) JS_FreeValue(self->ctx, jsargs[i]);
+    // free the args array
+    if(jsargs) free(jsargs);
+    // discard provided values
+    Py_CLEAR(args);
+    return out;
+
+}
+
+// myfunc(...) handler; this=None
+static PyObject *py_function_tp_call(PyObject *self, PyObject *args, PyObject *kwargs){
+    // check that args are all positional
+    if(kwargs != NULL && PyDict_Size(kwargs) != 0){
+        PyErr_SetString(quickjs_error, "Function can only be called with positional parameters");
+        Py_CLEAR(args);
+        Py_CLEAR(kwargs);
+        return NULL;
+    }
+
+    // call with this=None
+    PyObject *this = Py_None;
+    Py_INCREF(this);
+    return call_function((py_jsvalue_t*)self, this, args, 0);
+}
+
+// myfunc.call(this, ...) handler
+static char * const py_function_call_doc =
+    "call(this, ...) -> JSAny\n"
+    "call a javascript function with explicit `this`";
+static PyObject *py_function_call(PyObject *self, PyObject *args){
+    Py_ssize_t nargs = PyTuple_GET_SIZE(args);
+    if(nargs < 1){
+        Py_CLEAR(args);
+        PyErr_SetString(quickjs_error, ".call() requires a `this` parameter");
+        return NULL;
+    }
+
+    // extract the first parameter and prepare it to be double-freed
+    PyObject *this = PyTuple_GetItem(args, 0);
+    if(!this){
+        Py_CLEAR(args);
+        return NULL;
+    }
+    Py_INCREF(this);
+
+    // let the function args be all the remaining parameters
+    return call_function((py_jsvalue_t*)self, this, args, 1);
+}
+
 static PyMethodDef py_function_methods[] = {
-    // {
-    //     .ml_name = "__getattr__",
-    //     .ml_meth = (PyCFunction)(void*)py_object_getattr,
-    //     .ml_flags = METH_VARARGS,
-    //     .ml_doc = py_object_getattr_doc,
-    // },
+    {
+        .ml_name = "call",
+        .ml_meth = (PyCFunction)(void*)py_function_call,
+        .ml_flags = METH_VARARGS,
+        .ml_doc = py_function_call_doc,
+    },
     {NULL}, // sentinel
 };
 
@@ -737,26 +838,79 @@ static PyTypeObject py_function_type = {
     .tp_methods = py_function_methods,
     .tp_init = (initproc)py_function_init,
     .tp_base = &py_object_type,
+    .tp_call = py_function_tp_call,
 };
 
 // Method, which is a simple reference to a Function plus a default `this`
 
-static int py_method_init(py_jsvalue_t *self, PyObject *args, PyObject *kwds){
-    // XXX not right
-    (void)self;
-    (void)args;
-    (void)kwds;
-    PyErr_SetString(quickjs_error, "Function can only be created in C code");
+static void py_method_dealloc(py_method_t *self){
+    Py_CLEAR(self->function);
+    Py_CLEAR(self->this);
+    Py_TYPE(self)->tp_free((PyObject*)self);
+}
+
+static int py_method_init(py_method_t *self, PyObject *args, PyObject *kwds){
+    PyObject *function = NULL;
+    PyObject *this = NULL;
+
+    char *kwnames[] = {
+        "function",
+        "this",
+        NULL,
+    };
+
+    int ret = PyArg_ParseTupleAndKeywords(
+        args, kwds, "OO", kwnames,
+        &function,
+        &this
+    );
+    if(!ret) goto fail;
+
+
+    int isinstance;
+    if((isinstance = PyObject_IsInstance(function, (PyObject*)&py_function_type))){
+        if(isinstance < 0) goto fail;
+        // yes it's a function
+    } else {
+        PyErr_SetString(quickjs_error, "Method() first arg must be a Function");
+        goto fail;
+    }
+
+    // success
+    self->function = (py_jsvalue_t*)function;
+    self->this = this;
+    return 0;
+
+fail:
+    Py_CLEAR(function);
+    Py_CLEAR(this);
+    self->function = NULL;
+    self->this = NULL;
     return -1;
 }
 
+// mymethod(...) handler; this=None
+static PyObject *py_method_tp_call(PyObject *self, PyObject *args, PyObject *kwargs){
+    // check that args are all positional
+    if(kwargs != NULL && PyDict_Size(kwargs) != 0){
+        PyErr_SetString(quickjs_error, "Method can only be called with positional parameters");
+        Py_CLEAR(args);
+        Py_CLEAR(kwargs);
+        return NULL;
+    }
+
+    // get function
+    py_jsvalue_t *function = ((py_method_t*)self)->function;
+
+    // get this
+    PyObject *this = ((py_method_t*)self)->this;
+    Py_INCREF(this);
+
+    // call function
+    return call_function(function, this, args, 0);
+}
+
 static PyMethodDef py_method_methods[] = {
-    // {
-    //     .ml_name = "__getattr__",
-    //     .ml_meth = (PyCFunction)(void*)py_object_getattr,
-    //     .ml_flags = METH_VARARGS,
-    //     .ml_doc = py_object_getattr_doc,
-    // },
     {NULL}, // sentinel
 };
 
@@ -764,16 +918,17 @@ static PyTypeObject py_method_type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     // this needs to be dotted to work with pickle and pydoc
     .tp_name = "_quickjs.Method",
-    .tp_doc = "python wrapper around plain javascript method",
-    .tp_basicsize = sizeof(py_jsvalue_t),
+    .tp_doc = "python wrapper around plain javascript function, with a preconfigured `this`",
+    .tp_basicsize = sizeof(py_method_t),
     // 0 means "size is not variable"
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_weaklistoffset = offsetof(py_jsvalue_t, weakreflist),
     .tp_new = PyType_GenericNew,
-    .tp_dealloc = (destructor) py_jsvalue_dealloc,
+    .tp_dealloc = (destructor) py_method_dealloc,
     .tp_methods = py_method_methods,
     .tp_init = (initproc)py_method_init,
+    .tp_call = py_method_tp_call,
 };
 
 
