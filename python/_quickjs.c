@@ -71,9 +71,9 @@ typedef struct {
     JSContext *ctx;
     JSValue jsval;
     PyObject *weakreflist;
-    PyObject *dict;
     PyObject *cache;
     PyObject *this;  // for functions
+    Py_ssize_t objlen;  // for caching
 } py_value_t;
 
 // c-only allocator for new _quickjs.Value objects
@@ -358,6 +358,77 @@ done:
 }
 
 
+// quickjs environment helpers
+
+static void js_print_value_write(void *opaque, const char *buf, size_t len)
+{
+    FILE *fo = opaque;
+    fwrite(buf, 1, len, fo);
+}
+
+static JSValue js_console_log(
+    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
+) {
+    (void)this_val;
+    int i;
+    JSValueConst v;
+
+    for(i = 0; i < argc; i++) {
+        if (i != 0)
+            putchar(' ');
+        v = argv[i];
+        if (JS_IsString(v)) {
+            const char *str;
+            size_t len;
+            str = JS_ToCStringLen(ctx, &len, v);
+            if (!str)
+                return JS_EXCEPTION;
+            fwrite(str, 1, len, stdout);
+            JS_FreeCString(ctx, str);
+        } else {
+            JS_PrintValue(ctx, js_print_value_write, stdout, v, NULL);
+        }
+    }
+    putchar('\n');
+    return JS_UNDEFINED;
+}
+
+static int prep_env(JSContext *ctx){
+    JSValue global = JS_UNINITIALIZED;
+    JSValue console = JS_UNINITIALIZED;
+    int retval = -1;
+
+    global = JS_GetGlobalObject(ctx);
+    if(JS_IsException(global)){
+        js_exception(ctx);
+        goto done;
+    }
+
+    console = JS_NewObject(ctx);
+    if(JS_IsException(console)){
+        js_exception(ctx);
+        goto done;
+    }
+
+    JSValue log = JS_NewCFunction(ctx, js_console_log, "log", 1);
+    if(JS_IsException(log)){
+        js_exception(ctx);
+        goto done;
+    }
+
+    JS_SetPropertyStr(ctx, console, "log", log);
+    JS_SetPropertyStr(ctx, global, "console", console);
+    console = JS_UNINITIALIZED;
+
+    retval = 0;
+
+done:
+    if(!JS_IsUninitialized(console)) JS_FreeValue(ctx, console);
+    if(!JS_IsUninitialized(global)) JS_FreeValue(ctx, global);
+    return retval;
+}
+
+
 /*
     JSAny = None | str | int | float | Array | Object | Function | Method
     JSArg = JSAny | Dict[str, JSArg] | List[JSArg] | Tuple[JSArg...]
@@ -378,6 +449,7 @@ static void py_quickjs_dealloc(py_quickjs_t *self){
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
+// XXX: this object leaks on errors
 static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
     self->weakref_symbol = JS_ATOM_NULL;
 
@@ -397,6 +469,10 @@ static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
         PyErr_SetString(quickjs_error, "JS_NewContext() failed");
         return -1;
     }
+
+    ret = prep_env(self->ctx);
+    if(ret) return -1;
+
 
     // create a new symbol; seems to only be possible in javascript
     JSValue val = JS_Eval(self->ctx, "Symbol()", 8, "symbol", 0);
@@ -515,7 +591,7 @@ static void py_value_dealloc(py_value_t *self){
         self->jsval = JS_UNINITIALIZED;
     }
     if(self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject*)self);
-    Py_CLEAR(self->dict);
+    Py_CLEAR(self->cache);
     Py_TYPE(self)->tp_free((PyObject*)self);
     // also decrement the QuickJS object
     if(ctx) Py_DECREF((PyObject*)JS_GetContextOpaque(ctx));
@@ -530,9 +606,10 @@ static PyObject *py_value_new(JSContext *ctx, JSValue jsval, PyObject *this){
 
     out->ctx = ctx;
     out->weakreflist = NULL;
-    out->dict = NULL;
+    out->cache = NULL;
     out->this = this; Py_INCREF(this);
     out->jsval = JS_UNINITIALIZED;
+    out->objlen = -1;
     // we keep a reference to the QuickJS so we free our data before QuickJS
     // frees the js context
     Py_INCREF((PyObject*)JS_GetContextOpaque(ctx));
@@ -545,8 +622,8 @@ static PyObject *py_value_new(JSContext *ctx, JSValue jsval, PyObject *this){
     }
     out->jsval = dup;
 
-    out->dict = PyDict_New();
-    if(!out->dict){
+    out->cache = PyDict_New();
+    if(!out->cache){
         py_value_dealloc(out);
         goto fail;
     }
@@ -562,7 +639,7 @@ static int py_value_init(py_value_t *self, PyObject *args, PyObject *kwds){
     self->ctx = NULL;
     self->jsval = JS_UNINITIALIZED;
     self->weakreflist = NULL;
-    self->dict = NULL;
+    self->cache = NULL;
     self->this = NULL;
     Py_CLEAR(args);
     Py_CLEAR(kwds);
@@ -570,56 +647,33 @@ static int py_value_init(py_value_t *self, PyObject *args, PyObject *kwds){
     return -1;
 }
 
-// TODO:
-// - objects: add mapping protocol
-// - arrays: add sequence protocol
-// - functions: add tp_call and call() attribute
-//
-// OR:
-// - add keys(), items(), values()
-// - add __dict__ and corresponding stuff to simplify everything...?
-//    - or manually add caching
-// - make arrays and functions just Objects...?
-//    - add .call() and __call__()/.tp_call
-//
-// I think probably making things more pythonic, which includes adding GC
-// support, is probably a more bulletproof solution.
-//
-// But maybe this is enough, and it's almost done, so maybe we'll finish this
-// and see how it goes.
-//
-// Maybe we just only cache simple attributes?  The complex attributes already have their own form
-// of caching.
+static PyObject *py_value_getattro(py_value_t *self, PyObject *attr){
+    // first try the default lookup, for pre-defined methods and attributes
+    Py_INCREF(attr);
+    PyObject *out = PyObject_GenericGetAttr((PyObject*)self, attr);
+    if(out != NULL){
+        Py_DECREF(attr);
+        return out;
+    }
+    // TODO: make sure it was an attribute error first
+    PyErr_Clear();
 
-// static PyObject *py_value_getattro(py_value_t *self, PyObject *attr){
-//     (void)self;
-//     const char *key = PyUnicode_AsUTF8(attr);
-//     if(!key){
-//         Py_CLEAR(attr);
-//         return NULL;
-//     }
-//     ...
-//     Py_CLEAR(attr);
-static char * const py_value_getattr_doc =
-    "__getattr__(attr) -> JSAny\n"
-    "call a javascript function with explicit `this`";
-static PyObject *py_value_getattr(py_value_t *self, PyObject *args){
-    (void)self;
-
-    const char *key;
-    int ret = PyArg_ParseTuple(args, "s", &key);
-    if(!ret) return NULL;
+    const char *key = PyUnicode_AsUTF8(attr);
+    if(!key){
+        Py_CLEAR(attr);
+        return NULL;
+    }
 
     JSValue jsval = JS_GetPropertyStr(self->ctx, self->jsval, key);
     if(JS_IsException(jsval)){
         return js_exception(self->ctx);
     }
 
-    PyObject *out = NULL;
+    // PyObject *out = NULL;
     bool success = false;
 
     // check cache
-    out = PyDict_GetItemString(self->dict, key);
+    out = PyDict_GetItemString(self->cache, key);
     if(out){
         // cache hit
         Py_INCREF(out);
@@ -639,7 +693,7 @@ static PyObject *py_value_getattr(py_value_t *self, PyObject *args){
     // space leaks in python since we haven't enabling GC on this python object.  But that seems
     // unlikely, at least for now.
     Py_INCREF(out);
-    ret = PyDict_SetItemString(self->dict, key, out);
+    int ret = PyDict_SetItemString(self->cache, key, out);
     if(ret) goto done;
 
     success = true;
@@ -647,6 +701,7 @@ static PyObject *py_value_getattr(py_value_t *self, PyObject *args){
 done:
     JS_FreeValue(self->ctx, jsval);
     if(!success) Py_CLEAR(out);
+    Py_CLEAR(attr);
 
     return out;
 }
@@ -753,37 +808,192 @@ static PyObject *py_value_call(py_value_t *self, PyObject *args){
 
 // mapping methods
 
+typedef PyObject *(*iter_key_fn)(py_value_t *self, JSPropertyEnum *props, uint32_t len);
+static PyObject *iter_keys(py_value_t *self, iter_key_fn func){
+    PyObject *out = NULL;
+    bool success = false;
+
+    JSPropertyEnum *props;
+    uint32_t len;
+    int flags = JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY;
+    int ret = JS_GetOwnPropertyNames(self->ctx, &props, &len, self->jsval, flags);
+    if(ret < 0){
+        js_exception(self->ctx);
+        goto done;
+    }
+    if(self->objlen == -1) self->objlen = len;
+
+    out = func(self, props, len);
+    if(!out) goto done;
+
+    success = true;
+
+done:
+    JS_FreePropertyEnum(self->ctx, props, len);
+    if(!success) Py_CLEAR(out);
+    return out;
+}
+
+static PyObject *itemsfunc(py_value_t *self, JSPropertyEnum *props, uint32_t len){
+    PyObject *out = NULL;
+    JSValue key = JS_UNINITIALIZED;
+    JSValue val = JS_UNINITIALIZED;
+    bool success = false;
+
+    out = PyList_New((Py_ssize_t)len);
+    if(!out) goto done;
+
+    for(uint32_t i = 0; i < len; i++){
+        key = JS_AtomToString(self->ctx, props[i].atom);
+        if(JS_IsException(key)){
+            js_exception(self->ctx);
+            goto done;
+        }
+
+        JSPropertyDescriptor desc;
+        int ret = JS_GetOwnProperty(self->ctx, &desc, self->jsval, props[i].atom);
+        if(ret < 0){
+            js_exception(self->ctx);
+            goto done;
+        }
+        val = desc.value;
+
+        PyObject *pykey = js2py(self->ctx, key, Py_None);
+        if(!pykey) goto done;
+
+        PyObject *pyval = js2py(self->ctx, val, Py_None);
+        if(!pyval){
+            Py_CLEAR(pykey);
+            goto done;
+        }
+        PyObject *pair = PyTuple_Pack(2, pykey, pyval);
+        if(!pair) goto done;
+
+        PyList_SET_ITEM(out, (Py_ssize_t)i, pair);
+
+        JS_FreeValue(self->ctx, key);
+        JS_FreeValue(self->ctx, val);
+        key = JS_UNINITIALIZED;
+        val = JS_UNINITIALIZED;
+    }
+
+    success = true;
+
+done:
+    if(!JS_IsUninitialized(key)) JS_FreeValue(self->ctx, key);
+    if(!JS_IsUninitialized(val)) JS_FreeValue(self->ctx, val);
+    if(!success) Py_CLEAR(out);
+    return out;
+}
+
+static PyObject *keysfunc(py_value_t *self, JSPropertyEnum *props, uint32_t len){
+    PyObject *out = NULL;
+    JSValue key = JS_UNINITIALIZED;
+    bool success = false;
+
+    out = PyList_New((Py_ssize_t)len);
+    if(!out) goto done;
+
+    for(uint32_t i = 0; i < len; i++){
+        key = JS_AtomToString(self->ctx, props[i].atom);
+        if(JS_IsException(key)){
+            js_exception(self->ctx);
+            goto done;
+        }
+
+        PyObject *pykey = js2py(self->ctx, key, Py_None);
+        if(!pykey) goto done;
+
+        PyList_SET_ITEM(out, (Py_ssize_t)i, pykey);
+
+        JS_FreeValue(self->ctx, key);
+        key = JS_UNINITIALIZED;
+    }
+
+    success = true;
+
+done:
+    if(!JS_IsUninitialized(key)) JS_FreeValue(self->ctx, key);
+    if(!success) Py_CLEAR(out);
+    return out;
+}
+
+static PyObject *valuesfunc(py_value_t *self, JSPropertyEnum *props, uint32_t len){
+    PyObject *out = NULL;
+    JSValue val = JS_UNINITIALIZED;
+    bool success = false;
+
+    out = PyList_New((Py_ssize_t)len);
+    if(!out) goto done;
+
+    for(uint32_t i = 0; i < len; i++){
+        JSPropertyDescriptor desc;
+        int ret = JS_GetOwnProperty(self->ctx, &desc, self->jsval, props[i].atom);
+        if(ret < 0){
+            js_exception(self->ctx);
+            goto done;
+        }
+        val = desc.value;
+
+        PyObject *pyval = js2py(self->ctx, val, Py_None);
+        if(!pyval) goto done;
+
+        PyList_SET_ITEM(out, (Py_ssize_t)i, pyval);
+
+        JS_FreeValue(self->ctx, val);
+        val = JS_UNINITIALIZED;
+    }
+
+    success = true;
+
+done:
+    if(!JS_IsUninitialized(val)) JS_FreeValue(self->ctx, val);
+    if(!success) Py_CLEAR(out);
+    return out;
+}
+
 static char * const py_value_items_doc =
     "items() -> List[Tuple[str, JSAny]]\n"
     "get all enumerable key/value pairs in the object";
-static PyObject *py_value_items(py_value_t *self, PyObject *args){
-    (void)self;
-    Py_CLEAR(args);
-    PyErr_SetString(quickjs_error, ".items() called");
+static PyObject *py_value_items(py_value_t *self){
+    return iter_keys(self, itemsfunc);
+}
+
+static char * const py_value_keys_doc =
+    "keys() -> List[str]\n"
+    "get all enumerable keys in the object";
+static PyObject *py_value_keys(py_value_t *self){
+    return iter_keys(self, keysfunc);
+}
+
+static char * const py_value_values_doc =
+    "values() -> List[JSAny]\n"
+    "get all enumerable values pairs in the object";
+static PyObject *py_value_values(py_value_t *self){
+    return iter_keys(self, valuesfunc);
+}
+
+static PyObject *py_value_mp_subscript(py_value_t *self, PyObject *key){
+    int isinstance;
+    if((isinstance = PyObject_IsInstance(key, (PyObject*)&PyUnicode_Type))){
+        if(isinstance < 0) goto fail;
+    } else {
+        PyErr_SetString(quickjs_error, "only string keys are allowed on dict objects");
+        goto fail;
+    }
+
+    return py_value_getattro(self, key);
+
+fail:
+    Py_CLEAR(key);
     return NULL;
 }
 
-// static PyObject *py_value_mp_subscript(py_value_t *self, PyObject *key){
-//     int isinstance;
-//     if((isinstance = PyObject_IsInstance(key, (PyObject*)&PyUnicode_Type))){
-//         if(isinstance < 0) goto fail;
-//     } else {
-//         PyErr_SetString(quickjs_error, "only string keys are allowed on dict objects");
-//         goto fail;
-//     }
-//
-//     return py_value_getattro(self, key);
-//
-// fail:
-//     Py_CLEAR(key);
-//     return NULL;
-// }
-//
-// PyMappingMethods py_value_as_mapping = {
-//     .mp_length = (lenfunc)NULL, // no defined length
-//     .mp_subscript = (binaryfunc)py_value_mp_subscript,
-//     .mp_ass_subscript = (objobjargproc)NULL, // mapping is immutable
-// };
+PyMappingMethods py_value_as_mapping = {
+    .mp_length = (lenfunc)NULL, // no defined length
+    .mp_subscript = (binaryfunc)py_value_mp_subscript,
+    .mp_ass_subscript = (objobjargproc)NULL, // mapping is immutable
+};
 
 // def length(self) -> int: ...
 //     """If array, return the length, otherwise the number of enumerable keys."""
@@ -798,12 +1008,12 @@ static PyObject *py_value_items(py_value_t *self, PyObject *args){
 //     """Return all enumerable (key, value) tuples."""
 
 static PyMethodDef py_value_methods[] = {
-    {
-        .ml_name = "__getattr__",
-        .ml_meth = (PyCFunction)(void*)py_value_getattr,
-        .ml_flags = METH_VARARGS,
-        .ml_doc = py_value_getattr_doc,
-    },
+//     {
+//         .ml_name = "__getattr__",
+//         .ml_meth = (PyCFunction)(void*)py_value_getattr,
+//         .ml_flags = METH_VARARGS,
+//         .ml_doc = py_value_getattr_doc,
+//     },
     {
         .ml_name = "call",
         .ml_meth = (PyCFunction)(void*)py_value_call,
@@ -811,11 +1021,34 @@ static PyMethodDef py_value_methods[] = {
         .ml_doc = py_value_call_doc,
     },
     {
-        .ml_name = "keys",
+        .ml_name = "items",
         .ml_meth = (PyCFunction)(void*)py_value_items,
         .ml_flags = METH_NOARGS,
         .ml_doc = py_value_items_doc,
     },
+    {
+        .ml_name = "keys",
+        .ml_meth = (PyCFunction)(void*)py_value_keys,
+        .ml_flags = METH_NOARGS,
+        .ml_doc = py_value_keys_doc,
+    },
+    {
+        .ml_name = "values",
+        .ml_meth = (PyCFunction)(void*)py_value_values,
+        .ml_flags = METH_NOARGS,
+        .ml_doc = py_value_values_doc,
+    },
+    {NULL}, // sentinel
+};
+
+static PyMemberDef py_value_members[] = {
+    // {
+    //     .name = "__dict__",
+    //     .type = Py_T_OBJECT_EX,
+    //     .offset = offsetof(py_value_t, dict),
+    //     .flags = Py_READONLY,
+    //     .doc = NULL,
+    // },
     {NULL}, // sentinel
 };
 
@@ -831,14 +1064,15 @@ static PyTypeObject py_value_type = {
     /* note: when I use tp_flags |= Py_TPFLAGS_MANAGED_WEAKREF I always get a
        segfault, so we use the legacy weakref system here: */
     .tp_weaklistoffset = offsetof(py_value_t, weakreflist),
+
     .tp_new = PyType_GenericNew,
     .tp_dealloc = (destructor) py_value_dealloc,
     .tp_methods = py_value_methods,
     .tp_init = (initproc)py_value_init,
-    // .tp_getattro = (getattrofunc)py_value_getattro,
+    .tp_getattro = (getattrofunc)py_value_getattro,
     .tp_call = (ternaryfunc)py_value_tp_call,
-    // .tp_as_mapping = &py_value_as_mapping,
-    .tp_dictoffset = offsetof(py_value_t, dict),
+    .tp_as_mapping = &py_value_as_mapping,
+    .tp_members = py_value_members,
 };
 
 ////

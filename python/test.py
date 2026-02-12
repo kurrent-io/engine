@@ -1,27 +1,22 @@
 import _quickjs
 
 q = _quickjs.QuickJS()
-q.eval("let x = {a: [], b: 2, c: () => 9}")
+q.eval("""
+    let x = {a: [], b: 2, c: () => 9};
+    x;
+""")
 a = q.eval('x')
 
-try:
-    print("a.__dict__", a.__dict__)
-except Exception as e:
-    print("a.__dict__ failed:", e)
+q.eval("""
+    console.log("object.keys(x) =", Object.keys(x));
+""")
 
-try:
-    print("a.c", a.c)
-except:
-    print("a.c failed")
-try:
-    print("a.c.call", a.c.call)
-except:
-    print("a.c.call failed")
-try:
-    print("a.c.call()", a.c.call)
-except:
-    print("a.c.call() failed")
+print("a", a)
+print("a.b", a.b)
+print("a['b']", a['b'])
 
-print("a.keys", a.keys)
+print("a.c()", a.c())
 
-print(dict(**a).keys())
+print("a.keys()", a.keys())
+print("a.items()", a.items())
+print('dict(**a)', dict(**a))
