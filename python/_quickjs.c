@@ -73,7 +73,8 @@ typedef struct {
     PyObject *weakreflist;
     PyObject *cache;
     PyObject *this;  // for functions
-    Py_ssize_t objlen;  // for caching
+    Py_ssize_t objlen;
+    Py_ssize_t arrlen;  // -1 if not an array
 } py_value_t;
 
 // c-only allocator for new _quickjs.Value objects
@@ -150,21 +151,20 @@ static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
         jswr = JS_UNINITIALIZED;
     } else {
         // we have a python weakref already
-        pywr = JS_GetOpaque(jswr, js_py_weakref_class_id);
+        PyObject *pywr_borrowed = JS_GetOpaque(jswr, js_py_weakref_class_id);
         // is the python weakref healthy?
-        out = PyWeakref_GetObject(pywr);
-        if(out == NULL){
-            goto done;
-        }
-        if (out != Py_None) {
+        PyObject *out_borrowed = PyWeakref_GetObject(pywr_borrowed);
+        if(out_borrowed == NULL) goto done;
+        if (out_borrowed != Py_None) {
             // python object still healthy
+            out = out_borrowed;
             Py_INCREF(out);
             success = true;
             goto done;
         } else {
             // python object is gone; discard weakref
-            Py_CLEAR(pywr);
-            Py_CLEAR(out);
+            Py_CLEAR(pywr_borrowed);
+            JS_SetOpaque(jswr, NULL);
         }
     }
 
@@ -610,9 +610,32 @@ static PyObject *py_value_new(JSContext *ctx, JSValue jsval, PyObject *this){
     out->this = this; Py_INCREF(this);
     out->jsval = JS_UNINITIALIZED;
     out->objlen = -1;
+    out->arrlen = -1;
     // we keep a reference to the QuickJS so we free our data before QuickJS
     // frees the js context
     Py_INCREF((PyObject*)JS_GetContextOpaque(ctx));
+
+    // check if we're an array
+    int is_array = JS_IsArray(ctx, jsval);
+    if(is_array < 0){
+        js_exception(ctx);
+        goto fail;
+    }else if(is_array){
+        // get length of the array once
+        JSValue length = JS_GetPropertyStr(ctx, jsval, "length");
+        if(JS_IsException(length)){
+            js_exception(ctx);
+            goto fail;
+        }
+        int64_t arrlen;
+        int ret = JS_ToInt64Ext(ctx, &arrlen, length);
+        JS_FreeValue(ctx, length);
+        if(ret < 0){
+            js_exception(ctx);
+            goto fail;
+        }
+        out->arrlen = (Py_ssize_t)arrlen;
+    }
 
     // increment reference count to save our parameter
     JSValue dup = JS_DupValue(ctx, jsval);
@@ -631,7 +654,7 @@ static PyObject *py_value_new(JSContext *ctx, JSValue jsval, PyObject *this){
     return (PyObject*)out;
 
 fail:
-    py_value_dealloc(out);
+    Py_CLEAR(out);
     return NULL;
 }
 
@@ -647,37 +670,24 @@ static int py_value_init(py_value_t *self, PyObject *args, PyObject *kwds){
     return -1;
 }
 
-static PyObject *py_value_getattro(py_value_t *self, PyObject *attr){
-    // first try the default lookup, for pre-defined methods and attributes
-    Py_INCREF(attr);
-    PyObject *out = PyObject_GenericGetAttr((PyObject*)self, attr);
-    if(out != NULL){
-        Py_DECREF(attr);
-        return out;
-    }
-    // TODO: make sure it was an attribute error first
-    PyErr_Clear();
-
-    const char *key = PyUnicode_AsUTF8(attr);
-    if(!key){
-        Py_CLEAR(attr);
-        return NULL;
-    }
-
-    JSValue jsval = JS_GetPropertyStr(self->ctx, self->jsval, key);
-    if(JS_IsException(jsval)){
-        return js_exception(self->ctx);
-    }
-
-    // PyObject *out = NULL;
+static PyObject *py_value_getstr(py_value_t *self, const char *key){
+    PyObject *out = NULL;
+    JSValue jsval = JS_UNINITIALIZED;
     bool success = false;
 
     // check cache
     out = PyDict_GetItemString(self->cache, key);
     if(out){
         // cache hit
-        Py_INCREF(out);
-        return out;
+        Py_INCREF(out); // result was borrowed
+        success = true;
+        goto done;
+    }
+
+    jsval = JS_GetPropertyStr(self->ctx, self->jsval, key);
+    if(JS_IsException(jsval)){
+        js_exception(self->ctx);
+        goto done;
     }
 
     // did we get something?
@@ -699,10 +709,91 @@ static PyObject *py_value_getattro(py_value_t *self, PyObject *attr){
     success = true;
 
 done:
-    JS_FreeValue(self->ctx, jsval);
+    if(!JS_IsUninitialized(jsval)) JS_FreeValue(self->ctx, jsval);
     if(!success) Py_CLEAR(out);
-    Py_CLEAR(attr);
 
+    return out;
+}
+
+static PyObject *py_value_getint(py_value_t *self, Py_ssize_t index){
+    if(index > UINT32_MAX){
+        PyErr_SetString(quickjs_error, "index too large");
+        return NULL;
+    }
+    // array negative index handling
+    if(index < 0) {
+        PyErr_SetString(quickjs_error, "negative index not allowed");
+        return NULL;
+    }
+
+    PyObject *out = NULL;
+    PyObject *pykey = NULL;
+    JSValue jsval = JS_UNINITIALIZED;
+    bool success = false;
+
+    // construct key object
+    pykey = PyLong_FromSsize_t(index);
+    if(!pykey) goto done;
+
+    // check cache
+    Py_INCREF(pykey);
+    out = PyDict_GetItem(self->cache, pykey);
+    if(out){
+        // cache hit
+        Py_INCREF(out);
+        success = true;
+        goto done;
+    }
+
+    jsval = JS_GetPropertyUint32(self->ctx, self->jsval, (uint32_t)index);
+    if(JS_IsException(jsval)){
+        js_exception(self->ctx);
+        goto done;
+    }
+    // did we get something?
+    if(JS_IsUndefined(jsval)){
+        PyErr_SetString(PyExc_AttributeError, "no such key");
+        goto done;
+    }
+
+    // convert to python object; functions must be standalone
+    out = js2py(self->ctx, jsval, Py_None);
+
+    // Cache all types on self.  If there is a circular reference in javascript, we can create
+    // space leaks in python since we haven't enabling GC on this python object.  But that seems
+    // unlikely, at least for now.
+    Py_INCREF(pykey);
+    Py_INCREF(out);
+    int ret = PyDict_SetItem(self->cache, pykey, out);
+    if(ret) goto done;
+
+    success = true;
+
+done:
+    if(!JS_IsUninitialized(jsval)) JS_FreeValue(self->ctx, jsval);
+    if(!success) Py_CLEAR(out);
+    Py_CLEAR(pykey);
+
+    return out;
+}
+
+static PyObject *py_value_getattro(py_value_t *self, PyObject *attr){
+    // first try the default lookup, for pre-defined methods and attributes
+    Py_INCREF(attr);
+    PyObject *out = PyObject_GenericGetAttr((PyObject*)self, attr);
+    if(out != NULL) goto done;
+
+    // TODO: make sure it was an attribute error first
+    PyErr_Clear();
+
+    // attributes are always strings
+    const char *key = PyUnicode_AsUTF8(attr);
+    if(!key) goto done;
+
+    out = py_value_getstr(self, key);
+
+done:
+    Py_CLEAR(attr);
     return out;
 }
 
@@ -973,47 +1064,189 @@ static PyObject *py_value_values(py_value_t *self){
     return iter_keys(self, valuesfunc);
 }
 
-static PyObject *py_value_mp_subscript(py_value_t *self, PyObject *key){
-    int isinstance;
-    if((isinstance = PyObject_IsInstance(key, (PyObject*)&PyUnicode_Type))){
-        if(isinstance < 0) goto fail;
-    } else {
-        PyErr_SetString(quickjs_error, "only string keys are allowed on dict objects");
-        goto fail;
+// sq_length takes priority over mp length
+static Py_ssize_t py_value_mp_length(py_value_t *self){
+    (void)self;
+    PyErr_SetString(quickjs_error, "length not implemented");
+    return -1;
+}
+
+static PyObject *py_value_array_to_list(
+    py_value_t *self, Py_ssize_t start, Py_ssize_t stop, Py_ssize_t step
+){
+    PyObject *out = NULL;
+
+    Py_ssize_t slicelen = PySlice_AdjustIndices(self->arrlen, &start, &stop, step);
+
+    out = PyList_New(slicelen);
+    if(!out) goto fail;
+    Py_ssize_t j = 0;
+    int sign = 1 - 2 * (step < 0);
+    for(Py_ssize_t i = start; sign * i < sign * stop; i += step){
+        PyObject *item = py_value_getint(self, i);
+        if(!item) goto fail;
+        PyList_SET_ITEM(out, j++, item);
     }
 
-    return py_value_getattro(self, key);
+    // success
+    return out;
 
 fail:
-    Py_CLEAR(key);
+    Py_CLEAR(out);
     return NULL;
 }
 
+static PyObject *py_value_mp_subscript(py_value_t *self, PyObject *key){
+    PyObject *out = NULL;
+    bool success = false;
+
+    // handle string keys
+    if(PyUnicode_Check(key)){
+        const char *strkey = PyUnicode_AsUTF8(key);
+        if(!strkey){
+            goto done;
+        }
+        out = py_value_getstr(self, strkey);
+        success = !!out;
+        goto done;
+    }
+
+    // handle integer keys
+    int isinstance;
+    if((isinstance = PyObject_IsInstance(key, (PyObject*)&PyLong_Type))){
+        if(isinstance < 0) goto done;
+        Py_ssize_t index = PyLong_AsSsize_t(key);
+        (void)index;
+        if(index == -1 && PyErr_Occurred()) goto done;
+        out = py_value_getint(self, index);
+        success = !!out;
+        goto done;
+    }
+
+    // handle slice keys
+    if((isinstance = PyObject_IsInstance(key, (PyObject*)&PySlice_Type))){
+        if(isinstance < 0) goto done;
+        if(self->arrlen < 0){
+            PyErr_Format(quickjs_error, "slices only supported on arrays");
+            goto done;
+        }
+        Py_ssize_t start, stop, step;
+        int ret = PySlice_Unpack(key, &start, &stop, &step);
+        if(ret) goto done;
+        out = py_value_array_to_list(self, start, stop, step);
+        success = !!out;
+        goto done;
+    }
+
+    (void)py_value_getint;
+    PyErr_Format(PyExc_TypeError, "unexpected key type (%s)", Py_TYPE(key)->tp_name);
+
+done:
+    // It seems that you must not consume key
+    // Py_CLEAR(key);
+    if(!success) Py_CLEAR(out);
+    return out;
+}
+
 PyMappingMethods py_value_as_mapping = {
-    .mp_length = (lenfunc)NULL, // no defined length
+    .mp_length = (lenfunc)py_value_mp_length,
     .mp_subscript = (binaryfunc)py_value_mp_subscript,
     .mp_ass_subscript = (objobjargproc)NULL, // mapping is immutable
 };
 
-// def length(self) -> int: ...
-//     """If array, return the length, otherwise the number of enumerable keys."""
-//
-// def keys(self) -> int: ...
-//     """Return all enumerable keys."""
-//
-// def values(self) -> int: ...
-//     """Return all values for enumerable keys."""
-//
-// def items(self) -> List[]: ...
-//     """Return all enumerable (key, value) tuples."""
+// sequence methods
+
+static PyObject *objlenfunc(py_value_t *self, JSPropertyEnum *props, uint32_t len){
+    (void)self;
+    (void)props;
+    (void)len;
+    // nothing to do; just needed to trigger an object length check
+    Py_RETURN_NONE;
+}
+
+// sq_length takes priority over mp length
+static Py_ssize_t py_value_sq_length(py_value_t *self){
+    if(self->arrlen > -1) return self->arrlen;
+    if(self->objlen == -1){
+        PyObject *obj = iter_keys(self, objlenfunc);
+        if(!obj) return -1;
+        Py_CLEAR(obj);
+    }
+    return self->objlen;
+}
+
+static PyObject *py_value_sq_concat(py_value_t *self, PyObject *other){
+    (void)self; (void)other;
+    PyErr_SetString(quickjs_error, "concat not implemented");
+    return NULL;
+}
+
+static PyObject *py_value_sq_repeat(py_value_t *self, Py_ssize_t count){
+    (void)self; (void)count;
+    PyErr_SetString(quickjs_error, "repeat not implemented");
+    return NULL;
+}
+
+// mp_subscript takes priority
+static PyObject *py_value_sq_item(py_value_t *self, Py_ssize_t index){
+    (void)self; (void)index;
+    PyErr_SetString(quickjs_error, "item not implemented");
+    return NULL;
+}
+
+
+PySequenceMethods py_value_as_sequence = {
+    .sq_length = (lenfunc)py_value_sq_length,
+    .sq_concat = (binaryfunc)py_value_sq_concat,
+    .sq_repeat = (ssizeargfunc)py_value_sq_repeat,
+    .sq_item = (ssizeargfunc)py_value_sq_item,
+};
+
+// .__iter__() handler
+static PyObject *py_value_tp_iter(py_value_t *self){
+    PyObject *iterable = NULL;
+    PyObject *out = NULL;
+
+    if(self->arrlen < 0){
+        // objects iterate over keys
+        iterable = py_value_keys(self);
+        if(!iterable) goto done;
+    } else {
+        // arrays iterate over values
+        iterable = py_value_array_to_list(self, 0, self->arrlen, 1);
+        if(!iterable) goto done;
+    }
+
+    out = PyObject_GetIter(iterable);
+
+done:
+    Py_CLEAR(iterable);
+    return out;
+}
+
+// .__repr__() handler
+static PyObject *py_value_tp_repr(py_value_t *self){
+    if(self->arrlen > -1){
+        // proxy object shall be a list
+        PyObject *proxy = py_value_array_to_list(self, 0, self->arrlen, 1);
+        if(!proxy) return NULL;
+        return PyObject_Repr(proxy);
+    }
+
+    // don't render functions as '{}'
+    if(JS_IsFunction(self->ctx, self->jsval)){
+        return PyUnicode_FromString("<function>");
+    }
+
+    // proxy object shall be a dict(self.items())
+    PyObject *arg = py_value_items(self);
+    if(!arg) return NULL;
+    PyObject *proxy = PyObject_CallOneArg((PyObject*)&PyDict_Type, arg);
+    if(!proxy) return NULL;
+    return PyObject_Repr(proxy);
+}
 
 static PyMethodDef py_value_methods[] = {
-//     {
-//         .ml_name = "__getattr__",
-//         .ml_meth = (PyCFunction)(void*)py_value_getattr,
-//         .ml_flags = METH_VARARGS,
-//         .ml_doc = py_value_getattr_doc,
-//     },
     {
         .ml_name = "call",
         .ml_meth = (PyCFunction)(void*)py_value_call,
@@ -1072,7 +1305,10 @@ static PyTypeObject py_value_type = {
     .tp_getattro = (getattrofunc)py_value_getattro,
     .tp_call = (ternaryfunc)py_value_tp_call,
     .tp_as_mapping = &py_value_as_mapping,
+    .tp_as_sequence = &py_value_as_sequence,
     .tp_members = py_value_members,
+    .tp_iter = (getiterfunc)py_value_tp_iter,
+    .tp_repr = (getiterfunc)py_value_tp_repr,
 };
 
 ////
