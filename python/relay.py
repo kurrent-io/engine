@@ -214,21 +214,71 @@ def wrap_generator(g):
 
     return next
 
+"""
+  // subscribe to list of books from our store
+  const booksLookup = useCallback(function*(qx: QX): QueryGenerator<Book[]> {
+    // get the set of all editions
+    const editions = (yield* qx.get.editions()) ?? {};
+    // for each edition, get the title and number of copies
+    const out: Book[] = [];
+    for (const isbn of Object.keys(editions)) {
+      const edition = yield* qx.get.edition(isbn);
+      out.push({title: edition.title, copies: Object.keys(edition.books).length});
+    }
+    return out;
+  }, []);
+  const [, getBooks] = useQuery(fw, booksLookup);
+"""
 
-########
+@framework.new_query
+def book_list(qx: QX, _: Any, _: Any) -> List[Book]:
+    editions = yield from qx.get.editions() or {}
+    return [
+        Book(title=edition.title, copies=len(edition.books))
+        for edition in (yield from qx.get.edition(isbn) for isbn in editions)
+    ]
 
-# Let's try to imagine a reference-based interface.  Maybe this will be more obvious how our goja
-# interface should work too.
+class Framework[QX]:
+    def __init__(qx):
+        self._qx = qx
+        self._framework = ...
 
-class ProtoMeta(type):
-    def __init__(self, name, supers, classdict):
-        super().__init__(name, supers, classdict)
-        # every combination of input args/kwargs will result in a stable, unique object
-        self._instances = {}
+    def new_query(generator: QueryFunction[QX, T]) -> Query[T]:
+        # queryfunc() is a python function that returns a C-wrappable next() function
+        def queryfunc(prev: T | None, isValid: bool) -> Callable[[Any], Tuple[bool, Any]]:
+            g = generator(self._qx, prev, isValid)
+            first = True
 
+            def next(val=None):
+                nonlocal first
+                if first:
+                    first = False
+                    val = None
+                try:
+                    return g.send(val)
+                except StopIteration as e:
+                    return True, e.value
 
-class Book(ProtoMeta):
-    id: str
-    isbn: str
-    restricted: bool
-    status: None | BookStatusCheckout | BookStatusHold
+            return next
+
+        # pass queryfunc() to C code to finish the wrapping, and recieve a javascript _Query object
+        _query = _quickjs._new_query(self._framework, self._qx, queryfunc)
+
+        # that gets wrapped with a suitable python interface
+        return Query(_query)
+
+class Query[T]:
+    def __init__(self, _query):
+        self._query = _query
+
+    def awaitResult(self):
+        # ask the graph for the result of this query when it's ready
+        ans = yield {"query": {self._query.id: True}}
+        result, dirty = ans["query"][self._query.id]
+        return result
+
+    def subscribe(self, cb):
+        return self._query.subscribe(cb)
+
+    def close(self):
+        self._query.close()
