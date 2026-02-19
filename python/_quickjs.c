@@ -18,11 +18,45 @@
 #include <stdio.h>
 #include <stddef.h>
 
+// js_pyweakref is our tiny javascript class that holds a python weakref for caching js2py()
+static JSClassID js_pyweakref_class_id;
+
+// js_pyref is an opaque wrapper around an arbitrary python object
+static JSClassID js_pyref_class_id;
+
 static PyObject *quickjs_error;
+
+static JSValue new_pyref(JSContext *ctx, PyObject *val);
+static JSValue py2js(JSContext *ctx, PyObject *val);
+
+static JSValue js_console_log(
+    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
+);
 
 // sets a python exception and returns NULL
 static PyObject *js_exception(JSContext *ctx) {
     JSValue exc = JS_GetException(ctx);
+
+    // possibly extract a wrapped python exception
+    PyObject *pytype = JS_GetOpaque(exc, js_pyref_class_id);
+    if(pytype){
+        JSValue jsvalue = JS_GetPropertyStr(ctx, exc, "value");
+        JSValue jstraceback = JS_GetPropertyStr(ctx, exc, "traceback");
+        // restore wrapped python exception
+        PyObject *pyvalue = JS_GetOpaque(jsvalue, js_pyref_class_id);
+        PyObject *pytraceback = JS_GetOpaque(jstraceback, js_pyref_class_id);
+        Py_INCREF(pytype);
+        if(pyvalue) Py_INCREF(pyvalue);
+        if(pytraceback) Py_INCREF(pytraceback);
+        PyErr_Restore(pytype, pyvalue, pytraceback);
+        // cleanup
+        JS_FreeValue(ctx, jsvalue);
+        JS_FreeValue(ctx, jstraceback);
+        JS_FreeValue(ctx, exc);
+        return NULL;
+    }
+
+    // otherwise print it to a string
     size_t slen = 0;
     const char *str = JS_ToCStringLen(ctx, &slen, exc);
     if (str) {
@@ -34,17 +68,49 @@ static PyObject *js_exception(JSContext *ctx) {
     return NULL;
 }
 
+// converts a python exception to a javascript exception and returns JS_EXCEPTION
+static JSValue py_exception(JSContext *ctx) {
+    PyObject *exc = PyErr_Occurred();
+    if(!exc){
+        // no exception was raised
+        fprintf(stderr, "py_exception() called without an exception!\n");
+        abort();
+    }
+
+    // save exception
+    PyObject *pytype;
+    PyObject *pyvalue;
+    PyObject *pytraceback;
+    PyErr_Fetch(&pytype, &pyvalue, &pytraceback);
+
+    // create javascript wrapper object
+    JSValue jstype = new_pyref(ctx, pytype);
+    if(JS_IsException(jstype)) goto die;
+    JSValue jsvalue = new_pyref(ctx, pyvalue);
+    if(JS_IsException(jsvalue)) goto die;
+    JSValue jstraceback = new_pyref(ctx, pytraceback);
+    if(JS_IsException(jstraceback)) goto die;
+    int ret = JS_DefinePropertyValueStr(ctx, jstype, "value", jsvalue, JS_PROP_C_W_E);
+    if(ret < 0) goto die;
+    ret = JS_DefinePropertyValueStr(ctx, jstype, "traceback", jstraceback, JS_PROP_C_W_E);
+    if(ret < 0) goto die;
+
+    return JS_Throw(ctx, jstype);
+
+die:
+    fprintf(stdout, "failed to convert python exception: ");
+    JSValue jsexc = JS_GetException(ctx);
+    js_console_log(ctx, JS_UNDEFINED, 1, &jsexc);
+    JS_FreeValue(ctx, jsexc);
+    abort();
+}
+
+
 #define CONTAINER_OF(ptr, structure, member) \
     ((structure*)_container_of(ptr, offsetof(structure, member)))
 static inline void *_container_of(const void *ptr, size_t offset){
     return (void*)(((uintptr_t)ptr - offset) * (ptr != 0));
 }
-
-// js_pyweakref is our tiny javascript class that holds a python weakref for caching js2py()
-static JSClassID js_pyweakref_class_id;
-
-// js_pyref is an opaque wrapper around an arbitrary python object
-static JSClassID js_pyref_class_id;
 
 static void js_pyobj(JSRuntime *rt, JSValue val)
 {
@@ -85,11 +151,18 @@ typedef struct {
     Py_ssize_t arrlen;  // -1 if not an array
 } py_value_t;
 
+// a marker to tell py2js to create a pyref instead
+typedef struct {
+    PyObject_HEAD;
+    PyObject *ref;
+} py_opaque_t;
+
 // c-only allocator for new _quickjs.Value objects
 static PyObject *py_value_new(JSContext *ctx, JSValue jsval, PyObject *this);
 
 static PyTypeObject py_quickjs_type;
 static PyTypeObject py_value_type;
+static PyTypeObject py_opaque_type;
 
 // borrows val, this
 static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
@@ -138,7 +211,7 @@ static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
             break;
 
         default:
-            PyErr_SetString(quickjs_error, "unsupported type");
+            PyErr_Format(PyExc_TypeError, "unsupported type: tag=%d", JS_VALUE_GET_TAG(val));
             return NULL;
     }
 
@@ -245,30 +318,32 @@ done:
 
 // wrap an arbitrary python callback
 static JSValue _js_call_python(
-    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data,
+    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data
 ){
+    (void)this_val;
+    (void)magic;
+
     PyObject *func = NULL;
     PyObject *args = NULL;
     PyObject *retval = NULL;
     JSValue out = JS_EXCEPTION;
-    bool success = false;
 
     // extract closure variables (borrowed)
-    PyObject *func = JS_GetOpaque(data[0], js_pyref_class_id);
+    func = JS_GetOpaque(data[0], js_pyref_class_id);
 
     // extract args
     args = PyTuple_New((Py_ssize_t)argc);
-    if(!out){
+    if(!args){
         py_exception(ctx);
         goto done;
     }
     for(int i = 0; i < argc; i++){
-        PyObject *arg = js2py(argv[i]);
+        PyObject *arg = js2py(ctx, argv[i], Py_None);
         if(!arg){
             py_exception(ctx);
             goto done;
         }
-        PyTuple_SET_ITEM(out, (Py_ssize_t)i, arg);
+        PyTuple_SET_ITEM(args, (Py_ssize_t)i, arg);
     }
 
     // call python function
@@ -315,6 +390,15 @@ static JSValue py2js(JSContext *ctx, PyObject *val) {
         if(isinstance < 0) goto done;
         // just return the underlying object
         return JS_DupValue(ctx, ((py_value_t*)val)->jsval);
+    }
+
+    // is object a _quickjs.Opaque?
+    if((isinstance = PyObject_IsInstance(val, (PyObject*)&py_opaque_type))){
+        if(isinstance < 0) goto done;
+        // return an opaque pyref
+        PyObject *ref = ((py_opaque_t*)val)->ref;
+        Py_INCREF(ref);
+        return new_pyref(ctx, ref);
     }
 
     PyObject *items = NULL;
@@ -422,7 +506,7 @@ static JSValue py2js(JSContext *ctx, PyObject *val) {
         goto done;
     }
 
-    PyErr_SetString(quickjs_error, "unsupported type in python->javascript conversion");
+    PyErr_Format(PyExc_TypeError, "unexpected type in py2js (%s)", Py_TYPE(val)->tp_name);
 
 done:
     Py_CLEAR(items);
@@ -891,7 +975,7 @@ done:
     return out;
 }
 
-// base implementation; consumes this and args (even if skip is nonzero)
+// base implementation; borrows this and args
 static PyObject *call_function(py_value_t *self, PyObject *this, PyObject *args, Py_ssize_t skip){
     PyObject *out = NULL;
     JSValue *jsargs = NULL;
@@ -947,8 +1031,6 @@ done:
     for(Py_ssize_t i = 0; i < iargs; i++) JS_FreeValue(self->ctx, jsargs[i]);
     // free the args array
     if(jsargs) free(jsargs);
-    // discard provided values
-    Py_CLEAR(args);
     return out;
 
 }
@@ -958,13 +1040,10 @@ static PyObject *py_value_tp_call(py_value_t *self, PyObject *args, PyObject *kw
     // check that args are all positional
     if(kwargs != NULL && PyDict_Size(kwargs) != 0){
         PyErr_SetString(quickjs_error, "javascript functions only support positional args");
-        Py_CLEAR(args);
-        Py_CLEAR(kwargs);
         return NULL;
     }
 
     // use built-in this
-    Py_INCREF(self->this);
     return call_function(self, self->this, args, 0);
 }
 
@@ -974,7 +1053,6 @@ static char * const py_value_call_doc =
 static PyObject *py_value_call(py_value_t *self, PyObject *args){
     Py_ssize_t nargs = PyTuple_GET_SIZE(args);
     if(nargs < 1){
-        Py_CLEAR(args);
         PyErr_SetString(quickjs_error, ".call() requires a `this` parameter");
         return NULL;
     }
@@ -982,10 +1060,8 @@ static PyObject *py_value_call(py_value_t *self, PyObject *args){
     // extract the first parameter and prepare it to be double-freed
     PyObject *this = PyTuple_GetItem(args, 0);
     if(!this){
-        Py_CLEAR(args);
         return NULL;
     }
-    Py_INCREF(this);
 
     // let the function args be all the remaining parameters
     return call_function(self, this, args, 1);
@@ -1221,7 +1297,7 @@ static PyObject *py_value_mp_subscript(py_value_t *self, PyObject *key){
     if((isinstance = PyObject_IsInstance(key, (PyObject*)&PySlice_Type))){
         if(isinstance < 0) goto done;
         if(self->arrlen < 0){
-            PyErr_Format(quickjs_error, "slices only supported on arrays");
+            PyErr_SetString(quickjs_error, "slices only supported on arrays");
             goto done;
         }
         Py_ssize_t start, stop, step;
@@ -1408,215 +1484,38 @@ static PyTypeObject py_value_type = {
 
 ////
 
-// implements then .next() function of a generator, so:
-// (val: any) => {value: any, done: boolean}
-static JSValue _js_querynext(
-    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data,
-){
-    PyObject *val = NULL;
-    PyObject *args = NULL;
-    PyObject *result = NULL;
-    JSValue jsdone = JS_UNINITIALIZED;
-    JSValue jsret = JS_UNINITIALIZED;
-    JSValue out = JS_EXCEPTION;
-    bool success = false;
-
-    // extract closure variable (borrowed)
-    PyObject *pynext = JS_GetOpaque(data[0], js_pyref_class_id);
-
-    // extract arg
-    val = js2py(argv[0]);
-    if(!val){
-        py_exception(ctx);
-        goto done;
-    }
-
-    // call python next(val) -> (done, retval)
-    args = Py_BuildValue("(O)", val);
-    if(!args){
-        py_exception(ctx);
-        goto done;
-    }
-    PyObject *result = PyObject_Call(pynext, args, NULL);
-    if(!result){
-        py_exception(ctx);
-        goto done;
-    }
-
-    // extract result = (done, retval) (borrowed)
-    PyObject *done_borrowed = Py_Tuple_GET_ITEM(result, 0);
-    PyObject *retval_borrowed = Py_Tuple_GET_ITEM(result, 1);
-
-    // convert result to javascript
-    jsdone = py2js(ctx, done_borrowed);
-    if(JS_IsException(jsdone)) goto done;
-    if(done != Py_True){
-        // yielded values get py2js treatement
-        jsret = py2js(ctx, retval_borrowed);
-    }else{
-        // final values are opaque references
-        Py_INCREF(retval_borrowed);
-        jsret = py2js(retval_borrowed);
-    }
-    if(JS_IsException(jsret)) goto done;
-
-    // return suitable javascript object ({done, value})
-    out = JS_NewObject(ctx);
-    if(JS_IsException(out)) goto done;
-    int ret = JS_DefinePropertyValueStr(ctx, out, "done", jsdone, JS_PROP_C_W_E);
-    if(ret < 0) goto done;
-    ret = JS_DefinePropertyValueStr(ctx, out, "value", jsret, JS_PROP_C_W_E);
-    if(ret < 0) goto done;
-
-    success = true;
-
-done:
-    Py_CLEAR(val);
-    Py_CLEAR(args);
-    Py_CLEAR(result);
-    if(!JS_IsUninitialized(jsdone)) JS_FreeValue(jsdone);
-    if(!JS_IsUninitialized(jsret)) JS_FreeValue(jsret);
-    if(!success && !JS_IsException(out)){
-        JS_FreeValue(out);
-        out = JS_EXCEPTION;
-    }
-    return out;
+static void py_opaque_dealloc(py_opaque_t *self){
+    Py_CLEAR(self->ref);
+    Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
-// implements a QueryFunction,
-// where QueryFunction = (qx, prev, prevIsValid) => QueryGenerator
-// where QueryGenerator = Generator<QueryQuestion, T, QueryAnswer>;
-static JSValue _js_queryfunc(
-    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data,
-){
-    PyObject *prev = NULL;
-    PyObject *is_valid = NULL;
-    PyObject *args = NULL;
-    PyObject *pynext = NULL;
-    JSValue nextref = JS_UNINITIALIZED;
-    JSValue jsnext = JS_UNINITIALIZED;
-    JSValue out = JS_EXCEPTION;
-    bool success = false;
+static int py_opaque_init(py_opaque_t *self, PyObject *args, PyObject *kwds){
+    self->ref = NULL;
 
-    // extract closure variables (borrowed)
-    PyObject *pyqx = JS_GetOpaque(data[0], js_pyref_class_id);
-    PyObject *pyqueryfunc = JS_GetOpaque(data[1], js_pyref_class_id);
+    PyObject *ref;
+    char *kwnames[] = { "ref", NULL };
 
-    // extract args
-    prev = js2py(argv[1]);
-    if(!prev){
-        py_exception(ctx);
-        goto done;
-    }
+    int ret = PyArg_ParseTupleAndKeywords(args, kwds, "O", kwnames, &ref);
+    if(!ret) return -1;
 
-    is_valid = js2py(argv[1]);
-    if(!prev){
-        py_exception(ctx);
-        goto done;
-    }
+    self->ref = ref;
 
-    // invoke python call() to get a python next()
-    args = Py_BuildValue("(OOO)", pyqx, prev, is_valid);
-    if(!args){
-        py_exception(ctx);
-        goto done;
-    }
-    PyObject *pynext = PyObject_Call(pyqueryfunc, args, NULL);
-
-    // prepare closure variables
-    Py_INCREF(pynext);
-    nextref = new_pyref(ctx, pynext);
-    if(JS_IsException(nextref)) goto done;
-
-    // create a javascript nextfunc in C
-    JSValue jsnext = JS_NewCFunctionData(ctx, _js_querynext, 1, 0, 1, &nextref);
-    if(JS_IsException(jsnext)) goto done;
-
-    // create javascript iterator object ({next})
-    out = JS_NewObject(ctx);
-    if(JS_IsException(out)) goto done;
-    int ret = JS_DefinePropertyValueStr(ctx, out, "next", jsnext, JS_PROP_C_W_E);
-    if(ret < 0) goto done;
-
-    success = true;
-
-done:
-    Py_CLEAR(prev);
-    Py_CLEAR(is_valid);
-    Py_CLEAR(args);
-    Py_CLEAR(pynext);
-    if(!JS_IsUninitialized(jsnext)) JS_FreeValue(ctx, jsnext);
-    if(!success && !JS_IsException(out)){
-        JS_FreeValue(out);
-        out = JS_EXCEPTION;
-    }
-    return out;
+    return 0;
 }
 
-static PyObject *py_new_query(PyObject *self, PyObject *const *args, Py_ssize_t nargs){
-    JSValue newQuery = JS_UNINITIALIZED;
-    JSValue _query = JS_UNINITIALIZED;
-    PyObject *out = NULL;
-
-    // validate inputs
-    if(nargs != 3){
-        PyErr_SetString(PyExc_TypeError, "_new_query() requires exactly 3 args");
-        goto done;
-    }
-    int isinstance;
-    if((isinstance = PyObject_IsInstance(val, (PyObject*)&py_value_type))){
-        if(isinstance < 0) goto done;
-    }else {
-        PyErr_SetString(PyExc_TypeError, "_new_query() first arg must be a framework value");
-        goto done;
-    }
-
-    const py_value_t *framework = (const py_value_t*)args[0];
-    const PyObject *pyqx = args[1];
-    const PyObject *pyqueryfunc = args[2];
-
-    JSContext *ctx = framework->ctx;
-
-    // prepare closure values
-    Py_INCREF(pyqx);
-    JSValue qxref = new_pyref(ctx, pyqx);
-    if(JS_IsException(qxref)) goto done;
-
-    Py_INCREF(pyqueryfunc);
-    JSValue callref = new_pyref(ctx, pyqueryfunc);
-    if(JS_IsException(callref)) goto done;
-
-    // create a javascript queryfunc in C
-    JSValue data[] = {qxref, callref};
-    JSValue queryfunc = JS_NewCFunctionData(ctx, _js_queryfunc, 3, 0, 2, &data);
-    if(JS_IsException(queryfunc)){
-        js_exception(ctx);
-        goto done;
-    }
-
-    // get .newQuery method of framework
-    newQuery = JS_GetProperty(ctx, framework->jsval, "newQuery");
-    if(JS_IsException(newQuery)){
-        js_exception(ctx);
-        goto done;
-    }
-
-    // call _query = framework.newQuery(queryfunc)
-    _query = JS_Call(ctx, newQuery, framework->jsval, 1, &queryfunc);
-    if(JS_IsException(_query)){
-        js_exception(ctx);
-        goto done;
-    }
-
-    // return _query
-    out = js2py(ctx, _query);
-    if(out == NULL) goto done;
-
-done:
-    if(!JS_IsUninitialized(newQuery)) JS_FreeValue(newQuery);
-    if(!JS_IsUninitialized(_query)) JS_FreeValue(_query);
-    return out;
-}
+static PyTypeObject py_opaque_type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    // this needs to be dotted to work with pickle and pydoc
+    .tp_name = "_quickjs.Opaque",
+    .tp_doc = "mark a python object as opaque to javascript, avoiding any conversions",
+    .tp_basicsize = sizeof(py_opaque_t),
+    // 0 means "size is not variable"
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = PyType_GenericNew,
+    .tp_dealloc = (destructor) py_opaque_dealloc,
+    .tp_init = (initproc)py_opaque_init,
+};
 
 ////
 
@@ -1624,12 +1523,6 @@ done:
     (PyCFunction)(void(*)(void))(fn)
 
 static PyMethodDef _quickjs_methods[] = {
-    {
-        .ml_name = "eval",
-        .ml_meth = (PyCFunction)(void*)py_quickjs_eval,
-        .ml_flags = METH_FASTCALL,
-        .ml_doc = py_quickjs_eval_doc,
-    },
     {0},  // sentinel
 };
 
@@ -1648,6 +1541,7 @@ PyObject* PyInit__quickjs(void);
 PyObject* PyInit__quickjs(void){
     if (PyType_Ready(&py_quickjs_type) < 0) return NULL;
     if (PyType_Ready(&py_value_type) < 0) return NULL;
+    if (PyType_Ready(&py_opaque_type) < 0) return NULL;
     int ret;
 
     PyObject *module = PyModule_Create(&_quickjs_module);
@@ -1661,6 +1555,10 @@ PyObject* PyInit__quickjs(void){
 
     Py_INCREF((PyObject*)&py_value_type);
     ret = PyModule_AddObject(module, "Value", (PyObject*)&py_value_type);
+    if(ret < 0) goto fail;
+
+    Py_INCREF((PyObject*)&py_value_type);
+    ret = PyModule_AddObject(module, "Opaque", (PyObject*)&py_opaque_type);
     if(ret < 0) goto fail;
 
     quickjs_error = PyErr_NewException("_quickjs.QuickJSError", NULL, NULL);

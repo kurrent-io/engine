@@ -34,3 +34,25 @@ for v in a:
 print('for v in a.a:')
 for v in a.a:
     print('  -', v)
+
+# test opaque objects and function calls
+class X:
+    pass
+
+x1 = X()
+fn = q.eval("(x) => x()")
+x2 = fn(lambda: _quickjs.Opaque(x1))
+assert x1 == x2, (x1, x2)
+
+# test exceptions
+class XErr(Exception):
+    pass
+
+def inner():
+    raise XErr(x1)
+
+try:
+    fn(inner)
+except XErr as xe:
+    assert xe.args[0] == x2, (xe.args, x2)
+
