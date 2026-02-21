@@ -132,6 +132,11 @@ def decode_solution(d, annos, decoders, solution):
                 d.indent("  ")
                 visit(subsln)
                 d.dedent()
+            # default
+            d.print(f"default:\n");
+            d.indent("  ")
+            visit(solution.default)
+            d.dedent()
             d.dedent()
             d.print("}\n")
         elif isinstance(solution, GetIndex):
@@ -338,7 +343,7 @@ def generate_store_prereqs(d):
     d.print("};\n")
 
 
-def generate_store(d, annos, decoders, store):
+def generate_store(d, annos, store):
     # Generate the QueryContext singleton.
     d.print(f"\nexport const {store.name}QueryContext = {{\n")
     d.indent("  ")
@@ -354,7 +359,6 @@ def generate_store(d, annos, decoders, store):
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
-        decoder = decoders[si.type]("")[:-2]
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
@@ -380,7 +384,6 @@ def generate_store(d, annos, decoders, store):
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
-        decoder = decoders[si.type]("")[:-2]
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
@@ -399,7 +402,6 @@ def generate_store(d, annos, decoders, store):
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
-        decoder = decoders[si.type]("")[:-2]
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
@@ -420,7 +422,6 @@ def generate_store(d, annos, decoders, store):
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
-        decoder = decoders[si.type]("")[:-2]
         d.print(f"`, value),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
@@ -441,7 +442,6 @@ def generate_store(d, annos, decoders, store):
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
-        decoder = decoders[si.type]("")[:-2]
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
@@ -478,6 +478,6 @@ def generate(concretes, roots, stores, args):
     if stores:
         generate_store_prereqs(d)
     for s in stores:
-        generate_store(d, annos, decoders, s)
+        generate_store(d, annos, s)
 
     print(d.getvalue())

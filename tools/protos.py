@@ -128,22 +128,22 @@ class Concrete(metaclass=ConcreteMeta):
 
 class Null(Concrete):
     json_type = "null"
-    def __str__(self):
+    def __repr__(self):
         return "null"
 
 class Int(Concrete):
     json_type = "int"
-    def __str__(self):
+    def __repr__(self):
         return "int"
 
 class String(Concrete):
     json_type = "string"
-    def __str__(self):
+    def __repr__(self):
         return "str"
 
 class Bool(Concrete):
     json_type = "boolean"
-    def __str__(self):
+    def __repr__(self):
         return "bool"
 
 class Literal(Concrete):
@@ -161,7 +161,7 @@ class Literal(Concrete):
         else:
             raise ValueError(f"illegal value for Literal({value})")
 
-    def __str__(self):
+    def __repr__(self):
         if self.json_type == "boolean":
             return "true" if self.value else "false"
         if self.json_type == "string":
@@ -172,7 +172,7 @@ class Literal(Concrete):
 class Json(Concrete):
     json_type = "*"
 
-    def __str__(self):
+    def __repr__(self):
         return "json"
 
 # Compound and helper types (Resolvable and Concrete forms)
@@ -216,7 +216,7 @@ class ConcreteStruct(Concrete):
         # maybes contains only maybe fields
         self.maybes = {k: v.type for k, v in fields.items() if isinstance(v, Maybe)}
 
-    def __str__(self):
+    def __repr__(self):
         if self.name:
             return self.name
         def mkfield(k, v):
@@ -244,7 +244,7 @@ class Maybe:
             Maybe._resolved[rtype] = Maybe(rtype)
         return Maybe._resolved[rtype]
 
-    def __str__(self):
+    def __repr__(self):
         return str(self.type)
 
 
@@ -262,7 +262,7 @@ class ConcreteObject(Concrete):
     def __init__(self, value_type, /):
         self.value_type = value_type
 
-    def __str__(self):
+    def __repr__(self):
         return f"Object[{self.value_type}]"
 
 
@@ -285,7 +285,7 @@ class ConcreteArray(Concrete):
     def typeat(self, _):
         return self.item_type
 
-    def __str__(self):
+    def __repr__(self):
         return f"Array[{self.item_type}]"
 
 
@@ -310,7 +310,7 @@ class ConcreteTuple(Concrete):
     def typeat(self, i):
         return self.item_types[i]
 
-    def __str__(self):
+    def __repr__(self):
         return "Tuple[" + ", ".join(str(t) for t in self.item_types) + "]"
 
 
@@ -346,7 +346,7 @@ class ConcreteUnion(Concrete):
     def __iter__(self):
         yield from self.types
 
-    def __str__(self):
+    def __repr__(self):
         return "|".join(sorted(str(t) for t in self.types))
 
 
@@ -387,6 +387,14 @@ class GetField:
     def __init__(self, key, solution):
         self.key = key
         self.solution = solution
+
+class HasField:
+    """
+    HasField means you should check for each field in order, and pick the corresponding solution.
+    """
+    def __init__(self, solutions):
+        # [(key: solution), ...]
+        self.solutions = solutions
 
 
 ## solvers
@@ -435,12 +443,31 @@ def solve_union_literals(types):
 
 
 def solve_union_structs(types):
-    # There could be a lot of ways to distinguish different structs, but for now I think we will
-    # only solve discriminated unions, where each struct has e.g. a .type field.  We also need to
-    # support a subdiscriminator, since we expect most types to have a .v field that distinguishes
-    # different event schema versions.  As exceptions arise, we can write a more advanced solver.
+    if len(types) == 1:
+        return Match(types[0])
 
-    # first look for keys with literals that can distinguish our different elements (a "type" key)
+    # There could be a lot of ways to distinguish different structs, but for now I think we will
+    # only solve oneof unions, where there is only one key, and discriminated unions, where each
+    # struct has e.g. a .type field.  Discriminated unions also need to support a subdiscriminator,
+    # since we expect most types to have a .v field that distinguishes different event schema
+    # versions.  As exceptions arise, we can write a more advanced solver.
+
+    # first check for oneof unions, where each member has a single key and they're all different.
+    if all(len(t.fields) == len(t.always) == 1 for t in types):
+        solutions = {}
+        seen = set()
+        order = []
+        for t in types:
+            field = next(iter(t.fields))
+            if field not in seen:
+                order.append(field)
+                seen.add(field)
+                solutions[field] = [t]
+            else:
+                solutions[field].append(t)
+        return HasField([(f, solve_union_structs(solutions[f])) for f in order])
+
+    # then look for keys with literals that can distinguish our different elements (a "type" key)
     # {key: (count, set(values))}
     litkeys = {}
     for t in types:
@@ -452,7 +479,7 @@ def solve_union_structs(types):
                 litkeys[k] = (count, values)
 
     if not litkeys:
-        raise ValueError(f"union without discriminator: {types}")
+        raise ValueError(f"union without discriminator: {' | '.join(str(t) for t in types)}")
 
     # we expect a discriminator to exist which is common to all structs
     keys_on_all_types = {k: vals for k, (count, vals) in litkeys.items() if count == len(types)}
@@ -496,10 +523,7 @@ def solve_union_structs(types):
     # build a CheckLiteral with subsolvers per value
     out = {}
     for v, subtypes in value_to_subtypes.items():
-        if len(subtypes) == 1:
-            out[v] = Match(subtypes[0])
-        else:
-            out[v] = solve_union_structs(subtypes)
+        out[v] = solve_union_structs(subtypes)
     return GetField(k, CheckLiteral(out))
 
 

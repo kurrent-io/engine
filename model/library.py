@@ -66,6 +66,21 @@ class Timestamp(Concrete):
     def ts_generate_decoder(d, annos, decoders, visit):
         return lambda val: f"new Date({val} as string)"
 
+    @staticmethod
+    def py_generate_annotation(d, annos, visit, path):
+        return "datetime.datetime"
+
+    @staticmethod
+    def py_generate_checker(d, annos, decoders, visit):
+        return lambda val, path: (
+            "try:\n"
+            f"    datetime.datetime.strptime({val}, '%Y-%m-%dT%H:%M:%SZ')\n"
+            "except ValueError:\n"
+            f"    problems += [{path} + ': invalid timestamp']\n"
+        )
+        # encoder example:
+        # datetime.datetime.now().astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
 ###################
 ## Storage Layer ##
 ###################
