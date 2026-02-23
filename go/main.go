@@ -263,3 +263,116 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// what if we tried to do something akin to the Protocols structural sub-typing we can do in python?
+
+type BookStatus interface {
+	IsBookStatus()
+}
+
+type BookStatusString string;
+func (*BookStatusString) IsBookStatus() {}
+
+type BookStatusHold interface {
+	BookStatus
+	Hold(): string
+}
+
+type BookStatusCheckout interface {
+	BookStatus
+	Checkout(): string
+}
+
+type Book interface {
+	Id() string
+	Isbn() string
+	Restricted() bool
+	Status:   // nil | {hold: string} | {checkout: string}
+}
+
+
+// well eventually we still need a concrete type, so not sure the interface is useful at all
+type BookStatusCheckoutImpl struct {
+	value goja.Value
+}
+
+func (x *BookStatusCheckoutImpl) IsBookStatus() {}
+func (x *BookStatusCheckoutImpl) Checkout() string { return x.value.Get("checkout") }
+
+// I guess we'd just need to bite the bullet and walk the whole data almost no matter what.  At best
+// we could do it lazily.
+
+
+///////////////////
+
+// what about the query graph?  Is there a good way to run that too?  Hm, well user code could run
+// in a goroutine perhaps.  Go iterators aren't very sophisticated or easy to write.
+
+func getPatrons(qx QX) map[string]Patron {
+	out := map[string]Patron{}
+	for patron_uuid := range qx.Patrons() {
+		out[patron_uuid] = qx.Patron()
+	}
+	return out
+}
+
+// a storage type looks like this:
+
+type Patron struct {
+	val goja.Value
+}
+
+func (x *Patron) Id() string {
+	return val.ToObject().Get("id").Export().(string)
+}
+
+func (x *Patron) Name() string {
+	return val.ToObject().Get("name").Export().(string)
+}
+
+func (x *Patron) Researcher() string {
+	return val.ToObject().Get("researcher").Export().(bool)
+}
+
+func (x *Patron) Name() string {
+	return val.ToObject().Get("name").Export().(string)
+}
+
+func (x *Patron) Checkouts() map[string]bool {
+	return newSet(val.ToObject().Get("checkouts"))
+}
+
+func (x *Patron) Holds() map[string]bool {
+	return newSet(val.ToObject().Get("holds"))
+}
+
+// the query context looks like this:
+
+type QX struct {
+	question <-chan map[string]map[string]bool
+	// answer is closed if the goroutines should shut down
+	answer chan<- map[string]map[string]goja.Value
+}
+
+func (qx *QX) get(key string) goja.Value {
+	select {
+	case question<-map[string]map[string]bool{"store": map[string]bool{key: true}}:
+	case <-qx.answer:
+		runtime.Goexit()
+	}
+	ans, ok := <-qx.answer:
+	if !ok {
+		runtime.Goexit()
+	}
+	return ans["store"][key]
+}
+
+func (qx *QX) Patrons() map[string]bool {
+	return newSet(qx.get("patrons"))
+}
+
+// query function looks like
+
+func (qx *QX) Patron(patron_uuid: string) Patron {
+	return newPatron(qx.get(fmt.Sprintf("patron.%v", patron_uuid)))
+}

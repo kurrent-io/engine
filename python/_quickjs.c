@@ -157,12 +157,22 @@ typedef struct {
     PyObject *ref;
 } py_opaque_t;
 
+// a wrapper around allocated C memory implementing python buffer api
+typedef struct {
+    PyObject_HEAD;
+    char *mem;
+    Py_ssize_t len; // reusued as shape[0]
+    Py_ssize_t stride; // always 1
+    Py_ssize_t suboffset; // always -1
+} py_cmem_t;
+
 // c-only allocator for new _quickjs.Value objects
 static PyObject *py_value_new(JSContext *ctx, JSValue jsval, PyObject *this);
 
 static PyTypeObject py_quickjs_type;
 static PyTypeObject py_value_type;
 static PyTypeObject py_opaque_type;
+static PyTypeObject py_cmem_type;
 
 // borrows val, this
 static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
@@ -1514,15 +1524,415 @@ static PyTypeObject py_opaque_type = {
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_new = PyType_GenericNew,
     .tp_dealloc = (destructor) py_opaque_dealloc,
-    .tp_init = (initproc)py_opaque_init,
+.tp_init = (initproc)py_opaque_init,
 };
 
 ////
+
+static py_cmem_t *new_cmem(char *mem, Py_ssize_t len){
+    py_cmem_t *cmem = PyObject_New(py_cmem_t, &py_cmem_type);
+    if(!cmem){
+        free(mem);
+        return NULL;
+    }
+    cmem->mem = mem;
+    cmem->len = len;
+    cmem->stride = 1;
+    cmem->suboffset = -1;
+    return cmem;
+}
+
+static void py_cmem_dealloc(py_cmem_t *self){
+    if(self->mem) free(self->mem);
+    Py_TYPE(self)->tp_free((PyObject*)self);
+}
+
+static int py_cmem_init(py_cmem_t *self, PyObject *args, PyObject *kwds){
+    (void)self;
+    (void)args;
+    (void)kwds;
+    PyErr_SetString(quickjs_error, "CMem can only be created in C code");
+    return -1;
+}
+
+static int py_cmem_getbuffer(PyObject *exporter, Py_buffer *buf, int flags){
+    py_cmem_t *cmem = (py_cmem_t*)exporter;
+    if(flags & PyBUF_WRITABLE){
+        PyErr_SetString(PyExc_BufferError, "CMem refuses to make writable views");
+        goto fail;
+    }
+
+    if(flags & PyBUF_FORMAT) buf->format = "B";
+
+    // we are returning a new reference as buf->obj
+    Py_INCREF(exporter);
+
+    *buf = (Py_buffer){
+        .buf = cmem->mem,
+        .obj = exporter,
+        .len = cmem->len,
+        .itemsize = 1,
+        .readonly = 1,
+        .ndim = 1,
+        .format = flags & PyBUF_FORMAT ? "B" : NULL,
+        .shape = &cmem->len,
+        .strides = &cmem->stride,
+        .suboffsets = &cmem->suboffset,
+        .internal = NULL,
+    };
+
+    return 0;
+
+fail:
+    *buf = (Py_buffer){0};
+    return -1;
+}
+
+static PyBufferProcs py_cmem_bufferprocs = {
+    .bf_getbuffer = py_cmem_getbuffer,
+    // memory is freed when the exporter is freed
+    .bf_releasebuffer = NULL,
+};
+
+static PyTypeObject py_cmem_type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "_quickjs.CMem",
+    .tp_doc = "a python buffer around preallocated C memory",
+    .tp_basicsize = sizeof(py_cmem_t),
+    // 0 means "size is not variable"
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = PyType_GenericNew,
+    .tp_dealloc = (destructor) py_cmem_dealloc,
+    .tp_init = (initproc)py_cmem_init,
+    .tp_as_buffer = &py_cmem_bufferprocs,
+};
+
+////
+
+// pass a value or an exception to the storage callback
+static JSValue make_storage_callback(JSContext *ctx, JSValueConst cb, JSValue value){
+    JSValue out = JS_EXCEPTION;
+    JSValue exc = JS_UNINITIALIZED;
+    JSValue arg = JS_UNINITIALIZED;
+
+    const char *key = "value";
+    if(JS_IsException(value)){
+        key = "err";
+        // promote a python exception to a javascript one
+        if(PyErr_Occurred()){
+            py_exception(ctx);
+        }
+        // catch the javascript exception
+        exc = JS_GetException(ctx);
+        // we'll use this as the value
+        value = JS_DupValue(ctx, exc);
+    }
+
+    // construct a StorageValue arg
+    arg = JS_NewObject(ctx);
+    if(JS_IsException(arg)) goto done;
+
+    int ret = JS_DefinePropertyValueStr(ctx, arg, key, JS_DupValue(ctx, value), JS_PROP_C_W_E);
+    if(ret) goto done;
+
+    // call the callback
+    out = JS_Call(ctx, cb, JS_NULL, 1, &arg);
+
+done:
+    if(!JS_IsUninitialized(arg)) JS_FreeValue(ctx, arg);
+    JS_FreeValue(ctx, value);
+    if(!JS_IsUninitialized(exc)){
+        // deal with the old exception
+        if(JS_IsException(out)){
+            // failed to pass the exception to the callback; re-throw it now
+            JS_Throw(ctx, exc);
+        }else{
+            // we passed it along, we're done with it now
+            JS_FreeValue(ctx, exc);
+        }
+    }
+    return out;
+}
+
+// txn: (writable: boolean, cb: (result: StorageValue) => void) => unknown;
+static JSValue storage_txn(
+    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data
+){
+    (void)this_val;
+    (void)argc;
+    (void)magic;
+    JSValueConst jswritable = argv[0];
+    JSValueConst jscb = argv[1];
+    // get closure variable
+    PyObject *factory = JS_GetOpaque(data[0], js_pyref_class_id);
+
+    PyObject *writable = NULL;
+    PyObject *txn = NULL;
+    JSValue out = JS_EXCEPTION;
+
+    writable = js2py(ctx, jswritable, Py_None);
+    if(!writable) goto done;
+
+    // call txn factory
+    txn = PyObject_CallFunctionObjArgs(factory, writable, NULL);
+    if(!txn) goto done;
+
+    // wrap in js
+    Py_INCREF(txn);
+    out = new_pyref(ctx, txn);
+    if(JS_IsException(out)) goto done;
+
+done:
+    Py_XDECREF(writable);
+    Py_XDECREF(txn);
+    return make_storage_callback(ctx, jscb, out);
+}
+
+// commit: (txn: unknown, cb: (result: StorageDone) => void) => void;
+static JSValue storage_commit(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+    (void)this_val;
+    (void)argc;
+    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
+    JSValueConst jscb = argv[1];
+
+    PyObject *ret = NULL;
+    JSValue out = JS_EXCEPTION;
+
+    // just call txn.commit()
+    ret = PyObject_CallMethod(txn, "commit", "()");
+    if(!ret) goto done;
+
+    out = JS_TRUE;
+
+done:
+    Py_XDECREF(ret);
+    return make_storage_callback(ctx, jscb, out);
+}
+
+// abort: (txn: unknown, cb: () => void) => void;
+static JSValue storage_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+    (void)this_val;
+    (void)argc;
+    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
+    JSValueConst jscb = argv[1];
+
+    PyObject *ret = NULL;
+    JSValue out = JS_EXCEPTION;
+
+    // call txn.abort(); no error is allowed, no return value is accepted
+    ret = PyObject_CallMethod(txn, "abort", "()");
+    if(!ret){
+        py_exception(ctx);
+        goto done;
+    }
+
+    // call the callback with no arg
+    out = JS_Call(ctx, jscb, JS_NULL, 0, NULL);
+
+done:
+    Py_XDECREF(ret);
+    return out;
+}
+
+// get: (txn: unknown, key: string, cb: (result: StorageValue) => void) => void;
+static JSValue storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+    (void)this_val;
+    (void)argc;
+    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
+    JSValueConst jskey = argv[1];
+    JSValueConst jscb = argv[2];
+
+    PyObject *key = NULL;
+    PyObject *ret = NULL;
+    Py_buffer buf;
+    bool have_buf = false;
+    JSValue out = JS_EXCEPTION;
+
+    key = js2py(ctx, jskey, Py_None);
+    if(!key) goto done;
+
+    // call txn.get(key)
+    ret = PyObject_CallMethod(txn, "get", "(O)", key);
+    if(!ret){
+        PyObject *exc = PyErr_Occurred();
+        int isinstance;
+        if((isinstance = PyObject_IsInstance(exc, (PyObject*)&PyExc_KeyError))){
+            // technically there's another exception that could be raised here... but oh well
+            // if(isinstance < 0) ...
+            PyErr_Clear();
+            // return `undefined`
+            out = JS_UNDEFINED;
+            goto done;
+        }else{
+            // any other error
+            goto done;
+        }
+    }
+
+    // get succeeded; convert bytes -> javascript
+    int iret = PyObject_GetBuffer(ret, &buf, PyBUF_SIMPLE);
+    if(iret) goto done;
+    out = JS_ReadObject(ctx, buf.buf, (size_t)buf.len, JS_READ_OBJ_REFERENCE);
+    if(JS_IsException(out)) goto done;
+
+done:
+    Py_XDECREF(key);
+    Py_XDECREF(ret);
+    if(have_buf) PyBuffer_Release(&buf);
+    return make_storage_callback(ctx, jscb, out);
+}
+
+// set: (txn: unknown, key: string, value: unknown, cb: (result: StorageDone) => void) => void;
+static JSValue storage_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+    (void)this_val;
+    (void)argc;
+    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
+    JSValueConst jskey = argv[1];
+    JSValueConst jsval = argv[2];
+    JSValueConst jscb = argv[3];
+
+    PyObject *key = NULL;
+    PyObject *ret = NULL;
+    PyObject *val = NULL;
+    JSValue out = JS_EXCEPTION;
+
+    key = js2py(ctx, jskey, Py_None);
+    if(!key) goto done;
+
+    // convert jsval to bytes
+    size_t len;
+    uint8_t *mem = JS_WriteObject(ctx, &len, jsval, JS_WRITE_OBJ_REFERENCE);
+    if(!mem) goto done;
+
+    // create python buffer wrapper around allocated memory
+    val = (PyObject*)new_cmem((char*)mem, (Py_ssize_t)len);
+    if(!val) goto done;
+
+    // call txn.set(key, val)
+    ret = PyObject_CallMethod(txn, "set", "(OO)", key, val);
+    if(!ret) goto done;
+
+    out = JS_TRUE;
+
+done:
+    Py_XDECREF(key);
+    Py_XDECREF(val);
+    Py_XDECREF(ret);
+    return make_storage_callback(ctx, jscb, out);
+}
+
+// del: (txn: unknown, key: string, cb: (result: StorageDone) => void) => void;
+static JSValue storage_del(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+    (void)this_val;
+    (void)argc;
+    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
+    JSValueConst jskey = argv[1];
+    JSValueConst jscb = argv[2];
+
+    PyObject *key = NULL;
+    PyObject *ret = NULL;
+    JSValue out = JS_EXCEPTION;
+
+    key = js2py(ctx, jskey, Py_None);
+    if(!key) goto done;
+
+    // call txn.del(key)
+    ret = PyObject_CallMethod(txn, "del", "(O)", key);
+    if(!ret) goto done;
+
+    out = JS_TRUE;
+
+done:
+    Py_XDECREF(key);
+    Py_XDECREF(ret);
+    return make_storage_callback(ctx, jscb, out);
+}
+
+static char * const py_make_storage_doc =
+    "make_storage(txn_factory: Callable[[bool], Txn]) -> Storage\n"
+    "create a Storage object from a txn factory";
+static PyObject *py_make_storage(PyObject *self, PyObject *args, PyObject *kwds) {
+    (void)self;
+    PyObject *qjs;
+    PyObject *factory;
+    char *kwnames[] = { "qjs", "txn_factory", NULL };
+    int ret = PyArg_ParseTupleAndKeywords(args, kwds, "OO", kwnames, &qjs, &factory);
+    if(!ret) return NULL;
+
+    int isinstance;
+    if((isinstance = PyObject_IsInstance(qjs, (PyObject*)&py_quickjs_type))){
+        if(isinstance < 0) return NULL;
+    } else {
+        PyErr_SetString(PyExc_TypeError, "first parameter must be QuickJS object");
+        return NULL;
+    }
+    JSContext *ctx = ((py_quickjs_t*)qjs)->ctx;
+
+    // construct an javascript ExternalCallbackStorage class from callbacks defined in python
+    JSValue global = JS_UNINITIALIZED;
+    JSValue cls = JS_UNINITIALIZED;
+    JSValue jsargs[6];
+    JSValue jsfactory = JS_UNINITIALIZED;
+    int nargs = 0;
+    JSValue jsout = JS_UNINITIALIZED;
+    PyObject *out = NULL;
+
+    // get the constructor from the context
+    global = JS_GetGlobalObject(ctx);
+    if(JS_IsException(global)) goto jsfail;
+    cls = JS_GetPropertyStr(ctx, global, "ExternalCallbackStorage");
+    if(JS_IsException(cls)) goto jsfail;
+
+    // txn arg is a closure defined in C
+    jsfactory = new_pyref(ctx, factory);
+    if(JS_IsException(jsfactory)) goto jsfail;
+    JSValue jsfunc = JS_NewCFunctionData(ctx, storage_txn, 2, 0, 1, &jsfactory);
+    if(JS_IsException(jsfunc)) goto jsfail;
+    jsargs[nargs++] = jsfunc;
+
+    // remaining args are plain wrappers around C functions
+    #define WRAP_SIMPLE(func, name, nparams) do { \
+        JSValue jsfunc = JS_NewCFunction(ctx, func, name, nparams); \
+        if(JS_IsException(jsfunc)) goto jsfail; \
+        jsargs[nargs++] = jsfunc; \
+    } while(0)
+    WRAP_SIMPLE(storage_commit, "commit", 2);
+    WRAP_SIMPLE(storage_abort, "abort", 2);
+    WRAP_SIMPLE(storage_get, "get", 3);
+    WRAP_SIMPLE(storage_set, "set", 4);
+    WRAP_SIMPLE(storage_del, "delete", 3);
+    #undef WRAP
+
+    // call constructor and return result
+    jsout = JS_CallConstructor(ctx, cls, nargs, jsargs);
+    if(JS_IsException(jsout)) goto jsfail;
+
+    out = py_value_new(ctx, jsout, Py_None);
+    goto done;
+
+jsfail:
+    js_exception(ctx);
+
+done:
+    for(int i = 0; i < nargs; i++) JS_FreeValue(ctx, jsargs[i]);
+    if(!JS_IsUninitialized(jsfactory)) JS_FreeValue(ctx, jsfactory);
+    if(!JS_IsUninitialized(cls)) JS_FreeValue(ctx, cls);
+    if(!JS_IsUninitialized(global)) JS_FreeValue(ctx, global);
+    if(!JS_IsUninitialized(jsout)) JS_FreeValue(ctx, jsout);
+    return out;
+}
 
 #define ARG_KWARG_FN_CAST(fn)\
     (PyCFunction)(void(*)(void))(fn)
 
 static PyMethodDef _quickjs_methods[] = {
+    {
+        .ml_name = "make_storage",
+        .ml_meth = ARG_KWARG_FN_CAST(py_make_storage),
+        .ml_flags = METH_VARARGS | METH_KEYWORDS,
+        .ml_doc = py_make_storage_doc,
+    },
     {0},  // sentinel
 };
 
@@ -1542,6 +1952,7 @@ PyObject* PyInit__quickjs(void){
     if (PyType_Ready(&py_quickjs_type) < 0) return NULL;
     if (PyType_Ready(&py_value_type) < 0) return NULL;
     if (PyType_Ready(&py_opaque_type) < 0) return NULL;
+    if (PyType_Ready(&py_cmem_type) < 0) return NULL;
     int ret;
 
     PyObject *module = PyModule_Create(&_quickjs_module);
@@ -1557,8 +1968,12 @@ PyObject* PyInit__quickjs(void){
     ret = PyModule_AddObject(module, "Value", (PyObject*)&py_value_type);
     if(ret < 0) goto fail;
 
-    Py_INCREF((PyObject*)&py_value_type);
+    Py_INCREF((PyObject*)&py_opaque_type);
     ret = PyModule_AddObject(module, "Opaque", (PyObject*)&py_opaque_type);
+    if(ret < 0) goto fail;
+
+    Py_INCREF((PyObject*)&py_cmem_type);
+    ret = PyModule_AddObject(module, "CMem", (PyObject*)&py_cmem_type);
     if(ret < 0) goto fail;
 
     quickjs_error = PyErr_NewException("_quickjs.QuickJSError", NULL, NULL);
@@ -1570,6 +1985,8 @@ PyObject* PyInit__quickjs(void){
 
 fail:
     Py_XDECREF((PyObject*)&quickjs_error);
+    Py_XDECREF((PyObject*)&py_cmem_type);
+    Py_XDECREF((PyObject*)&py_opaque_type);
     Py_XDECREF((PyObject*)&py_value_type);
     Py_XDECREF((PyObject*)&py_quickjs_type);
     Py_XDECREF(module);

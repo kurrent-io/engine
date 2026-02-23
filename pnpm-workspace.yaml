@@ -1,3 +1,5 @@
 onlyBuiltDependencies:
   - '@swc/core'
+  - grpc-tools
+  - protobufjs
   - unrs-resolver

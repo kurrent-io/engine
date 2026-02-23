@@ -27,7 +27,7 @@ class QueryQuestion(TypedDict):
 
 class QueryAnswer(TypedDict):
     store: Dict[str, StorageValue]
-    query: Dict[str, Tuple[any, bool]]
+    query: Dict[str, Tuple[Any, bool]]
 
 
 T = TypeVar('T')
@@ -83,7 +83,7 @@ class Framework[QX]:
         )
 
     def new_query(generator: QueryFunction[QX, T]) -> Query[T]:
-        # queryfunc will wrap the python generator to like a javascript iterator
+        # queryfunc will wrap the python generator in a javascript iterator
         def queryfunc(_: any, prev: T | None, isValid: bool) -> Callable[[Any], Tuple[bool, Any]]:
             g = generator(self._qx, prev, isValid)
             first = True
@@ -107,6 +107,9 @@ class Framework[QX]:
 
         # wrap _Query in a suitable python interface
         return Query(_query)
+
+    def make_storage(self, txn_factory):
+        return _quickjs.make_storage(self._js, txn_factory)
 
 
 class Query[T]:

@@ -4,7 +4,8 @@
         "gen": "python tools/protos.py -i tools -i model gen_ts library > src/library.gen.ts",
         "build": "rollup --config rollup.config.ts --configPlugin typescript",
         "serve": "rollup --config rollup.config.ts --configPlugin typescript --watch",
-        "test": "jest"
+        "test": "jest",
+        "module": "pnpm rollup -m -p typescript -o build/module.js"
     },
     "devDependencies": {
         "@rollup/plugin-commonjs": "^29.0.0",
@@ -16,6 +17,7 @@
         "@types/jest": "^30.0.0",
         "@types/react": "^19.2.9",
         "@types/react-dom": "^19.2.3",
+        "grpc-tools": "^1.13.1",
         "jest": "^30.2.0",
         "rollup": "^4.53.3",
         "rollup-plugin-livereload": "^2.0.5",
@@ -27,6 +29,7 @@
         "typescript": "^5.9.3"
     },
     "dependencies": {
+        "@grpc/grpc-js": "^1.14.3",
         "antd": "^6.2.1",
         "react": "^19.2.3",
         "react-dom": "^19.2.3",
