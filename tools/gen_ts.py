@@ -1,5 +1,3 @@
-import io
-
 from protos import *
 
 
@@ -279,43 +277,12 @@ def generate_decoders(d, annos, decoders, t):
 
 def generate_store_prereqs(d):
     d.print("\n")
-    d.print("type StorageValue = {value: unknown} | {err: Error};\n")
-    d.print("type StorageDone = {value: true} | {err: Error};\n")
-    d.print("\n")
-    d.print("type QueryQuestion = {\n")
-    d.print("  store?: Record<string, true>,\n")
-    d.print("  query?: Record<string, true>,\n")
-    d.print("};\n")
-    d.print("\n")
-    d.print("type QueryAnswer = {\n")
-    d.print("  store: Record<string, StorageValue>,\n")
-    d.print("  query: Record<string, [unknown, boolean]>,\n")
-    d.print("};\n")
-    d.print("\n")
-    d.print("type QueryGenerator<T> = Generator<QueryQuestion, T, QueryAnswer>;\n")
-    d.print("\n")
     d.print("function *queryGet<T>(key: string): QueryGenerator<T> {\n")
     d.print("  const ans = yield {'store': {[key]: true}};\n")
     d.print("  const sv = ans.store[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
     d.print("  return sv.value as T\n")
     d.print("};\n")
-    d.print("\n")
-    d.print("type ProjectorQuestion = {\n")
-    d.print("  old?: Record<string, true>,\n")
-    d.print("  get?: Record<string, true>,\n")
-    d.print("  set?: Record<string, unknown>,\n")
-    d.print("  del?: Record<string, true>,\n")
-    d.print("};\n")
-    d.print("\n")
-    d.print("type ProjectorAnswer = {\n")
-    d.print("  old: Record<string, StorageValue>,\n")
-    d.print("  get: Record<string, StorageValue>,\n")
-    d.print("  set: Record<string, StorageDone>,\n")
-    d.print("  del: Record<string, StorageDone>,\n")
-    d.print("};\n")
-    d.print("\n")
-    d.print("type ProjectorGenerator<T> = Generator<ProjectorQuestion, T, ProjectorAnswer>;\n")
     d.print("\n")
     d.print("function *projectorOld<T>(key: string): ProjectorGenerator<T> {\n")
     d.print("  const ans = yield {'old': {[key]: true}};\n")
@@ -452,32 +419,76 @@ def generate_store(d, annos, store):
     d.dedent()
     d.print(f"}};\n")
 
+    ###################################
+
+    d.print(f"export const {store.name}Context = {{\n")
+    d.print(f"  query: {store.name}QueryContext,\n")
+    d.print(f"  projector: {store.name}ProjectorContext,\n")
+    d.print(f"}}\n")
+
+def generate_framework(d, annos, f):
+    event_type = annos[f.event_type]
+    command_type = annos[f.command_type]
+    px = f"{f.store.name}ProjectorContext"
+    qx = f"{f.store.name}QueryContext"
+    px_type = "typeof " + px
+    qx_type = "typeof " + qx
+
+    d.print(f"""
+export class {f.name}<P> extends Framework<P, {event_type}, {command_type}, {px_type}, {qx_type}> {{
+  constructor(
+    storage: Storage,
+    callbacks: {{
+      // required: new events from the wire may be batched, and a checkpoint is produced
+      shaper: (events: {event_type}[]) => {{events: {event_type}[], checkpoint: P}},
+      // required: project a batch of events into the read model
+      projector: (px: {px_type}, events: {event_type}[]) => ProjectorGenerator<void>,
+      // optional: forecast the events a server will send for a command
+      forecaster?: (commands: {command_type}[]) => {event_type}[],
+      // required if using forecaster: create a unique forecast key for an event; used to create a
+      // map of forecast events and to invalidate the forecasted event when the real event arrives
+      forecastKey?: (event: {event_type}) => string,
+      // required if using sendCommands: receive events to send on the wire and a callback to signal
+      // when that succeeded
+      onCommands?: (commands: {command_type}[], onSent: ()=> void)=> void,
+    }},
+  ) {{
+    super({px}, {qx}, storage, callbacks);
+  }}
+}}
+""")
+
 
 # entrypoint for protos.py
-def generate(concretes, roots, stores, args):
+def generate(d, concretes, roots, stores, frameworks, args):
     assert roots, "must supply roots with -r"
-    d = Denter()
+
+    # Start with the skeleton
+    with open(os.path.join(os.path.dirname(__file__), "skeleton.ts"), "r") as f:
+        d.print(f.read())
+
+    types_to_visit = (
+        [r for r in roots]
+        + [si.type for s in stores for si in s.items]
+        + [si.type for f in frameworks for si in f.store.items]
+    )
 
     # Define types and decide on type annotations.
     annos = {}
-    for r in roots:
-        generate_annotations(d, annos, r)
-    for s in stores:
-        for si in s.items:
-            generate_annotations(d, annos, si.type)
+    for t in types_to_visit:
+        generate_annotations(d, annos, t)
 
     # Generate decoders and pick decoding expressions.
     decoders = {}
-    for r in roots:
-        generate_decoders(d, annos, decoders, r)
-    for s in stores:
-        for si in s.items:
-            generate_decoders(d, annos, decoders, si.type)
+    for t in types_to_visit:
+        generate_decoders(d, annos, decoders, t)
 
-    # then process stores
+    # Generate stores
     if stores:
         generate_store_prereqs(d)
     for s in stores:
         generate_store(d, annos, s)
 
-    print(d.getvalue())
+    # # Generate frameworks
+    # for f in frameworks:
+    #     generate_framework(d, annos, f)

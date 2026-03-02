@@ -1,94 +1,171 @@
-@dataclasses.dataclass
-class BookStatusCheckout:
-    checkout: string
+from typing import TypeVar, Callable, cast, TypedDict, List, Any, Tuple, Protocol, reveal_type
 
-@dataclasses.dataclass
-class BookStatusHold:
-    hold: string
+from library_gen import QueryGenerator, QueryFunction, DeciderStoreQueryContext, LibraryEvents, checkLibraryEvents
 
-@dataclasses.dataclass
-class Book:
-    id: str
-    isbn: str
-    restricted: bool
-    status: None | BookStatusCheckout | BookStatusHold;
-
-class StorageValueErr(TypedDict):
-    err: Any
-
-class StorageValueValue(TypedDict):
-    value: Any
-
-StorageValue = StorageValueErr | StorageValueValue;
-
-class QueryQuestion(TypedDict):
-    store: Dict[str, True]
-    query: Dict[str, True]
-
-class QueryAnswer(TypedDict):
-    store: Dict[str, StorageValue]
-    query: Dict[str, Tuple[Any, bool]]
+import _quickjs
 
 
 T = TypeVar('T')
-QueryGenerator = Generator[QueryQuestion, QueryAnswer, T]
+E = TypeVar('E')
+C = TypeVar('C')
+P = TypeVar('P')
+QX = TypeVar('QX')
+
+class Query[T]:
+    def __init__(self, _query: _quickjs.Value):
+        self._query = _query
+
+    def awaitResult(self) -> QueryGenerator[T]:
+        # ask the graph for the result of this query when it's ready
+        ans = yield {"query": {self._query.id: True}}
+        result, dirty = ans["query"][self._query.id]
+        return cast(T, result)
+
+    def subscribe(self, cb: Callable[[T], None]) -> Callable[[], None]:
+        return cast(Callable[[], None], self._query.subscribe(cb))
+
+    def close(self) -> None:
+        self._query.close()
 
 
-def _queryGetter(key) -> QueryGenerator[Any]:
-    ans = (yield {"store": {key: True}})["store"][key]
-    if "err" in ans:
-        raise ValueError(ans["err"])
-    return ans["value"]
+class ShaperOutput[E, P](TypedDict):
+    events: List[E]
+    checkpoint: P
 
 
-# Generator[yield_type, send_type, return_type]
-class BookStoreQueryContext:
-    @staticmethod
-    def book(book_uuid: string) -> QueryGenerator[Book]:
-        return decodeBook(yield from _queryGetter(f"book.{book_uuid}"))
-
-    @staticmethod
-    def edition(edition_isbn: string) -> QueryGenerator[Edition]:
-        return decodeEdition(yield from _queryGetter(f"edition.{edition_isbn}"))
-
-    @staticmethod
-    def editions() -> QueryGenerator[Set[str]]:
-        return decodeSet(yield from _queryGetter("editions"))
-
-
-class RelayQueryContext(BookStoreQueryContext, PatronQueryContext):
-    pass
-
-QX = TypeVar("QX")
-
-QueryFunction = Callable[[QX], QueryGenerator[T]]
-
-
-@framework.new_query
-def book_list(qx: QX, _: Any, _: Any) -> List[Book]:
-    editions = yield from qx.get.editions() or {}
-    return [
-        Book(title=edition.title, copies=len(edition.books))
-        for edition in (yield from qx.get.edition(isbn) for isbn in editions)
-    ]
+# TODO: only synchronous storage is currently supported, for two reasons:
+#
+#       - This strategy of catching an exception and converting it to a {err: "the exception"}
+#         storage callback does not work if the operation doesn't complete within the txn method.
+#         You can union every return type like `-> None | Awaitable[None]` to allow async
+#         implementations of each protocol method, but _quickjs.make_storage() would need additional
+#         work.  I suppose in that case, the setTimeout() definition should be written so that
+#         callbacks are async as well.  Or maybe that could also be autodetected, if the callbacks
+#         return coroutines instead of plain python values.
+#
+#       - The fx.wakeup() called within the storage callback must be followed by running the event
+#         loop, but supporting that would require adding an additional run() closure variable to the
+#         various glue functions behind _quickjs.make_storage(), since it must occur some time after
+#         the Txn methods return.
+#
+# For now, we don't care because our only target storage mechanism is LMDB, which is synchronous
+# anyway.
+class Txn(Protocol):
+    def commit(self) -> None: ...
+    def abort(self) -> None: ...
+    # get shall raise a KeyError if the key is not present
+    def get(self, key: str) -> memoryview: ...
+    def set(self, key: str, value: memoryview) -> None: ...
+    def delete(self, key: str) -> None: ...
 
 
-class Framework[QX]:
-    def __init__(qx, storage):
-        self._qx = qx
-        self._storage = storage
+class BaseFramework[QX, PX, E, C, P]:
+    """
+    BaseFramework chooses not to make assumptions about how you implement:
+      - projectors can be written in python, if you want.
+      - you can use a javascript query context with python query functions.  Weird, but ok.
+      - all this at the cost of way too many type parameters.
+
+    More likely, you should use a generated subclass that guides you through these choices.  But the
+    BaseFramework is availalble if you wanna do something crazy.
+    """
+    def __init__(
+        self,
+        bundle: str,
+        *,
+        decoder: Callable[[Any], E] | str,
+        storage: Callable[[bool], Txn] | str,
+        qx: QX | str,
+        px: PX | str,
+        shaper: Callable[[List[E]], ShaperOutput] | str,
+        projector: Callable[[PX, List[E]], None] | str,
+    ) -> None:
         self._js = _quickjs.QuickJS()
-        self._framework = self._js.eval("(qx) => new Framework(qx)")(
-            _quickjs.Opaque(self._qx),
-        )
 
-    def new_query(generator: QueryFunction[QX, T]) -> Query[T]:
+        # The Framework api is already callback-based, not async, so a very simple event loop is
+        # enough to support setTimeout().  Support setTimeout() with non-zero delay is not needed.
+        self._run = self._js.eval("""
+            // run a cloure that returns a value, so we don't pollute global namespace
+            (() => {
+                const fns = [];
+
+                // define a global setTimeout
+                globalThis.setTimeout = (fn, timeout) => {
+                    if (timeout !== undefined && timeout !== 0) {
+                        throw new Error("setTimeout with nonzero timeout not supported");
+                    }
+                    fns.push(fn);
+                };
+
+                // return a run() function
+                let running = false;
+                console.log("defining run");
+                return () => {
+                    console.log("running run", fns.length);
+                    if (running) return;
+                    running = true;
+                    try {
+                        let fn;
+                        while((fn = fns.shift())){
+                            console.log("fn is", fn);
+                            fn();
+                            console.log("fn now called");
+                        }
+                    } finally {
+                        running = false;
+                    }
+                };
+            })();
+        """)
+
+        with open(bundle) as f:
+            m = self._js.eval(f.read(), flags=1 | (1<<5)) # quickjs.h:JS_EVAL_TYPE_MODULE
+
+        if isinstance(decoder, str):
+            decoder = m[decoder]
+        # wrap decoder function, probably from javascript, in a closure that maps it against an
+        # entire list of events before returning, to prevent bouncing between python and js too much
+        self._decoder = self._js.eval("(decoder) => ((events) => events.map(decoder))")(decoder)
+
+        if isinstance(storage, str):
+            # storage is from javascript, maybe InMemTxn
+            storage = m[storage]
+        else:
+            # storage is a callable that produces a Txn
+            storage = _quickjs.make_storage(self._js, storage)
+
+        if isinstance(qx, str):
+            qx = m[qx]
+            qxjs = qx
+        else:
+            qxjs = _quickjs.Opaque(qx)
+
+        if isinstance(px, str):
+            px = m[px]
+            pxjs = px
+        else:
+            pxjs = _quickjs.Opaque(px)
+
+        if isinstance(shaper, str):
+            shaper = self._js.eval(shaper)
+
+        if isinstance(projector, str):
+            projector = m[projector]
+
+        self._framework: _quickjs.Value = self._js.eval(
+            "(cls, qx, px, storage, callbacks) => new cls(qx, px, storage, callbacks)",
+        )(m["Framework"], qxjs, pxjs, storage, {
+            "shaper": shaper,
+            "projector": projector
+        })
+
+    def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:
         # queryfunc will wrap the python generator in a javascript iterator
-        def queryfunc(_: any, prev: T | None, isValid: bool) -> Callable[[Any], Tuple[bool, Any]]:
-            g = generator(self._qx, prev, isValid)
+        def queryfunc(qx: QX, prev: T | None, isValid: bool) -> Any:
+            g = generator(qx, prev, isValid)
             first = True
 
-            def nextfunc(val=None):
+            def nextfunc(val: Any = None) -> Any:
                 nonlocal first
                 if first:
                     first = False
@@ -108,22 +185,97 @@ class Framework[QX]:
         # wrap _Query in a suitable python interface
         return Query(_query)
 
-    def make_storage(self, txn_factory):
+    def make_storage(self, txn_factory: Callable[[bool], Txn]) -> _quickjs.Value:
         return _quickjs.make_storage(self._js, txn_factory)
 
+    def recvEvents(self, raw_events: List[Any]) -> None:
+        events = self._decoder(raw_events)
+        self._framework.recvEvents(events)
+        self._js.eval("console.log")("self._run:", self._run)
+        self._js.eval("console.log")("random function:", lambda: "x")
+        self._js.eval("(fn) => console.log('calling random function', fn())")(lambda: "x")
+        self._run()
 
-class Query[T]:
-    def __init__(self, _query):
-        self._query = _query
 
-    def awaitResult(self):
-        # ask the graph for the result of this query when it's ready
-        ans = yield {"query": {self._query.id: True}}
-        result, dirty = ans["query"][self._query.id]
-        return result
+class DeciderFramework[P](BaseFramework[
+    type[DeciderStoreQueryContext],  # QX: a python object, enabling python queries
+    _quickjs.Value,  # PX: a javascript object, because projectors come from javascript
+    LibraryEvents,  # E: events from the server
+    LibraryEvents,  # C: commands to the server
+    P,  # P: checkpoint type, configured by user
+]):
+    def __init__(
+        self,
+        bundle: str,
+        storage: Callable[[bool], Txn] | str,
+        shaper: Callable[[List[LibraryEvents]], ShaperOutput[LibraryEvents, P]] | str,
+    ) -> None:
+        super().__init__(
+            bundle,
+            storage=storage,
+            decoder="DecodeLibraryEvents",
+            px="DeciderStoreProjectorContext",
+            qx=DeciderStoreQueryContext,
+            shaper=shaper,
+            projector="deciderProjector",
+        )
 
-    def subscribe(self, cb):
-        return self._query.subscribe(cb)
+fw = DeciderFramework[Any](
+    "relay.js",
+    "InMemStorage",
+    lambda events: {"events": events, "checkpoint": None},
+)
 
-    def close(self):
-        self._query.close()
+event = {
+    "type": "add-edition",
+    "isbn": "my-isbn",
+    "title": "cheech-and-chong-learn-event-sourcing",
+    "timestamp": "2025-01-24T15:54:32Z",
+}
+assert not (errors := checkLibraryEvents(event)), "errors:\n  - " + "\n  - ".join(errors)
+
+fw.recvEvents([event])
+
+# fw = Framework[type[UserStoreQueryContext], Any, Any, Any, Any](
+#     bundle="relay.js",
+#     px="UserStoreQueryContext",
+#     projector="userProjector",
+#     qx=UserStoreQueryContext,
+#     shaper=lambda events: {"events": events, "checkpoint": None},
+#     storage="InMemStorage",
+# )
+
+
+
+# @framework.new_query
+# def book_list(qx: QX, _: Any, _: Any) -> List[Book]:
+#     editions = yield from qx.get.editions() or {}
+#     return [
+#         Book(title=edition.title, copies=len(edition.books))
+#         for edition in (yield from qx.get.edition(isbn) for isbn in editions)
+#     ]
+
+
+#
+#
+# fw = Framework(
+#     bundle="relay.js",
+#     projector_context="UserStoreQueryContext",
+#     projector="userProjector",
+#     query_context=BookStoreQueryContext,
+# )
+#
+#
+# type FrameworkSpec<E, C, P, QX, PX> = {
+#   query: QX,
+#   projector: {
+#     context: PX,
+#     projector: (px: PX, events: []E) => ProjectorGenerator<void>
+#   },
+#   shaper:
+#   queryContext: QX,
+#   projectorContext: PX,
+#   projector:
+#   shaper:
+#
+# )

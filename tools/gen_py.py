@@ -1,6 +1,5 @@
-import io
-
 from protos import *
+import gen_ts
 
 preamble = """
 import datetime
@@ -17,10 +16,10 @@ from typing import (
     TypedDict,
     TypeVar,
 )
+import _quickjs
 
 
 JSON = Dict[str, 'JSON'] | List['JSON'] | str | int | bool | None
-
 """.lstrip()
 
 def generate_annotations(d, annos, t):
@@ -185,7 +184,7 @@ def check_solution(d, annos, checkers, solution):
 
 def generate_checkers(d, annos, checkers, t):
     """
-    def checkPatronEvent(val, path="<root>"):
+    def checkPatronEvent(val, path: str = "<root>"):
         problems = []
         if not isinstance(val, dict):
             return problems + [path + " is not a json object"]
@@ -255,7 +254,7 @@ def generate_checkers(d, annos, checkers, t):
                 anon = _anon
                 _anon += 1
                 name = f"_checkAnon{anon}"
-            d.print(f"\ndef {name}(val: Any, path='<root>') -> List[str]:\n")
+            d.print(f"\ndef {name}(val: Any, path: str = '<root>') -> List[str]:\n")
             d.indent("    ")
             check_solution(d, annos, checkers, solution)
             d.dedent()
@@ -297,7 +296,7 @@ def generate_checkers(d, annos, checkers, t):
             d.print(f"\n{keys} = {keyset}\n")
 
             # write a function
-            d.print(f"\ndef {func}(val: Any, path='<root>') -> List[str]:\n")
+            d.print(f"\ndef {func}(val: Any, path: str = '<root>') -> List[str]:\n")
             d.indent("    ")
             d.print("if not isinstance(val, dict):\n")
             d.print("    return [path + f': is a {type(val).__name}, not json object']\n")
@@ -346,7 +345,7 @@ def generate_checkers(d, annos, checkers, t):
 
         # named types without a function already defined get a wrapper now
         if t.name and not isinstance(t, (ConcreteUnion, ConcreteStruct)):
-            d.print(f"\ndef check{t.name}(val: Any, path='<root>') -> List[str]:\n")
+            d.print(f"\ndef check{t.name}(val: Any, path: str = '<root>') -> List[str]:\n")
             d.indent("    ")
             d.print("problems = []\n")
             d.print(checker("val", "path"))
@@ -359,25 +358,48 @@ def generate_checkers(d, annos, checkers, t):
 
 def generate_store_prereqs(d):
     d.print("\n")
+    d.print("\n")
     d.print("class StorageValue(TypedDict):\n")
     d.print("    err: NotRequired[Any]\n")
     d.print("    value: NotRequired[Any]\n")
+    d.print("\n")
     d.print("\n")
     d.print("class QueryQuestion(TypedDict):\n")
     d.print("    store: NotRequired[Dict[str, Literal[True]]]\n")
     d.print("    query: NotRequired[Dict[str, Literal[True]]]\n")
     d.print("\n")
+    d.print("\n")
     d.print("class QueryAnswer(TypedDict):\n")
     d.print("    store: Dict[str, StorageValue]\n")
     d.print("    query: Dict[str, Tuple[Any, bool]]\n")
     d.print("\n")
+    d.print("\n")
     d.print("T = TypeVar('T')\n")
     d.print("QueryGenerator = Generator[QueryQuestion, QueryAnswer, T]\n")
+    d.print("\n")
     d.print("\n")
     d.print("QX = TypeVar('QX')\n")
     d.print("QueryFunction = Callable[[QX], QueryGenerator[T]]\n")
     d.print("\n")
-    d.print("def _queryGetter(key) -> QueryGenerator[Any]:\n")
+    d.print("\n")
+    # d.print("class Query[T]:\n")
+    # d.print("    def __init__(self, _query):\n")
+    # d.print("        self._query = _query\n")
+    # d.print("\n")
+    # d.print("    def awaitResult(self) -> QueryGenerator[T]:\n")
+    # d.print("        # ask the graph for the result of this query when it's ready\n")
+    # d.print("        ans = yield {'query': {self._query.id: True}}\n")
+    # d.print("        result, dirty = ans['query'][self._query.id]\n")
+    # d.print("        return result\n")
+    # d.print("\n")
+    # d.print("    def subscribe(self, cb: Callable[[T], None]) -> Callable[[], None]:\n")
+    # d.print("        return self._query.subscribe(cb)\n")
+    # d.print("\n")
+    # d.print("    def close(self) -> None:\n")
+    # d.print("        self._query.close()\n")
+    # d.print("\n")
+    # d.print("\n")
+    d.print("def _queryGetter(key: str) -> QueryGenerator[Any]:\n")
     d.print("    ans = (yield {'store': {key: True}})['store'][key]\n")
     d.print("    if 'err' in ans:\n")
     d.print("        raise ValueError(ans['err'])\n")
@@ -417,34 +439,83 @@ def generate_store(d, annos, store):
     d.dedent()
 
 
+def generate_framework_prereqs(d):
+    d.print("\n")
+    d.print("\n")
+    d.print("class Framework[QX]:\n")
+    d.print("    def __init__(qx, storage):\n")
+    d.print("        self._qx = qx\n")
+    d.print("        self._storage = storage\n")
+    d.print("        self._js = _quickjs.QuickJS()\n")
+    d.print("        self._framework = self._js.eval('(qx) => new Framework(qx)')(\n")
+    d.print("            _quickjs.Opaque(self._qx),\n")
+    d.print("        )\n")
+    d.print("\n")
+    d.print("    def new_query(generator: QueryFunction[QX, T]) -> Query[T]:\n")
+    d.print("        # queryfunc will wrap the python generator in a javascript iterator\n")
+    d.print("        def queryfunc(_: any, prev: T | None, isValid: bool) -> Callable[[Any], Tuple[bool, Any]]:\n")
+    d.print("            g = generator(self._qx, prev, isValid)\n")
+    d.print("            first = True\n")
+    d.print("\n")
+    d.print("            def nextfunc(val=None):\n")
+    d.print("                nonlocal first\n")
+    d.print("                if first:\n")
+    d.print("                    first = False\n")
+    d.print("                    val = None\n")
+    d.print("                try:\n")
+    d.print("                    return {'value': g.send(val), 'done': False}\n")
+    d.print("                except StopIteration as e:\n")
+    d.print("                    # javascript will not access our return value\n")
+    d.print("                    # and we will receive it in callbacks totally unmodified\n")
+    d.print("                    return {'value': _quickjs.Opaque(e.value), 'done': True}\n")
+    d.print("\n")
+    d.print("            return {'next': nextfunc}\n")
+    d.print("\n")
+    d.print("        # call javascript framework.newQuery() to get javascript _Query\n")
+    d.print("        _query = self._framework.newQuery(queryfunc)\n")
+    d.print("\n")
+    d.print("        # wrap _Query in a suitable python interface\n")
+    d.print("        return Query(_query)\n")
+    d.print("\n")
+    d.print("    def make_storage(self, txn_factory):\n")
+    d.print("        return _quickjs.make_storage(self._js, txn_factory)\n")
+
+
+def generate_framework(d, annos, f):
+    pass
+
+
 # entrypoint for protos.py
-def generate(concretes, roots, stores, args):
+def generate(d, concretes, roots, stores, frameworks, args):
     assert roots, "must supply roots with -r"
-    d = Denter()
 
     d.print(preamble)
 
+    types_to_visit = (
+        [r for r in roots]
+        + [si.type for s in stores for si in s.items]
+        + [si.type for f in frameworks for si in f.store.items]
+    )
+
     # Define types and decide on type annotations.
     annos = {}
-    for r in roots:
-        generate_annotations(d, annos, r)
-    for s in stores:
-        for si in s.items:
-            generate_annotations(d, annos, si.type)
+    for t in types_to_visit:
+        generate_annotations(d, annos, t)
 
     # Generate json checkers, for receiving incoming json.
     # checkers shall contain snippets of code that append problems to a `problems` variable
     checkers = {}
-    for r in roots:
-        generate_checkers(d, annos, checkers, r)
-    for s in stores:
-        for si in s.items:
-            generate_checkers(d, annos, checkers, si.type)
+    for t in types_to_visit:
+        generate_checkers(d, annos, checkers, t)
 
-    # then process stores
+    # generate query contexts from stores
     if stores:
         generate_store_prereqs(d)
     for s in stores:
         generate_store(d, annos, s)
 
-    print(d.getvalue())
+    # # generate frameworks
+    # if frameworks:
+    #     generate_framework_prereqs(d)
+    # for f in frameworks:
+    #     generate_framework(d, annos, f)

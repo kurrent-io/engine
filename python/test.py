@@ -1,3 +1,5 @@
+import traceback
+
 import _quickjs
 
 q = _quickjs.QuickJS()
@@ -54,36 +56,38 @@ def inner():
 try:
     fn(inner)
 except XErr as xe:
+    print("###############")
+    traceback.print_exc()
+    print("###############")
     assert xe.args[0] == x2, (xe.args, x2)
 
-print("###############")
 
-import lmdb
-
-env = lmdb.Environment("lmdb")
-
-class LmdbTxn:
-    UNDEFINED = object()
-
-    def __init__(self, txn):
-        self.txn = txn
-
-    def commit(self):
-        self.txn.commit()
-
-    def abort(self):
-        self.txn.abort()
-
-    def get(key: str):
-        value = self.txn.get(key=key, default=self.UNDEFINED)
-        if value is self.UNDEFINED:
-            raise KeyError(key)
-        return value
-
-    def set(key: str, value: memoryview):
-        self.txn.put(key, value, overwrite=True)
-
-    def delete(key: str):
-        self.txn.delete(key)
-
-storage = _quickjs.make_storage(q, lambda write: LmdbTxn(env.begin(write=True, buffer=True)))
+# import lmdb
+#
+# env = lmdb.Environment("lmdb")
+#
+# class LmdbTxn:
+#     UNDEFINED = object()
+#
+#     def __init__(self, txn):
+#         self.txn = txn
+#
+#     def commit(self):
+#         self.txn.commit()
+#
+#     def abort(self):
+#         self.txn.abort()
+#
+#     def get(key: str):
+#         value = self.txn.get(key=key, default=self.UNDEFINED)
+#         if value is self.UNDEFINED:
+#             raise KeyError(key)
+#         return value
+#
+#     def set(key: str, value: memoryview):
+#         self.txn.put(key, value, overwrite=True)
+#
+#     def delete(key: str):
+#         self.txn.delete(key)
+#
+# storage = _quickjs.make_storage(q, lambda write: LmdbTxn(env.begin(write=True, buffer=True)))

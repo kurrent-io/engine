@@ -442,7 +442,7 @@ static JSValue py2js(JSContext *ctx, PyObject *val) {
                 goto done;
             }
             int ret = JS_DefinePropertyValueUint32(ctx, jsout, (uint32_t)i, jsitem, JS_PROP_C_W_E);
-            if(ret){
+            if(ret < 0){
                 js_exception(ctx);
                 goto done;
             }
@@ -465,14 +465,14 @@ static JSValue py2js(JSContext *ctx, PyObject *val) {
         // iterate through key/value pairs
         items = PyMapping_Items(val);
         if(!items) goto done;
-        Py_ssize_t len = PyList_GET_SIZE(fast);
+        Py_ssize_t len = PyList_GET_SIZE(items);
         for(Py_ssize_t i = 0; i < len; i++){
             // kv, key, and value are all borrowed
             PyObject *kv = PyList_GET_ITEM(items, i);
             PyObject *pykey = PyTuple_GET_ITEM(kv, 0);
             PyObject *pyval = PyTuple_GET_ITEM(kv, 1);
             // key must be a string
-            isinstance = PyObject_IsInstance(val, (PyObject*)&PyUnicode_Type);
+            isinstance = PyObject_IsInstance(pykey, (PyObject*)&PyUnicode_Type);
             if(isinstance < 0) goto done;
             if(!isinstance){
                 PyErr_SetString(quickjs_error, "only string keys are allowed on dict objects");
@@ -488,7 +488,7 @@ static JSValue py2js(JSContext *ctx, PyObject *val) {
             }
             // set value on ouptut
             int ret = JS_DefinePropertyValueStr(ctx, jsout, key, jsval, JS_PROP_C_W_E);
-            if(ret){
+            if(ret < 0){
                 js_exception(ctx);
                 goto done;
             }
@@ -711,6 +711,24 @@ static PyObject *py_quickjs_eval(py_quickjs_t *self, PyObject *args, PyObject *k
 
     JSValue val = JS_Eval(self->ctx, script, strlen(script), "script", flags);
     if(JS_IsException(val)) return js_exception(self->ctx);
+
+    if(flags == (JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY)){
+        // JS_EvalFunction(module) will evaluate the module and return an already-resolved promise
+        // or an exception.  Or at least, I don't know when the promise might not be
+        // already-resolved.  But we don't care about the promise, only the module, which was the
+        // `val` originally returned by JS_Eval().
+        JSValue promise = JS_EvalFunction(self->ctx, val);
+        if(JS_IsException(promise)){
+            JS_FreeValue(self->ctx, val);
+            return NULL;
+        }
+        JS_FreeValue(self->ctx, promise);
+
+        // return the exported namespace of the module
+        JSValue ns = JS_GetModuleNamespace(self->ctx, (JSModuleDef*)(JS_VALUE_GET_PTR(val)));
+        JS_FreeValue(self->ctx, val);
+        val = ns;
+    }
 
     PyObject *out = js2py(self->ctx, val, Py_None);
     JS_FreeValue(self->ctx, val);
@@ -1415,7 +1433,7 @@ static PyObject *py_value_tp_repr(py_value_t *self){
 
     // don't render functions as '{}'
     if(JS_IsFunction(self->ctx, self->jsval)){
-        return PyUnicode_FromString("<function>");
+        return PyUnicode_FromString("<quickjs_function>");
     }
 
     // proxy object shall be a dict(self.items())
@@ -1634,7 +1652,7 @@ static JSValue make_storage_callback(JSContext *ctx, JSValueConst cb, JSValue va
     if(JS_IsException(arg)) goto done;
 
     int ret = JS_DefinePropertyValueStr(ctx, arg, key, JS_DupValue(ctx, value), JS_PROP_C_W_E);
-    if(ret) goto done;
+    if(ret < 0) goto done;
 
     // call the callback
     out = JS_Call(ctx, cb, JS_NULL, 1, &arg);

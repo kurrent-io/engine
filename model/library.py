@@ -47,6 +47,7 @@ from protos import (
     String,
     Struct,
     Union,
+    Framework,
 )
 
 def Enum(*strings):
@@ -365,3 +366,7 @@ VStatusEvents = (
 
 # utility of all possible events
 LibraryEvents = BookEvents | PatronEvents | StatusEvents | DeciderEvents
+
+# predefine some frameworks
+UserFramework = Framework(LibraryEvents, LibraryEvents, UserStore)
+DeciderFramework = Framework(LibraryEvents, LibraryEvents, DeciderStore)

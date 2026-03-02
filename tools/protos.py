@@ -1,12 +1,3 @@
-"""
-What have we learned?
-
-Basically, expressive unions and a union solver for decoding are the keys to this type system.
-
-The per-lanauge generators should receive some sort of spec for how to encode the solver for a union
-into a function of that language.
-"""
-
 import abc
 import os
 import re
@@ -752,7 +743,7 @@ def print_solution(solution, file=None, indent=0):
 #         # every topic object
 #         "topic.{topic_uuid}": Topic,
 #         # a per-topic index of all comment objects within that topic
-#         "topic-comments.{topic_uuid}": []Uuid,
+#         "topic_comments.{topic_uuid}": []Uuid,
 #     })
 #     reportStore = Store({
 #         # every row object
@@ -760,7 +751,7 @@ def print_solution(solution, file=None, indent=0):
 #         # every report object
 #         "report.{report_uuid}": Report,
 #         # a per-report index of all rows within that report
-#         "report-row.{report_uuid}": []Uuid,
+#         "report_rows.{report_uuid}": []Uuid,
 #     })
 #     myStore = Store(topicStore, reportStore)
 
@@ -872,6 +863,27 @@ class Store:
         return self
 
 
+_all_frameworks = []
+
+
+class Framework:
+    """
+    Framework is simply a collection of types to define a concrete Framework type.
+    """
+    def __init__(self, event_type, command_type, store):
+        _all_frameworks.append(self)
+        self.name = None
+        self.event_type = event_type
+        self.command_type = command_type
+        self.store = store
+
+    def resolve(self):
+        self.event_type = self.event_type.resolve()
+        self.command_type = self.command_type.resolve()
+        self.store = self.store.resolve()
+        return self
+
+
 class Denter:
     """A helper class for writing generators."""
     def __init__(self, indent=""):
@@ -955,7 +967,7 @@ def _main():
             # would require a substnatial rewrite that I'm not presently interested in.
             if isinstance(obj, Alias):
                 continue
-            if isinstance(obj, (Resolvable, Concrete, Store)):
+            if isinstance(obj, (Resolvable, Concrete, Store, Framework)):
                 obj = obj.resolve()
             elif issubclass(obj, Concrete):
                 # handle simple Concrete subclasses
@@ -992,6 +1004,7 @@ def _main():
     # now go through and assign names
     roots_available = {}
     stores_available = {}
+    frameworks_available = {}
     for name, (obj, _) in name_to_obj.items():
         if isinstance(obj, Concrete):
             # assign name to Concrete
@@ -1000,6 +1013,9 @@ def _main():
         elif isinstance(obj, Store):
             obj.name = name
             stores_available[name] = obj
+        elif isinstance(obj, Framework):
+            obj.name = name
+            frameworks_available[name] = obj
         else:
             raise ValueError(f"weird: {obj}")
 
@@ -1015,16 +1031,22 @@ def _main():
     if args.roots:
         roots = []
         stores = []
+        frameworks = []
         for r in args.roots:
             if r in roots_available:
                 roots.append(roots_available[r])
             elif r in stores_available:
                 stores.append(stores_available[r])
+            elif r in stores_available:
+                frameworks.append(frameworks_available[r])
             else:
-                raise ValueError(f'requested root "{r}" not found as either a type or a store')
+                raise ValueError(
+                    f'requested root "{r}" not found as either a type, store, or framework',
+                )
     else:
         roots = [c for c in _all_concretes if c.name]
         stores = list(_all_stores)
+        frameworks = list(_all_frameworks)
 
     # now import the generator
     generator_module = importlib.import_module(args.generator)
@@ -1034,7 +1056,9 @@ def _main():
        )
 
     # call the generator
-    generator_module.generate(_all_concretes, roots, stores, generator_args)
+    d = Denter()
+    generator_module.generate(d, _all_concretes, roots, stores, frameworks, generator_args)
+    print(d.getvalue())
 
 
 if __name__ == "__main__":
