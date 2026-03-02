@@ -1,4 +1,6 @@
 from typing import TypeVar, Callable, cast, TypedDict, List, Any, Tuple, Protocol, reveal_type
+import json
+import base64
 
 from library_gen import QueryGenerator, QueryFunction, DeciderStoreQueryContext, LibraryEvents, checkLibraryEvents
 
@@ -84,8 +86,8 @@ class BaseFramework[QX, PX, E, C, P]:
 
         # The Framework api is already callback-based, not async, so a very simple event loop is
         # enough to support setTimeout().  Support setTimeout() with non-zero delay is not needed.
-        self._run = self._js.eval("""
-            // run a cloure that returns a value, so we don't pollute global namespace
+        self._run = self._js.eval(
+            """// run a closure that returns a value, so we don't pollute global namespace
             (() => {
                 const fns = [];
 
@@ -99,27 +101,33 @@ class BaseFramework[QX, PX, E, C, P]:
 
                 // return a run() function
                 let running = false;
-                console.log("defining run");
                 return () => {
-                    console.log("running run", fns.length);
                     if (running) return;
                     running = true;
                     try {
                         let fn;
                         while((fn = fns.shift())){
-                            console.log("fn is", fn);
                             fn();
-                            console.log("fn now called");
                         }
                     } finally {
                         running = false;
                     }
                 };
-            })();
-        """)
+            })();""",
+            file="Framework.run",
+        )
 
         with open(bundle) as f:
-            m = self._js.eval(f.read(), flags=1 | (1<<5)) # quickjs.h:JS_EVAL_TYPE_MODULE
+            text = f.read()
+        sourcemap_index = text.find("//# sourceMappingURL=")
+        if sourcemap_index == -1:
+            sourcemap = None
+        else:
+            b64 = text[sourcemap_index:].split(",", maxsplit=1)[1].split("\n", maxsplit=1)[0]
+            sourcemap = json.loads(base64.b64decode(b64))
+
+        flags = 1 | (1<<5) # JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILIE_ONLY
+        m = self._js.eval(text, file=bundle, sourcemap=sourcemap, flags=flags)
 
         if isinstance(decoder, str):
             decoder = m[decoder]
@@ -129,7 +137,10 @@ class BaseFramework[QX, PX, E, C, P]:
 
         if isinstance(storage, str):
             # storage is from javascript, maybe InMemTxn
-            storage = m[storage]
+            if hasattr(m, storage):
+                storage = self._js.eval("(cls) => new cls()")(m[storage])
+            else:
+                raise ValueError("unsure how to instantiate storage")
         else:
             # storage is a callable that produces a Txn
             storage = _quickjs.make_storage(self._js, storage)
@@ -153,8 +164,8 @@ class BaseFramework[QX, PX, E, C, P]:
             projector = m[projector]
 
         self._framework: _quickjs.Value = self._js.eval(
-            "(cls, qx, px, storage, callbacks) => new cls(qx, px, storage, callbacks)",
-        )(m["Framework"], qxjs, pxjs, storage, {
+            "(cls, px, qx, storage, callbacks) => new cls(px, qx, storage, callbacks)",
+        )(m["Framework"], pxjs, qxjs, storage, {
             "shaper": shaper,
             "projector": projector
         })
@@ -191,9 +202,6 @@ class BaseFramework[QX, PX, E, C, P]:
     def recvEvents(self, raw_events: List[Any]) -> None:
         events = self._decoder(raw_events)
         self._framework.recvEvents(events)
-        self._js.eval("console.log")("self._run:", self._run)
-        self._js.eval("console.log")("random function:", lambda: "x")
-        self._js.eval("(fn) => console.log('calling random function', fn())")(lambda: "x")
         self._run()
 
 

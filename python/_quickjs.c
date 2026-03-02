@@ -58,7 +58,8 @@ typedef struct {
     JSContext *ctx;
     // for embedding weak refs
     JSAtom weakref_symbol;
-    // a js function for extracting a js stack
+    // js function for extracting a js stack
+    JSValue add_source_map;
     JSValue show_stack;
 } py_quickjs_t;
 
@@ -426,6 +427,16 @@ static JSValue py2js(JSContext *ctx, PyObject *val) {
         return JS_NewStringLen(ctx, str, (size_t)len);
     }
 
+    // is object an integer?
+    if((isinstance = PyObject_IsInstance(val, (PyObject*)&PyLong_Type))){
+        if(isinstance < 0) goto done;
+        int64_t i = PyLong_AsLongLong(val);
+        if(i == -1 && PyErr_Occurred()){
+            return py_exception(ctx);
+        }
+        return JS_NewInt64(ctx, i);
+    }
+
     // is object a _quickjs.Value?
     if((isinstance = PyObject_IsInstance(val, (PyObject*)&py_value_type))){
         if(isinstance < 0) goto done;
@@ -553,6 +564,7 @@ done:
     Py_CLEAR(items);
     Py_CLEAR(fast);
     if(!success){
+        if(PyErr_Occurred()) py_exception(ctx);
         if(!JS_IsUninitialized(jsout)) JS_FreeValue(ctx, jsout);
         jsout = JS_EXCEPTION;
     }
@@ -654,6 +666,7 @@ done:
 static void py_quickjs_dealloc(py_quickjs_t *self){
     if(self->rt){
         JS_FreeValue(self->ctx, self->show_stack);
+        JS_FreeValue(self->ctx, self->add_source_map);
         if(self->weakref_symbol) JS_FreeAtom(self->ctx, self->weakref_symbol);
         if(self->ctx) JS_FreeContext(self->ctx);
         self->ctx = NULL;
@@ -664,15 +677,97 @@ static void py_quickjs_dealloc(py_quickjs_t *self){
 }
 
 const char *show_stack =
-"(e) => {"
-"  const out = e.message + ':\\n' + e.stack;"
-"  return out;"
-"}"
-"";
+"(() => {\n"
+"  // from https://dev.to/yne/quickjs-handle-typescript-sourcemap-3b00 //\n"
+"  const VLQ_BASE = 5;\n"
+"  const VLQ_CONT = 1 << VLQ_BASE;  // 100000\n"
+"  const VLQ_MASK = VLQ_CONT - 1;   // 011111\n"
+"  const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';\n"
+"  function vlq(segment) {\n"
+"      const fields = [];\n"
+"      for (let segIdx = 0; segIdx < segment.length;) {\n"
+"          let result = 0;\n"
+"          for (let shift = 0; ; shift += VLQ_BASE) {\n"
+"              const digit = b64.indexOf(segment.charAt(segIdx++));\n"
+"              result += ((digit & VLQ_MASK) << shift);\n"
+"              if (!(digit & VLQ_CONT)) break;\n"
+"          };\n"
+"          fields.push(result & 1 ? -(result >> 1) : result >> 1)\n"
+"      }\n"
+"      return fields; // col,srcIdx,lineSrc,colSrc,nameIdx\n"
+"  };\n"
+"  //////////////////////////////////////////////////////////////////////\n"
+"\n"
+"  // sourcemap spec: https://tc39.es/ecma426/\n"
+"  // sourcemap explanation: https://github.com/Rich-Harris/vlq/blob/master/sourcemaps/README.md\n"
+"\n"
+"  function tsLine(sourceMap, jsLine, jsCol) {\n"
+"    const fields = sourceMap.mappings.split(';').map(g=>g.split(',').map(vlq));\n"
+"    // these fields accumulate across the whole of mappings\n"
+"    let source = 0;\n"
+"    let line = 0;\n"
+"    let col = 0;\n"
+"\n"
+"    // accumulate previous lines\n"
+"    for (let i = 0; i < jsLine - 1; i++) {\n"
+"      const segments = fields[i];\n"
+"      for (const segment of segments) {\n"
+"        source += segment[1] ?? 0;\n"
+"        line += segment[2] ?? 0;\n"
+"        col += segment[3] ?? 0;\n"
+"      }\n"
+"    }\n"
+"\n"
+"    // locate the right segment of the current line\n"
+"    let pos = 0;\n"
+"    for (const segment of fields[jsLine - 1]) {\n"
+"      pos += segment[0];\n"
+"      if (pos > jsCol) break;\n"
+"      source += segment[1] ?? 0;\n"
+"      line += segment[2] ?? 0;\n"
+"      col += segment[3] ?? 0;\n"
+"    }\n"
+"    return `${sourceMap.sources[source]}:${line+1}:${col+1}`;\n"
+"  }\n"
+"\n"
+"  const sourceMaps = {};\n"
+"  function addSourceMap(name, map){\n"
+"    sourceMaps[name] = map;\n"
+"  }\n"
+"\n"
+"  function showStack(e){\n"
+"    if (e.message === undefined || e.stack === undefined) {\n"
+"      return `${e}`\n"
+"    }\n"
+"    let stack = `${e.message}\n`;\n"
+"    // example: `at run (bundle.js:266:46)`\n"
+"    const re = /at (?<func>[^ ]+) \\((?<file>[^:\\n]+):(?<lineStr>[0-9]+):(?<colStr>[0-9]+)\\)/g;\n"
+"    for (const match of e.stack.matchAll(re)) {\n"
+"      const {func, file, lineStr, colStr} = match.groups;\n"
+"      const line = Number(lineStr);\n"
+"      const col = Number(colStr);\n"
+"      const map = sourceMaps[file];\n"
+"      if (map !== undefined) {\n"
+"        let out = tsLine(map, line, col);\n"
+"        while (out.substring(0, 3) === '../') {\n"
+"          out = out.substring(3);\n"
+"        }\n"
+"        stack += `    at ${func} (${out})\\n`;\n"
+"      } else {\n"
+"        stack += `    at ${func} (${file}:${line}:${col}))\\n`;\n"
+"        continue;\n"
+"      }\n"
+"    }\n"
+"    return stack;\n"
+"  }\n"
+"\n"
+"  return {addSourceMap, showStack};\n"
+"})();\n";
 
 static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
     self->weakref_symbol = JS_ATOM_NULL;
     self->show_stack = JS_UNINITIALIZED;
+    self->add_source_map = JS_UNINITIALIZED;
 
     char *kwnames[] = { NULL };
 
@@ -709,7 +804,19 @@ static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
     }
 
     // create a show_stack function
-    self->show_stack = JS_Eval(self->ctx, show_stack, strlen(show_stack), "show_stack", 0);
+    val = JS_Eval(self->ctx, show_stack, strlen(show_stack), "QuickJS.show_stack", 0);
+    if(JS_IsException(val)){
+        (void)js_exception(self->ctx);
+        return -1;
+    }
+    self->add_source_map = JS_GetPropertyStr(self->ctx, val, "addSourceMap");
+    if(JS_IsException(self->add_source_map)){
+        JS_FreeValue(self->ctx, val);
+        (void)js_exception(self->ctx);
+        return -1;
+    }
+    self->show_stack = JS_GetPropertyStr(self->ctx, val, "showStack");
+    JS_FreeValue(self->ctx, val);
     if(JS_IsException(self->show_stack)){
         (void)js_exception(self->ctx);
         return -1;
@@ -737,27 +844,60 @@ static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
 }
 
 static char * const py_quickjs_eval_doc =
-    "eval(script: string, flags=0) -> JSAny\n"
+    "eval(script: str, file:str, sourcemap: Dict[str, Any], flags=0) -> JSAny\n"
     "eval script and return result";
 static PyObject *py_quickjs_eval(py_quickjs_t *self, PyObject *args, PyObject *kwds){
     const char *script;
+    const char *file = "script";
+    PyObject *sourcemap = NULL;
     int flags = 0;
 
     char *kwnames[] = {
         "script",
+        "file",
+        "sourcemap",
         "flags",
         NULL,
     };
 
     int ret = PyArg_ParseTupleAndKeywords(
-        args, kwds, "s|i", kwnames,
+        args, kwds, "s|sOi", kwnames,
         &script,
+        &file,
+        &sourcemap,
         &flags
     );
     if(!ret) return NULL;
 
-    JSValue val = JS_Eval(self->ctx, script, strlen(script), "script", flags);
-    if(JS_IsException(val)) return js_exception(self->ctx);
+    PyObject *out = NULL;
+
+    if(sourcemap){
+        JSValue jsfile = JS_NewString(self->ctx, file);
+        if(JS_IsException(jsfile)){
+            js_exception(self->ctx);
+            goto done;
+        }
+        JSValue jssourcemap = py2js(self->ctx, sourcemap);
+        if(JS_IsException(jssourcemap)){
+            JS_FreeValue(self->ctx, jsfile);
+            js_exception(self->ctx);
+            goto done;
+        }
+        JSValueConst args[] = {jsfile, jssourcemap};
+        JSValue ret = JS_Call(self->ctx, self->add_source_map, JS_NULL, 2, args);
+        JS_FreeValue(self->ctx, jsfile);
+        JS_FreeValue(self->ctx, jssourcemap);
+        if(JS_IsException(ret)){
+            js_exception(self->ctx);
+            goto done;
+        }
+    }
+
+    JSValue val = JS_Eval(self->ctx, script, strlen(script), file, flags);
+    if(JS_IsException(val)) {
+        js_exception(self->ctx);
+        goto done;
+    }
 
     if(flags == (JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY)){
         // JS_EvalFunction(module) will evaluate the module and return an already-resolved promise
@@ -767,7 +907,7 @@ static PyObject *py_quickjs_eval(py_quickjs_t *self, PyObject *args, PyObject *k
         JSValue promise = JS_EvalFunction(self->ctx, val);
         if(JS_IsException(promise)){
             JS_FreeValue(self->ctx, val);
-            return NULL;
+            goto done;
         }
         JS_FreeValue(self->ctx, promise);
 
@@ -777,8 +917,11 @@ static PyObject *py_quickjs_eval(py_quickjs_t *self, PyObject *args, PyObject *k
         val = ns;
     }
 
-    PyObject *out = js2py(self->ctx, val, Py_None);
+    out = js2py(self->ctx, val, Py_None);
     JS_FreeValue(self->ctx, val);
+
+done:
+    Py_CLEAR(sourcemap);
     return out;
 }
 

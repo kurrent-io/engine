@@ -28,7 +28,7 @@ time (for instance, there is a book signed by the author that we want to keep as
 
 */
 
-import { ProjectorGenerator } from './skeleton';
+// import { ProjectorGenerator } from './skeleton';
 
 import {
   Book,
@@ -60,6 +60,8 @@ import {
   VStatusStoreProjectorContext,
   DeciderStoreProjectorContext,
   UserStoreProjectorContext,
+
+  ProjectorGenerator,
 } from './library.gen';
 
 
