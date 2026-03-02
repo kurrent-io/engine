@@ -33,85 +33,6 @@ static JSValue js_console_log(
     JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
 );
 
-// sets a python exception and returns NULL
-static PyObject *js_exception(JSContext *ctx) {
-    JSValue exc = JS_GetException(ctx);
-
-    // possibly extract a wrapped python exception
-    PyObject *pytype = JS_GetOpaque(exc, js_pyref_class_id);
-    if(pytype){
-        JSValue jsvalue = JS_GetPropertyStr(ctx, exc, "value");
-        JSValue jstraceback = JS_GetPropertyStr(ctx, exc, "traceback");
-        // restore wrapped python exception
-        PyObject *pyvalue = JS_GetOpaque(jsvalue, js_pyref_class_id);
-        PyObject *pytraceback = JS_GetOpaque(jstraceback, js_pyref_class_id);
-        Py_INCREF(pytype);
-        if(pyvalue) Py_INCREF(pyvalue);
-        if(pytraceback) Py_INCREF(pytraceback);
-        PyErr_Restore(pytype, pyvalue, pytraceback);
-        // cleanup
-        JS_FreeValue(ctx, jsvalue);
-        JS_FreeValue(ctx, jstraceback);
-        JS_FreeValue(ctx, exc);
-        return NULL;
-    }
-
-    // otherwise print it to a string
-    size_t slen = 0;
-    const char *str = JS_ToCStringLen(ctx, &slen, exc);
-    if (str) {
-        PyErr_SetObject(quickjs_error, PyUnicode_FromStringAndSize(str, (Py_ssize_t)slen));
-    } else {
-        PyErr_SetString(quickjs_error, "unidentified exception raised by quickjs");
-    }
-    JS_FreeValue(ctx, exc);
-    return NULL;
-}
-
-// converts a python exception to a javascript exception and returns JS_EXCEPTION
-static JSValue py_exception(JSContext *ctx) {
-    PyObject *exc = PyErr_Occurred();
-    if(!exc){
-        // no exception was raised
-        fprintf(stderr, "py_exception() called without an exception!\n");
-        abort();
-    }
-
-    // save exception
-    PyObject *pytype;
-    PyObject *pyvalue;
-    PyObject *pytraceback;
-    PyErr_Fetch(&pytype, &pyvalue, &pytraceback);
-
-    // create javascript wrapper object
-    JSValue jstype = new_pyref(ctx, pytype);
-    if(JS_IsException(jstype)) goto die;
-    JSValue jsvalue = new_pyref(ctx, pyvalue);
-    if(JS_IsException(jsvalue)) goto die;
-    JSValue jstraceback = new_pyref(ctx, pytraceback);
-    if(JS_IsException(jstraceback)) goto die;
-    int ret = JS_DefinePropertyValueStr(ctx, jstype, "value", jsvalue, JS_PROP_C_W_E);
-    if(ret < 0) goto die;
-    ret = JS_DefinePropertyValueStr(ctx, jstype, "traceback", jstraceback, JS_PROP_C_W_E);
-    if(ret < 0) goto die;
-
-    return JS_Throw(ctx, jstype);
-
-die:
-    fprintf(stdout, "failed to convert python exception: ");
-    JSValue jsexc = JS_GetException(ctx);
-    js_console_log(ctx, JS_UNDEFINED, 1, &jsexc);
-    JS_FreeValue(ctx, jsexc);
-    abort();
-}
-
-
-#define CONTAINER_OF(ptr, structure, member) \
-    ((structure*)_container_of(ptr, offsetof(structure, member)))
-static inline void *_container_of(const void *ptr, size_t offset){
-    return (void*)(((uintptr_t)ptr - offset) * (ptr != 0));
-}
-
 static void js_pyobj(JSRuntime *rt, JSValue val)
 {
     (void)rt;
@@ -137,6 +58,8 @@ typedef struct {
     JSContext *ctx;
     // for embedding weak refs
     JSAtom weakref_symbol;
+    // a js function for extracting a js stack
+    JSValue show_stack;
 } py_quickjs_t;
 
 // a wrapper around a JSValue
@@ -173,6 +96,114 @@ static PyTypeObject py_quickjs_type;
 static PyTypeObject py_value_type;
 static PyTypeObject py_opaque_type;
 static PyTypeObject py_cmem_type;
+
+// weakref to copy.copy
+static PyObject *copy_copy_weakref;
+
+static PyObject *copy_copy(PyObject *obj) {
+    PyObject *copy_func = PyWeakref_GetObject(copy_copy_weakref);
+    return PyObject_CallOneArg(copy_func, obj);
+}
+
+// sets a python exception and returns NULL
+static PyObject *js_exception(JSContext *ctx) {
+    PyObject *pywrapper = NULL;
+    PyObject *pyexc = NULL;
+    JSValue jsvalue = JS_UNINITIALIZED;
+    JSValue exc = JS_GetException(ctx);
+
+    // represent the javascript stacktrace as a quickjs_error
+    pywrapper = py_value_new(ctx, exc, Py_None);
+    if(!pywrapper) goto done;
+    pyexc = PyObject_CallOneArg(quickjs_error, pywrapper);
+    if(!pyexc) goto done;
+
+    // check if the javascript error is wrapping a python error
+    if(JS_IsError(ctx, exc) && !JS_IsUndefined((jsvalue = JS_GetPropertyStr(ctx, exc, "pyvalue")))){
+        // load wrapped python exception
+        // note: we don't presently have a need for the type or traceback
+        PyObject *pyvalue = JS_GetOpaque(jsvalue, js_pyref_class_id);
+        Py_INCREF(pyvalue); // because SetCause steals a reference
+        PyException_SetCause(pyexc, pyvalue);
+
+        // If the old exception was something other than a QuickJSError, we raise a shallow copy of
+        // it.  Effectively, this means our outermost exception matches the type of the innermost
+        // exception, if and only if the original exception occured in python
+        if(!PyErr_GivenExceptionMatches(pyvalue, quickjs_error)){
+            PyObject *copy = copy_copy(pyvalue);
+            if(!copy){
+                PyErr_Clear();
+                fprintf(stderr, "WARNING: failed to copy.copy() an exception of type %s\n",
+                    Py_TYPE(pyvalue)->tp_name
+                );
+            }else{
+                PyException_SetCause(copy, pyexc);  // steals pyexc
+                pyexc = copy;
+            }
+        }
+    }
+
+    PyObject *type = (PyObject*)Py_TYPE(pyexc);
+    Py_INCREF(type);
+    Py_INCREF(pyexc);
+    PyErr_Restore(type, pyexc, NULL);
+
+done:
+    Py_CLEAR(pywrapper);
+    Py_CLEAR(pyexc);
+    JS_FreeValue(ctx, jsvalue);
+    JS_FreeValue(ctx, exc);
+    return NULL;
+}
+
+// converts a python exception to a javascript exception and returns JS_EXCEPTION
+static JSValue py_exception(JSContext *ctx) {
+    PyObject *exc = PyErr_Occurred();
+    if(!exc){
+        // no exception was raised
+        fprintf(stderr, "py_exception() called without an exception!\n");
+        abort();
+    }
+
+    // save exception
+    PyObject *pytype;
+    PyObject *pyvalue;
+    PyObject *pytraceback;
+    PyErr_Fetch(&pytype, &pyvalue, &pytraceback);
+
+    // create a new javascript Error and embed our python exception behind it
+    JSValue err = JS_NewError(ctx);
+    if(JS_IsException(err)) goto die;
+    // create javascript wrapper object
+    JSValue jstype = new_pyref(ctx, pytype);
+    if(JS_IsException(jstype)) goto die;
+    JSValue jsvalue = new_pyref(ctx, pyvalue);
+    if(JS_IsException(jsvalue)) goto die;
+    JSValue jstraceback = new_pyref(ctx, pytraceback);
+    if(JS_IsException(jstraceback)) goto die;
+
+
+    JSValue message = JS_NewString(ctx, "exception from python");
+    if(JS_IsException(message)) goto die;
+    int ret = JS_DefinePropertyValueStr(ctx, err, "message", message, JS_PROP_C_W_E);
+    if(ret < 0) goto die;
+    ret = JS_DefinePropertyValueStr(ctx, err, "pytype", jstype, JS_PROP_C_W_E);
+    if(ret < 0) goto die;
+    ret = JS_DefinePropertyValueStr(ctx, err, "pyvalue", jsvalue, JS_PROP_C_W_E);
+    if(ret < 0) goto die;
+    ret = JS_DefinePropertyValueStr(ctx, err, "pytraceback", jstraceback, JS_PROP_C_W_E);
+    if(ret < 0) goto die;
+
+    return JS_Throw(ctx, err);
+
+die:
+    fprintf(stdout, "failed to convert python exception: ");
+    JSValue jsexc = JS_GetException(ctx);
+    js_console_log(ctx, JS_UNDEFINED, 1, &jsexc);
+    JS_FreeValue(ctx, jsexc);
+    abort();
+}
+
 
 // borrows val, this
 static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
@@ -475,7 +506,7 @@ static JSValue py2js(JSContext *ctx, PyObject *val) {
             isinstance = PyObject_IsInstance(pykey, (PyObject*)&PyUnicode_Type);
             if(isinstance < 0) goto done;
             if(!isinstance){
-                PyErr_SetString(quickjs_error, "only string keys are allowed on dict objects");
+                PyErr_SetString(PyExc_TypeError, "only string keys are allowed on dict objects");
                 goto done;
             }
             const char *key = PyUnicode_AsUTF8(pykey);
@@ -622,6 +653,7 @@ done:
 
 static void py_quickjs_dealloc(py_quickjs_t *self){
     if(self->rt){
+        JS_FreeValue(self->ctx, self->show_stack);
         if(self->weakref_symbol) JS_FreeAtom(self->ctx, self->weakref_symbol);
         if(self->ctx) JS_FreeContext(self->ctx);
         self->ctx = NULL;
@@ -631,8 +663,16 @@ static void py_quickjs_dealloc(py_quickjs_t *self){
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
+const char *show_stack =
+"(e) => {"
+"  const out = e.message + ':\\n' + e.stack;"
+"  return out;"
+"}"
+"";
+
 static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
     self->weakref_symbol = JS_ATOM_NULL;
+    self->show_stack = JS_UNINITIALIZED;
 
     char *kwnames[] = { NULL };
 
@@ -641,13 +681,13 @@ static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
 
     self->rt = JS_NewRuntime();
     if(!self->rt) {
-        PyErr_SetString(quickjs_error, "JS_NewRuntime() failed");
+        PyErr_SetString(PyExc_RuntimeError, "JS_NewRuntime() failed");
         return -1;
     }
 
     self->ctx = JS_NewContext(self->rt);
     if(!self->ctx) {
-        PyErr_SetString(quickjs_error, "JS_NewContext() failed");
+        PyErr_SetString(PyExc_RuntimeError, "JS_NewContext() failed");
         return -1;
     }
 
@@ -668,18 +708,25 @@ static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
         return -1;
     }
 
+    // create a show_stack function
+    self->show_stack = JS_Eval(self->ctx, show_stack, strlen(show_stack), "show_stack", 0);
+    if(JS_IsException(self->show_stack)){
+        (void)js_exception(self->ctx);
+        return -1;
+    }
+
     // create a new javascript classes
     JS_NewClassID(&js_pyweakref_class_id);
     ret = JS_NewClass(self->rt, js_pyweakref_class_id, &js_pyweakref_class);
     if(ret < 0){
-        PyErr_SetString(quickjs_error, "failed to create PyWeakRef javascript class");
+        PyErr_SetString(PyExc_RuntimeError, "failed to create PyWeakRef javascript class");
         return -1;
     }
 
     JS_NewClassID(&js_pyref_class_id);
     ret = JS_NewClass(self->rt, js_pyref_class_id, &js_pyref_class);
     if(ret < 0){
-        PyErr_SetString(quickjs_error, "failed to create PyRef javascript class");
+        PyErr_SetString(PyExc_RuntimeError, "failed to create PyRef javascript class");
         return -1;
     }
 
@@ -872,7 +919,7 @@ static int py_value_init(py_value_t *self, PyObject *args, PyObject *kwds){
     self->this = NULL;
     Py_CLEAR(args);
     Py_CLEAR(kwds);
-    PyErr_SetString(quickjs_error, "Value can only be created in C code");
+    PyErr_SetString(PyExc_TypeError, "Value can only be created in C code");
     return -1;
 }
 
@@ -923,12 +970,12 @@ done:
 
 static PyObject *py_value_getint(py_value_t *self, Py_ssize_t index){
     if(index > UINT32_MAX){
-        PyErr_SetString(quickjs_error, "index too large");
+        PyErr_SetString(PyExc_ValueError, "index too large");
         return NULL;
     }
     // array negative index handling
     if(index < 0) {
-        PyErr_SetString(quickjs_error, "negative index not allowed");
+        PyErr_SetString(PyExc_ValueError, "negative index not allowed");
         return NULL;
     }
 
@@ -1022,7 +1069,7 @@ static PyObject *call_function(py_value_t *self, PyObject *this, PyObject *args,
     Py_ssize_t nargs = PyTuple_GET_SIZE(args);
     jsargs = malloc(sizeof(*jsargs) * (size_t)(nargs - skip));
     if(!jsargs){
-        PyErr_SetString(quickjs_error, "error allocating memory for call");
+        PyErr_SetString(PyExc_RuntimeError, "error allocating memory for call");
         goto done;
     }
     for(Py_ssize_t i = skip; i < nargs; i++){
@@ -1067,7 +1114,7 @@ done:
 static PyObject *py_value_tp_call(py_value_t *self, PyObject *args, PyObject *kwargs){
     // check that args are all positional
     if(kwargs != NULL && PyDict_Size(kwargs) != 0){
-        PyErr_SetString(quickjs_error, "javascript functions only support positional args");
+        PyErr_SetString(PyExc_TypeError, "javascript functions only support positional args");
         return NULL;
     }
 
@@ -1081,7 +1128,7 @@ static char * const py_value_call_doc =
 static PyObject *py_value_call(py_value_t *self, PyObject *args){
     Py_ssize_t nargs = PyTuple_GET_SIZE(args);
     if(nargs < 1){
-        PyErr_SetString(quickjs_error, ".call() requires a `this` parameter");
+        PyErr_SetString(PyExc_TypeError, ".call() requires a `this` parameter");
         return NULL;
     }
 
@@ -1265,7 +1312,7 @@ static PyObject *py_value_values(py_value_t *self){
 // sq_length takes priority over mp length
 static Py_ssize_t py_value_mp_length(py_value_t *self){
     (void)self;
-    PyErr_SetString(quickjs_error, "length not implemented");
+    PyErr_SetString(PyExc_NotImplementedError, "length not implemented");
     return -1;
 }
 
@@ -1325,7 +1372,7 @@ static PyObject *py_value_mp_subscript(py_value_t *self, PyObject *key){
     if((isinstance = PyObject_IsInstance(key, (PyObject*)&PySlice_Type))){
         if(isinstance < 0) goto done;
         if(self->arrlen < 0){
-            PyErr_SetString(quickjs_error, "slices only supported on arrays");
+            PyErr_SetString(PyExc_TypeError, "slices only supported on arrays");
             goto done;
         }
         Py_ssize_t start, stop, step;
@@ -1375,20 +1422,20 @@ static Py_ssize_t py_value_sq_length(py_value_t *self){
 
 static PyObject *py_value_sq_concat(py_value_t *self, PyObject *other){
     (void)self; (void)other;
-    PyErr_SetString(quickjs_error, "concat not implemented");
+    PyErr_SetString(PyExc_NotImplementedError, "concat not implemented");
     return NULL;
 }
 
 static PyObject *py_value_sq_repeat(py_value_t *self, Py_ssize_t count){
     (void)self; (void)count;
-    PyErr_SetString(quickjs_error, "repeat not implemented");
+    PyErr_SetString(PyExc_NotImplementedError, "repeat not implemented");
     return NULL;
 }
 
 // mp_subscript takes priority
 static PyObject *py_value_sq_item(py_value_t *self, Py_ssize_t index){
     (void)self; (void)index;
-    PyErr_SetString(quickjs_error, "item not implemented");
+    PyErr_SetString(PyExc_NotImplementedError, "item not implemented");
     return NULL;
 }
 
@@ -1569,7 +1616,7 @@ static int py_cmem_init(py_cmem_t *self, PyObject *args, PyObject *kwds){
     (void)self;
     (void)args;
     (void)kwds;
-    PyErr_SetString(quickjs_error, "CMem can only be created in C code");
+    PyErr_SetString(PyExc_TypeError, "CMem can only be created in C code");
     return -1;
 }
 
@@ -1773,11 +1820,8 @@ static JSValue storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     // call txn.get(key)
     ret = PyObject_CallMethod(txn, "get", "(O)", key);
     if(!ret){
-        PyObject *exc = PyErr_Occurred();
-        int isinstance;
-        if((isinstance = PyObject_IsInstance(exc, (PyObject*)&PyExc_KeyError))){
-            // technically there's another exception that could be raised here... but oh well
-            // if(isinstance < 0) ...
+        if(PyErr_ExceptionMatches((PyObject*)&PyExc_KeyError)){
+            // convert KeyError to javascript undefined
             PyErr_Clear();
             // return `undefined`
             out = JS_UNDEFINED;
@@ -1954,6 +1998,59 @@ static PyMethodDef _quickjs_methods[] = {
     {0},  // sentinel
 };
 
+// anonymous c function for injecting custom __str__ into QuickJSError
+
+static char * const py_quickjs_error_str_doc = "_quickjs_error_str(self) -> str";
+static PyObject *py_quickjs_error_str(PyObject *junk, PyObject *args) {
+    (void)junk;
+
+    PyObject *self;
+    int ret = PyArg_ParseTuple(args, "O", &self);
+    if(!ret) return NULL;
+
+    PyObject *etuple = PyObject_GetAttrString(self, "args");
+    if(!etuple){
+        PyErr_Clear();
+        return PyObject_Repr(Py_None);
+    }
+
+    if(PyTuple_GET_SIZE(etuple) < 1){
+        Py_XDECREF(etuple);
+        return PyObject_Repr(Py_None);
+    }
+    py_value_t *borrowed = (py_value_t*)PyTuple_GetItem(etuple, 0);
+    Py_XDECREF(etuple);
+
+    // call show_stack function to render javascript stack
+    JSContext *ctx = borrowed->ctx;
+    py_quickjs_t *q = JS_GetContextOpaque(ctx);
+    JSValue result = JS_Call(ctx, q->show_stack, JS_NULL, 1, &borrowed->jsval);
+    if(JS_IsException(result)){
+        JSValue exc = JS_GetException(ctx);
+        JS_FreeValue(ctx, exc);
+        return PyUnicode_FromString("<exception when formatting javascript stack>");
+    }
+
+    size_t len;
+    const char *str = JS_ToCStringLen(ctx, &len, result);
+    if(!str){
+        JSValue exc = JS_GetException(ctx);
+        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, result);
+        return PyUnicode_FromString("<exception when extracting formatted javascript stack>");
+    }
+    PyObject *out = PyUnicode_FromStringAndSize(str, (Py_ssize_t)len);
+    JS_FreeValue(ctx, result);
+    return out;
+}
+
+static PyMethodDef py_quickjs_error_str_def = {
+    .ml_name = "_quickjs_error_str",
+    .ml_meth = ARG_KWARG_FN_CAST(py_quickjs_error_str),
+    .ml_flags = METH_VARARGS,
+    .ml_doc = py_quickjs_error_str_doc,
+};
+
 static struct PyModuleDef _quickjs_module = {
     PyModuleDef_HEAD_INIT,
     .m_name = "_quickjs",
@@ -1972,6 +2069,12 @@ PyObject* PyInit__quickjs(void){
     if (PyType_Ready(&py_opaque_type) < 0) return NULL;
     if (PyType_Ready(&py_cmem_type) < 0) return NULL;
     int ret;
+
+    PyObject *func = NULL;
+    PyObject *meth = NULL;
+    PyObject *dict = NULL;
+    PyObject *copymodule = NULL;
+    PyObject *copyfunc = NULL;
 
     PyObject *module = PyModule_Create(&_quickjs_module);
     if (module == NULL){
@@ -1994,15 +2097,38 @@ PyObject* PyInit__quickjs(void){
     ret = PyModule_AddObject(module, "CMem", (PyObject*)&py_cmem_type);
     if(ret < 0) goto fail;
 
-    quickjs_error = PyErr_NewException("_quickjs.QuickJSError", NULL, NULL);
+    // configure a custom __str__ for our exception class
+    func = PyCFunction_New(&py_quickjs_error_str_def, Py_None);
+    if(!func) goto fail;
+    meth = PyInstanceMethod_New(func);
+    if(!meth) goto fail;
+    dict = PyDict_New();
+    if(!dict) goto fail;
+    ret = PyDict_SetItemString(dict, "__str__", meth);
+    if(ret < 0) goto fail;
+
+    quickjs_error = PyErr_NewException("_quickjs.QuickJSError", NULL, dict);
     Py_INCREF(quickjs_error);
     ret = PyModule_AddObject(module, "QuickJSError", quickjs_error);
     if(ret < 0) goto fail;
 
+    // also import a the copy module and grab its .copy function
+    copymodule = PyImport_ImportModule("copy");
+    if(!copymodule) goto fail;
+    copyfunc = PyObject_GetAttrString(copymodule, "copy");
+    if(!copyfunc) goto fail;
+    copy_copy_weakref = PyWeakref_NewRef(copyfunc, NULL);
+    if(!copy_copy_weakref) goto fail;
+
     return module;
 
 fail:
-    Py_XDECREF((PyObject*)&quickjs_error);
+    Py_XDECREF(copyfunc);
+    Py_XDECREF(copymodule);
+    Py_XDECREF(dict);
+    Py_XDECREF(meth);
+    Py_XDECREF(func);
+    Py_XDECREF(quickjs_error);
     Py_XDECREF((PyObject*)&py_cmem_type);
     Py_XDECREF((PyObject*)&py_opaque_type);
     Py_XDECREF((PyObject*)&py_value_type);

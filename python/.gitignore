@@ -1,2 +1,3 @@
 *.js
 *_gen.py
+lmdb/

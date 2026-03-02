@@ -42,7 +42,11 @@ class X:
     pass
 
 x1 = X()
-fn = q.eval("(x) => x()")
+fn = q.eval("""
+function x2(fn) { return fn(); }
+function x1(fn) { return x2(fn); }
+(fn) => x1(fn);
+""")
 x2 = fn(lambda: _quickjs.Opaque(x1))
 assert x1 == x2, (x1, x2)
 
