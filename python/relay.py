@@ -38,18 +38,18 @@ class ShaperOutput[E, P](TypedDict):
 
 # TODO: only synchronous storage is currently supported, for two reasons:
 #
-#       - This strategy of catching an exception and converting it to a {err: "the exception"}
-#         storage callback does not work if the operation doesn't complete within the txn method.
-#         You can union every return type like `-> None | Awaitable[None]` to allow async
-#         implementations of each protocol method, but _quickjs.make_storage() would need additional
-#         work.  I suppose in that case, the setTimeout() definition should be written so that
-#         callbacks are async as well.  Or maybe that could also be autodetected, if the callbacks
-#         return coroutines instead of plain python values.
+#  - This strategy of catching an exception and converting it to a {err: "the exception"}
+#    storage callback does not work if the operation doesn't complete within the txn method.
+#    You can union every return type like `-> None | Awaitable[None]` to allow async
+#    implementations of each protocol method, but _quickjs.make_storage() would need additional
+#    work.  I suppose in that case, the setTimeout() definition should be written so that
+#    callbacks are async as well.  Or maybe that could also be autodetected, if the callbacks
+#    return coroutines instead of plain python values.
 #
-#       - The fx.wakeup() called within the storage callback must be followed by running the event
-#         loop, but supporting that would require adding an additional run() closure variable to the
-#         various glue functions behind _quickjs.make_storage(), since it must occur some time after
-#         the Txn methods return.
+#  - The fx.wakeup() called within the storage callback must be followed by running the event
+#    loop, but supporting that would require adding an additional run() closure variable to the
+#    various glue functions behind _quickjs.make_storage(), since it must occur some time after
+#    the Txn methods return.
 #
 # For now, we don't care because our only target storage mechanism is LMDB, which is synchronous
 # anyway.
@@ -208,7 +208,7 @@ class BaseFramework[QX, PX, E, C, P]:
 
 
 class DeciderFramework[P](BaseFramework[
-    type[DeciderStoreQueryContext],  # QX: a python object, enabling python queries
+    DeciderStoreQueryContext,  # QX: a python object, enabling python queries
     _quickjs.Value,  # PX: a javascript object, because projectors come from javascript
     LibraryEvents,  # E: events from the server
     LibraryEvents,  # C: commands to the server
@@ -225,7 +225,7 @@ class DeciderFramework[P](BaseFramework[
             storage=storage,
             decoder="DecodeLibraryEvents",
             px="DeciderStoreProjectorContext",
-            qx=DeciderStoreQueryContext,
+            qx=DeciderStoreQueryContext(),
             shaper=shaper,
             projector="deciderProjector",
         )
@@ -250,7 +250,7 @@ class Book:
     copies: int
 
 @fw.new_query
-def book_list(qx: type[DeciderStoreQueryContext], _: None | List[Book], __: bool) -> QueryGenerator[List[Book]]:
+def book_list(qx: DeciderStoreQueryContext, *_: Any) -> QueryGenerator[List[Book]]:
     editions = []
     for isbn in ((yield from qx.editions()) or {}):
         editions.append((yield from qx.edition(isbn)))

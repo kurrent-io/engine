@@ -1097,7 +1097,7 @@ static PyObject *py_value_getstr(py_value_t *self, const char *key){
             goto done;
         }
         if(!hasprop){
-            PyErr_SetString(PyExc_AttributeError, "no such key");
+            PyErr_Format(PyExc_AttributeError, "no such key: %s", key);
             goto done;
         }
     }
