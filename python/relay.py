@@ -1,6 +1,7 @@
 from typing import TypeVar, Callable, cast, TypedDict, List, Any, Tuple, Protocol, reveal_type
 import json
 import base64
+import dataclasses
 
 from library_gen import QueryGenerator, QueryFunction, DeciderStoreQueryContext, LibraryEvents, checkLibraryEvents
 
@@ -183,6 +184,7 @@ class BaseFramework[QX, PX, E, C, P]:
                     val = None
                 try:
                     return {"value": g.send(val), "done": False}
+
                 except StopIteration as e:
                     # javascript will not access our return value
                     # and we will receive it in callbacks totally unmodified
@@ -199,7 +201,7 @@ class BaseFramework[QX, PX, E, C, P]:
     def make_storage(self, txn_factory: Callable[[bool], Txn]) -> _quickjs.Value:
         return _quickjs.make_storage(self._js, txn_factory)
 
-    def recvEvents(self, raw_events: List[Any]) -> None:
+    def recv_events(self, raw_events: List[Any]) -> None:
         events = self._decoder(raw_events)
         self._framework.recvEvents(events)
         self._run()
@@ -242,48 +244,20 @@ event = {
 }
 assert not (errors := checkLibraryEvents(event)), "errors:\n  - " + "\n  - ".join(errors)
 
-fw.recvEvents([event])
+@dataclasses.dataclass
+class Book:
+    title: str
+    copies: int
 
-# fw = Framework[type[UserStoreQueryContext], Any, Any, Any, Any](
-#     bundle="relay.js",
-#     px="UserStoreQueryContext",
-#     projector="userProjector",
-#     qx=UserStoreQueryContext,
-#     shaper=lambda events: {"events": events, "checkpoint": None},
-#     storage="InMemStorage",
-# )
+@fw.new_query
+def book_list(qx: type[DeciderStoreQueryContext], _: None | List[Book], __: bool) -> QueryGenerator[List[Book]]:
+    editions = []
+    for isbn in ((yield from qx.editions()) or {}):
+        editions.append((yield from qx.edition(isbn)))
+    return [
+        Book(title=edition.title, copies=len(edition.books)) for edition in editions
+    ]
 
+book_list.subscribe(lambda bl: print("book list is:", bl))
 
-
-# @framework.new_query
-# def book_list(qx: QX, _: Any, _: Any) -> List[Book]:
-#     editions = yield from qx.get.editions() or {}
-#     return [
-#         Book(title=edition.title, copies=len(edition.books))
-#         for edition in (yield from qx.get.edition(isbn) for isbn in editions)
-#     ]
-
-
-#
-#
-# fw = Framework(
-#     bundle="relay.js",
-#     projector_context="UserStoreQueryContext",
-#     projector="userProjector",
-#     query_context=BookStoreQueryContext,
-# )
-#
-#
-# type FrameworkSpec<E, C, P, QX, PX> = {
-#   query: QX,
-#   projector: {
-#     context: PX,
-#     projector: (px: PX, events: []E) => ProjectorGenerator<void>
-#   },
-#   shaper:
-#   queryContext: QX,
-#   projectorContext: PX,
-#   projector:
-#   shaper:
-#
-# )
+fw.recv_events([event])

@@ -379,7 +379,7 @@ def generate_store_prereqs(d):
     d.print("\n")
     d.print("\n")
     d.print("QX = TypeVar('QX')\n")
-    d.print("QueryFunction = Callable[[QX], QueryGenerator[T]]\n")
+    d.print("QueryFunction = Callable[[QX, T | None, bool], QueryGenerator[T]]\n")
     d.print("\n")
     d.print("\n")
     # d.print("class Query[T]:\n")
@@ -399,7 +399,7 @@ def generate_store_prereqs(d):
     # d.print("        self._query.close()\n")
     # d.print("\n")
     # d.print("\n")
-    d.print("def _queryGetter(key: str) -> QueryGenerator[Any]:\n")
+    d.print("def _query_getter(key: str) -> QueryGenerator[Any]:\n")
     d.print("    ans = (yield {'store': {key: True}})['store'][key]\n")
     d.print("    if 'err' in ans:\n")
     d.print("        raise ValueError(ans['err'])\n")
@@ -419,7 +419,7 @@ def generate_store(d, annos, store):
     #
     #     @staticmethod
     #     def topic(topic_uuid: string) -> QueryGenerator[Topic]:
-    #         return yield from _queryGetter(f"topic.{topic_uuid}"))
+    #         return yield from _query_getter(f"topic.{topic_uuid}"))
     original_items = [si for si in store.items if si.origin == store]
     for i, si in enumerate(original_items):
         if i: d.print("\n")
@@ -428,7 +428,7 @@ def generate_store(d, annos, store):
         d.print(", ".join(p + ": str" for p in si.params))
         d.print(f") -> QueryGenerator[{annos[si.type]}]:\n")
         d.indent("    ")
-        d.print(f"return _queryGetter('")
+        d.print(f"return _query_getter(" + ("f'" if si.params else "'"))
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "{" + param + "}")
         d.print(si.chunks[-1])

@@ -36,9 +36,8 @@ static JSValue js_console_log(
 static void js_pyobj(JSRuntime *rt, JSValue val)
 {
     (void)rt;
-    PyObject *weakref = JS_GetOpaque(val, js_pyweakref_class_id);
-    // we just need to release the decref is all
-    Py_XDECREF(weakref);
+    PyObject *obj = JS_GetOpaque(val, js_pyweakref_class_id);
+    Py_XDECREF(obj);
 }
 
 static JSClassDef js_pyweakref_class = {
@@ -175,7 +174,6 @@ static JSValue py_exception(JSContext *ctx) {
     // create a new javascript Error and embed our python exception behind it
     JSValue err = JS_NewError(ctx);
     if(JS_IsException(err)) goto die;
-    // create javascript wrapper object
     JSValue jstype = new_pyref(ctx, pytype);
     if(JS_IsException(jstype)) goto die;
     JSValue jsvalue = new_pyref(ctx, pyvalue);
@@ -365,13 +363,12 @@ static JSValue _js_call_python(
     (void)this_val;
     (void)magic;
 
-    PyObject *func = NULL;
     PyObject *args = NULL;
     PyObject *retval = NULL;
     JSValue out = JS_EXCEPTION;
 
     // extract closure variables (borrowed)
-    func = JS_GetOpaque(data[0], js_pyref_class_id);
+    PyObject *func = JS_GetOpaque(data[0], js_pyref_class_id);
 
     // extract args
     args = PyTuple_New((Py_ssize_t)argc);
@@ -399,7 +396,6 @@ static JSValue _js_call_python(
     out = py2js(ctx, retval);
 
 done:
-    Py_CLEAR(func);
     Py_CLEAR(args);
     Py_CLEAR(retval);
     return out;
@@ -921,7 +917,6 @@ static PyObject *py_quickjs_eval(py_quickjs_t *self, PyObject *args, PyObject *k
     JS_FreeValue(self->ctx, val);
 
 done:
-    Py_CLEAR(sourcemap);
     return out;
 }
 
@@ -1069,6 +1064,7 @@ static int py_value_init(py_value_t *self, PyObject *args, PyObject *kwds){
 static PyObject *py_value_getstr(py_value_t *self, const char *key){
     PyObject *out = NULL;
     JSValue jsval = JS_UNINITIALIZED;
+    JSAtom atom = JS_ATOM_NULL;
     bool success = false;
 
     // check cache
@@ -1080,7 +1076,13 @@ static PyObject *py_value_getstr(py_value_t *self, const char *key){
         goto done;
     }
 
-    jsval = JS_GetPropertyStr(self->ctx, self->jsval, key);
+    atom = JS_NewAtom(self->ctx, key);
+    if(!atom){
+        js_exception(self->ctx);
+        goto done;
+    }
+
+    jsval = JS_GetProperty(self->ctx, self->jsval, atom);
     if(JS_IsException(jsval)){
         js_exception(self->ctx);
         goto done;
@@ -1088,8 +1090,16 @@ static PyObject *py_value_getstr(py_value_t *self, const char *key){
 
     // did we get something?
     if(JS_IsUndefined(jsval)){
-        PyErr_SetString(PyExc_AttributeError, "no such key");
-        goto done;
+        // must use HasProperty to distinguish literal undefined from missing key
+        int hasprop = JS_HasProperty(self->ctx, self->jsval, atom);
+        if(hasprop < 0){
+            js_exception(self->ctx);
+            goto done;
+        }
+        if(!hasprop){
+            PyErr_SetString(PyExc_AttributeError, "no such key");
+            goto done;
+        }
     }
 
     // convert to python object; functions get an embedded `this` pointing to us
@@ -1105,7 +1115,8 @@ static PyObject *py_value_getstr(py_value_t *self, const char *key){
     success = true;
 
 done:
-    if(!JS_IsUninitialized(jsval)) JS_FreeValue(self->ctx, jsval);
+    if(atom) JS_FreeAtom(self->ctx, atom);
+    JS_FreeValue(self->ctx, jsval);
     if(!success) Py_CLEAR(out);
 
     return out;
@@ -1452,11 +1463,24 @@ static PyObject *py_value_values(py_value_t *self){
     return iter_keys(self, valuesfunc);
 }
 
-// sq_length takes priority over mp length
-static Py_ssize_t py_value_mp_length(py_value_t *self){
+static PyObject *objlenfunc(py_value_t *self, JSPropertyEnum *props, uint32_t len){
     (void)self;
-    PyErr_SetString(PyExc_NotImplementedError, "length not implemented");
-    return -1;
+    (void)props;
+    (void)len;
+    // nothing to do; just needed to trigger an object length check
+    Py_RETURN_NONE;
+}
+
+// sq_length takes priority over mp length, but sometimes somebody asks specifically for mp_length
+static Py_ssize_t py_value_mp_length(py_value_t *self){
+    // (same as sq_length)
+    if(self->arrlen > -1) return self->arrlen;
+    if(self->objlen == -1){
+        PyObject *obj = iter_keys(self, objlenfunc);
+        if(!obj) return -1;
+        Py_CLEAR(obj);
+    }
+    return self->objlen;
 }
 
 static PyObject *py_value_array_to_list(
@@ -1543,14 +1567,6 @@ PyMappingMethods py_value_as_mapping = {
 };
 
 // sequence methods
-
-static PyObject *objlenfunc(py_value_t *self, JSPropertyEnum *props, uint32_t len){
-    (void)self;
-    (void)props;
-    (void)len;
-    // nothing to do; just needed to trigger an object length check
-    Py_RETURN_NONE;
-}
 
 // sq_length takes priority over mp length
 static Py_ssize_t py_value_sq_length(py_value_t *self){
@@ -1716,6 +1732,8 @@ static int py_opaque_init(py_opaque_t *self, PyObject *args, PyObject *kwds){
     int ret = PyArg_ParseTupleAndKeywords(args, kwds, "O", kwnames, &ref);
     if(!ret) return -1;
 
+    // we're keeping this
+    Py_INCREF(ref);
     self->ref = ref;
 
     return 0;
@@ -2090,6 +2108,7 @@ static PyObject *py_make_storage(PyObject *self, PyObject *args, PyObject *kwds)
     if(JS_IsException(cls)) goto jsfail;
 
     // txn arg is a closure defined in C
+    Py_INCREF(factory);
     jsfactory = new_pyref(ctx, factory);
     if(JS_IsException(jsfactory)) goto jsfail;
     JSValue jsfunc = JS_NewCFunctionData(ctx, storage_txn, 2, 0, 1, &jsfactory);

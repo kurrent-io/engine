@@ -8,7 +8,7 @@ QUICKJS_LIBS=quickjs quickjs-libc libregexp libunicode cutils dtoa
 
 all: python/relay.js python/library_gen.py python/_quickjs.so
 
-model/library.gen.ts: model/library.py tools/protos.py tools/gen_ts.py
+model/library.gen.ts: model/library.py tools/protos.py tools/gen_ts.py tools/skeleton.ts
 	python tools/protos.py -i tools -i model gen_ts library > $@
 
 python/relay.js: model/library.gen.ts model/*.ts
