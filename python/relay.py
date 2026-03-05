@@ -24,16 +24,24 @@ class Book:
     copies: int
 
 @fw.new_query
-def book_list(qx: lg.DeciderStoreQueryContext, *_: Any) -> lg.QueryGenerator[List[Book]]:
-    isbns = (yield from qx.editions()) or {}
-    editions = []
-    for isbn in isbns:
-        editions.append((yield from qx.edition(isbn)))
+async def book_list(qx: lg.DeciderStoreQueryContext, *_: Any) -> List[Book]:
     return [
-        Book(title=edition.title, copies=len(edition.books)) for edition in editions
+        Book(
+            title=(edition := await qx.edition(isbn)).title,
+            copies=len(edition.books),
+        )
+        for isbn in await qx.editions()
     ]
 
 book_list.subscribe(lambda bl: print("book list is:", bl))
 
 fw.recv_events([event])
+fw.run()
+
+fw.recv_events([{
+    "type": "add-edition",
+    "isbn": "my-isbn-2",
+    "title": "everyone-else-learns-event-sourcing",
+    "timestamp": "2025-01-24T15:54:32Z",
+}])
 fw.run()

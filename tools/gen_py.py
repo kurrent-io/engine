@@ -7,7 +7,9 @@ import datetime
 import json
 from typing import (
     Any,
+    Awaitable,
     Callable,
+    Coroutine,
     Dict,
     Generator,
     List,
@@ -47,9 +49,30 @@ class QueryAnswer(TypedDict):
     query: Dict[str, Tuple[Any, bool]]
 
 
-QueryGenerator = Generator[QueryQuestion, QueryAnswer, T]
+class _QueryResult:
+    def __init__(self, id: str) -> None:
+        self._id = id
+
+    def __await__(self) -> Generator[QueryQuestion, QueryAnswer, Any]:
+        # ask the graph for the result of a query when it's ready
+        ans = yield {"query": {self._id: True}}
+        result, dirty = ans["query"][self._id]
+        return result
 
 
+class _StoreResult:
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def __await__(self) -> Generator[QueryQuestion, QueryAnswer, Any]:
+        ans = (yield {"store": {self._key: True}})["store"][self._key]
+        if "err" in ans:
+            raise ValueError(ans["err"])
+        return ans["value"]
+
+
+# technically we have type information of what is yielded and sent, but async python wants Any,Any
+QueryGenerator = Coroutine[Any, Any, T]
 QueryFunction = Callable[[QX, T | None, bool], QueryGenerator[T]]
 
 
@@ -57,11 +80,8 @@ class Query[T]:
     def __init__(self, _query: _quickjs.Value):
         self._query = _query
 
-    def awaitResult(self) -> QueryGenerator[T]:
-        # ask the graph for the result of this query when it's ready
-        ans = yield {"query": {self._query.id: True}}
-        result, dirty = ans["query"][self._query.id]
-        return cast(T, result)
+    async def result(self) -> T:
+        return cast(T, await _QueryResult(self._query.id))
 
     def subscribe(self, cb: Callable[[T], None]) -> Callable[[], None]:
         return cast(Callable[[], None], self._query.subscribe(cb))
@@ -579,16 +599,6 @@ def generate_checkers(d, annos, checkers, t):
     visit(t)
 
 
-def generate_store_prereqs(d):
-    d.print("\n")
-    d.print("\n")
-    d.print("def _query_getter(key: str) -> QueryGenerator[Any]:\n")
-    d.print("    ans = (yield {'store': {key: True}})['store'][key]\n")
-    d.print("    if 'err' in ans:\n")
-    d.print("        raise ValueError(ans['err'])\n")
-    d.print("    return ans['value']\n")
-
-
 def generate_store(d, annos, store):
     # pick super classes
     if not store.deps:
@@ -601,17 +611,17 @@ def generate_store(d, annos, store):
     # generate getters like:
     #
     #     @staticmethod
-    #     def topic(topic_uuid: string) -> QueryGenerator[Topic]:
-    #         return yield from _query_getter(f"topic.{topic_uuid}"))
+    #     def topic(topic_uuid: string) -> Awaitable[Topic]:
+    #         return yield from _StoreResult(f"topic.{topic_uuid}"))
     original_items = [si for si in store.items if si.origin == store]
     for i, si in enumerate(original_items):
         if i: d.print("\n")
         d.print("@staticmethod\n")
         d.print(f"def {si.name}(")
         d.print(", ".join(p + ": str" for p in si.params))
-        d.print(f") -> QueryGenerator[{annos[si.type]}]:\n")
+        d.print(f") -> Awaitable[{annos[si.type]}]:\n")
         d.indent("    ")
-        d.print(f"return _query_getter(" + ("f'" if si.params else "'"))
+        d.print(f"return _StoreResult(" + ("f'" if si.params else "'"))
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "{" + param + "}")
         d.print(si.chunks[-1])
@@ -620,10 +630,6 @@ def generate_store(d, annos, store):
     if not original_items:
         d.print("pass\n")
     d.dedent()
-
-
-def generate_framework_prereqs(d):
-    pass
 
 
 def generate_framework(d, annos, f):
@@ -706,13 +712,9 @@ def generate(d, concretes, roots, stores, frameworks, args):
         generate_checkers(d, annos, checkers, t)
 
     # generate query contexts from stores
-    if stores:
-        generate_store_prereqs(d)
     for s in stores:
         generate_store(d, annos, s)
 
     # generate frameworks
-    if frameworks:
-        generate_framework_prereqs(d)
     for f in frameworks:
         generate_framework(d, annos, f)
