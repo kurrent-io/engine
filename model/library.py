@@ -38,7 +38,6 @@ from protos import (
     Bool,
     Concrete,
     Int,
-    Json,
     Literal,
     Maybe,
     Null,
@@ -81,6 +80,34 @@ class Timestamp(Concrete):
         )
         # encoder example:
         # datetime.datetime.now().astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    @staticmethod
+    def go_generate_type(d, imports, annos, converters, visit, path):
+        imports["time"] = None
+        imports["fmt"] = None
+        d.print("\nfunc NewTimestamp(value goja.Value) time.Time {\n")
+        d.indent("\t")
+        d.print('strtime := value.Export().(string)\n')
+        d.print('out, err := time.Parse("2006-01-02T15:04:05Z", strtime)\n')
+        d.print('if err != nil {\n')
+        d.indent("\t")
+        d.print('panic(fmt.Sprintf("invalid timestamp (%v): %v", strtime, err))\n')
+        d.dedent()
+        d.print('}\n')
+        d.print('return out\n')
+        d.dedent()
+        d.print("}\n")
+        return "time.Time", lambda var: f"NewTimestamp({var})"
+
+    @staticmethod
+    def go_generate_checker(d, annos, decoders, visit):
+        return lambda var, path: (
+            f'if strtime, ok := {var}.Export().(string); !ok {{\n'
+            f'\terrs = append(errs, fmt.Errorf("%v: not a string", {path}))\n'
+            f'}} else if _, err := time.Parse("2006-01-02T15:04:05Z", strtime); err != nil {{\n'
+            f'\terrs = append(errs, fmt.Errorf("%v: not a valid timestamp: %w", {path}, err))\n'
+            f'}}\n'
+        )
 
 ###################
 ## Storage Layer ##

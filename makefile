@@ -11,7 +11,10 @@ all: model python go
 tools/gen_ts.py: tools/protos.py tools/skeleton.ts
 	@touch $@
 
-tools/gen_py.py: tools/protos.py
+tools/gen_py.py: tools/protos.py tools/skeleton.py
+	@touch $@
+
+tools/gen_go.py: tools/protos.py tools/skeleton.go
 	@touch $@
 
 .PHONY: model
@@ -41,7 +44,11 @@ go: go/decider
 go/decider.js: model/library.gen.ts model/reducers.ts model/decider.ts
 	cd model && pnpm rollup --format=cjs -p typescript decider.ts -o ../go/decider.js
 
-go/decider: go/decider.js go/*.go
+go/model/model.go: model/library.py tools/gen_go.py
+	mkdir -p go/model
+	python tools/protos.py -i tools -i model gen_go library -- model > $@
+
+go/decider: go/decider.js go/main.go go/model/model.go
 	cd go && go build -o decider .
 
 clean:

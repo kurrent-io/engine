@@ -1,10 +1,11 @@
 import dataclasses
+import os
 from typing import Any, List
 
 import library_gen as lg
 
 fw = lg.DeciderFramework[Any](
-    "relay.js",
+    os.path.join(os.path.dirname(__file__), "relay.js"),
     "InMemStorage",
     lambda events: {"events": events, "checkpoint": None},
     "deciderProjector",

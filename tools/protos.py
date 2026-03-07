@@ -404,6 +404,8 @@ def solve_union(types):
             out[jt] = Match(matches[0])
         elif jt in ["string", "boolean", "integer"]:
             # union of multiple literals
+            # TODO: where is the check between a Literal string and plain String?
+            #       That case should be rejected as unsafe to distinguish.
             out[jt] = solve_union_literals(matches)
         elif jt == "object":
             # union of multiple structs
