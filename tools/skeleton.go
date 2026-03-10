@@ -618,8 +618,8 @@ func queryAsk(vm *goja.Runtime, ask Ask, key string, keyargs... interface{}) goj
 	store.Set(key, true)
 	question := vm.NewObject()
 	question.Set("store", store)
-	answer := ask(question).(*goja.Object).Get("store").(*goja.Object).Get("key").(*goja.Object)
-	if err := answer.Get("err"); !goja.IsUndefined(err) {
+	answer := ask(question).(*goja.Object).Get("store").(*goja.Object).Get(key).(*goja.Object)
+	if err := answer.Get("err"); err != nil {
 		panic(err)
 	}
 	return answer.Get("value")
@@ -849,9 +849,9 @@ func NewFramework[QX QueryContext, PX any, E any, C any, P any](
 	qxFactory func(*goja.Runtime, Ask) QX,
 ) (*Framework[QX, PX, E, C, P], error) {
 	vm := goja.New()
-	console := vm.NewObject()
 
-	// configure a console.Log()
+	// configure a console.log()
+	console := vm.NewObject()
 	console.Set("log", consoleLog)
 	vm.GlobalObject().Set("console", console)
 
@@ -989,7 +989,7 @@ func newcoro[Q any, A any, R any](fn func(ask func(Q) A) R) func(A) (Q, R, bool)
 		// examining the `answer` value, which must be updated after the coro calls `yield`
 		// and before calling `next` again.
 		ask := func(question Q) A {
-			if yield(question) {
+			if !yield(question) {
 				// this should never happen as we don't use stop() ever; we rely on either
 				// finishing the coroutine or the go runtime garbage collecting it.
 				panic("query was canceled early")
