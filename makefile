@@ -42,7 +42,7 @@ python/_quickjs.so: python/_quickjs.c $(foreach lib,$(QUICKJS_LIBS),python/quick
 go: go/decider
 
 go/decider.js: model/library.gen.ts model/reducers.ts model/decider.ts
-	cd model && pnpm rollup --format=cjs -p typescript decider.ts -o ../go/decider.js
+	cd model && pnpm rollup -m inline --format=cjs -p typescript decider.ts -o ../go/decider.js
 
 go/model/model.go: model/library.py tools/gen_go.py
 	mkdir -p go/model

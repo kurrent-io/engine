@@ -604,6 +604,41 @@ func JSONToGoja(vm *goja.Runtime, s []byte) (goja.Value, error) {
 
 //// framework /////////////////////////////////////////////////////////////////////////////////////
 
+type GoError struct {
+	Inner interface{}
+}
+
+func (e *GoError) Error() string {
+	return fmt.Sprintf("%v", e.Inner)
+}
+
+func (e *GoError) String() string {
+	return fmt.Sprintf("%v", e.Inner)
+}
+
+// take a normal go function returning a goja.Value and return the function as a goja.Value
+func WrapPanics(vm *goja.Runtime, fn func(call goja.FunctionCall) (goja.Value, error)) goja.Value {
+	return vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		defer func(){
+			if r := recover(); r != nil {
+				// goja errors are passed through
+				if _, ok := r.(*goja.Exception); ok { panic(r) }
+				// errors are wrapped directly
+				if err, ok := r.(error); ok { panic(vm.NewGoError(err)) }
+				// anything else gets wrapped as a GoError and then passed out
+				panic(vm.NewGoError(&GoError{r}))
+			}
+		}()
+
+		value, err := fn(call)
+		if err != nil {
+			panic(err)
+		}
+
+		return value
+	})
+}
+
 type Ask = func(goja.Value) goja.Value
 
 type QueryContext interface {
@@ -740,6 +775,113 @@ func NewInMemStorage() Storage {
 
 func (s InMemStorage) ToStorage(vm *goja.Runtime) (goja.Value, error) {
 	return vm.New(vm.GlobalObject().Get("InMemStorage"))
+}
+
+// async storage not yet supported
+type Txn interface {
+	Commit() error
+	Abort()
+	Get(string) (goja.Value, error)
+	Set(string, goja.Value) error
+	Del(string) error
+}
+
+// Opaque implements goja.DynamicObject, but acts like an empty object in javascript.
+type Opaque struct {
+	Inner interface{}
+}
+
+func (o *Opaque) Get(key string) goja.Value { return nil }
+func (o *Opaque) Set(key string, val goja.Value) bool { return false }
+func (o *Opaque) Has(key string) bool { return false }
+func (o *Opaque) Delete(key string) bool { return false }
+func (o *Opaque) Keys() []string { return nil }
+
+
+type GoStorage struct {
+	txnFactory func(writable bool) (Txn, error)
+}
+
+func NewGoStorage(txnFactory func(writable bool) (Txn, error)) Storage {
+	return &GoStorage{txnFactory}
+}
+
+func storageSend(vm *goja.Runtime, cb goja.Value, val goja.Value, err error) (goja.Value, error) {
+	out := vm.NewObject()
+
+	cbfn, ok := goja.AssertFunction(cb)
+	if !ok {
+		return nil, fmt.Errorf("expected cb function but got %T", cb)
+	}
+
+	if err != nil {
+		if _, ok := err.(*goja.Exception); ok {
+			out.Set("err", err)
+		} else {
+			// non-goja errors get wrapped
+			out.Set("err", vm.NewGoError(err))
+		}
+	} else {
+		out.Set("value", val)
+	}
+
+	return cbfn(goja.Undefined(), out)
+}
+
+func wrapStorage(vm *goja.Runtime, fn func(call goja.FunctionCall) (goja.Value, error)) goja.Value {
+	return WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
+		val, err := fn(call)
+		cb := call.Arguments[len(call.Arguments)-1]
+		return storageSend(vm, cb, val, err)
+	})
+}
+
+func (s GoStorage) ToStorage(vm *goja.Runtime) (goja.Value, error) {
+	sym := "ExternalCallbackStorage"
+	cls := vm.GlobalObject().Get(sym)
+	if cls == nil {
+		return nil, fmt.Errorf("unable to create storage: no such symbol: %v", sym)
+	}
+
+	factory := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+		writable := call.Arguments[0]
+		txn, err := s.txnFactory(writable.ToBoolean())
+		if err != nil {
+			return nil, fmt.Errorf("GoStorage.txnFactory: %w", err)
+		}
+		return vm.NewDynamicObject(&Opaque{txn}), nil
+
+	})
+	commit := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
+		err := txn.Commit()
+		return vm.ToValue(true), err
+	})
+	abort := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
+		txn.Abort()
+		return vm.ToValue(true), nil
+	})
+	get := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
+		key := call.Arguments[1].Export().(string)
+		return txn.Get(key)
+	})
+	set := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
+		key := call.Arguments[1].Export().(string)
+		val := call.Arguments[2]
+		err := txn.Set(key, val)
+		return vm.ToValue(true), err
+	})
+	del := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
+		key := call.Arguments[1].Export().(string)
+		err := txn.Del(key)
+		return vm.ToValue(true), err
+	})
+
+	return vm.New(cls, factory, commit, abort, get, set, del)
 }
 
 //
@@ -1064,7 +1206,7 @@ func NewQuery[QX QueryContext, PX any, E any, C any, P any, T any](
 
 		// return something that looks like a javascript iterator
 		it := fw.vm.NewObject()
-		it.Set("next", func(call goja.FunctionCall) goja.Value {
+		it.Set("next", WrapPanics(fw.vm, func(call goja.FunctionCall) (goja.Value, error) {
 			question, result, done := next(call.Arguments[0])
 			// return {value, done}
 			out := fw.vm.NewObject()
@@ -1074,8 +1216,8 @@ func NewQuery[QX QueryContext, PX any, E any, C any, P any, T any](
 			} else {
 				out.Set("value", result)
 			}
-			return out
-		})
+			return out, nil
+		}))
 
 		return it
 	}

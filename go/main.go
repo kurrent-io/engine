@@ -21,7 +21,7 @@ type Book struct {
 func run() error {
 	fw, err := model.NewDeciderFramework[any](
 		deciderScript,
-		model.NewInMemStorage(),
+		model.NewGoStorage(NewInMemStorage()),
 		"DecodeLibraryEvents",
 		"deciderShaper",
 		"deciderProjector",
@@ -41,7 +41,7 @@ func run() error {
 	})
 
 	// subscribe to the output of the query
-	bookList.Subscribe(func(books[]Book) {
+	bookList.Subscribe(func(books []Book) {
 		fmt.Printf("have books:\n")
 		for _, book := range books {
 			fmt.Printf("  - %v (x%v)\n", book.Title, book.Copies)
@@ -88,7 +88,64 @@ func run() error {
 func main() {
 	err := run()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fail: %v\n", err)
+		if s, ok := err.(fmt.Stringer); ok {
+			// String()-able errors, including *goja.Exception
+			// (which only prints the stack trace with .String())
+			fmt.Fprintf(os.Stderr, "fail: %v\n", s.String())
+		} else {
+			// normal errors
+			fmt.Fprintf(os.Stderr, "fail: %v\n", err)
+		}
 		os.Exit(1)
 	}
+}
+
+// storage implementation
+
+type InMemStorage struct {
+	mem map[string]goja.Value
+	tmp map[string]goja.Value
+}
+
+func NewInMemStorage() func(bool) (model.Txn, error) {
+	txn := &InMemStorage{
+		mem: map[string]goja.Value{},
+		tmp: map[string]goja.Value{},
+	}
+	return func(writable bool) (model.Txn, error) {
+		return txn, nil
+	}
+}
+
+func (s *InMemStorage) Commit() error {
+	for k, v := range s.tmp {
+		if v == nil {
+			delete(s.mem, k)
+		} else {
+			s.mem[k] = v
+		}
+	}
+	return nil
+}
+
+func (s *InMemStorage) Abort() {
+	s.tmp = map[string]goja.Value{}
+}
+
+func (s *InMemStorage) Get(key string) (goja.Value, error) {
+	val, ok := s.tmp[key]
+	if ok {
+		return val, nil
+	}
+	return s.mem[key], nil
+}
+
+func (s *InMemStorage) Set(key string, val goja.Value) error {
+	s.tmp[key] = val
+	return nil
+}
+
+func (s *InMemStorage) Del(key string) error {
+	s.tmp[key] = nil
+	return nil
 }
