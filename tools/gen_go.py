@@ -243,11 +243,11 @@ def generate_types(d, imports, annos, converters, t):
         # handle literals, which never need a type definition
         if isinstance(t, Literal):
             if isinstance(t.value, str):
-                anno = f"string /* {t.value} */"
+                anno = f"string/*{t.value}*/"
             elif isinstance(t.value, bool):
-                anno = f"bool /* {str(t.value).lower()} */"
+                anno = f"bool/*{str(t.value).lower()}*/"
             elif isinstance(t.value, int):
-                anno = f"int64 /* {t.value} */"
+                anno = f"int64/*{t.value}*/"
             else:
                 raise ValueError(f"unhandled literal value: {t.value}")
             converter = lambda var: f"{var}.Export().({anno})"
@@ -286,16 +286,14 @@ def generate_types(d, imports, annos, converters, t):
             d.indent("\t")
             d.print("if value == nil || goja.IsUndefined(value) { return nil }\n")
             d.print(f"obj := value.(*goja.Object)\n")
-            d.print(f"var out {anno}\n")
-            d.print(f"vm.ForOf(value, func(i goja.Value) bool {{\n")
+            d.print(f"out := {anno}{{}}\n")
+            d.print(f"for _, key := range obj.Keys() {{\n")
             d.indent("\t")
-            d.print(f"k := i.Export().(string)\n")
-            d.print(f"vin := obj.Get(k)\n")
+            d.print(f"vin := obj.Get(key)\n")
             d.print(f"vout := {converters[t.value_type]('vin')}\n")
-            d.print(f"out[k] = vout\n")
-            d.print(f"return true\n")
+            d.print(f"out[key] = vout\n")
             d.dedent()
-            d.print(f"}})\n")
+            d.print(f"}}\n")
             d.print(f"return out\n")
             d.dedent()
             d.print(f"}}\n")
@@ -938,7 +936,7 @@ def generate_framework(d, annos, f):
     name = framework_name(f.name)
     QX = context_name(f.store.name) + 'QueryContext'
     PX = "goja.Value"
-    px_name = context_name(f.store.name) + 'ProjectorContext'
+    px_name = context_name(f.store.name) + 'StoreProjectorContext'
     E = annos[f.event_type]
     C = annos[f.command_type]
 

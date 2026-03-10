@@ -30,18 +30,7 @@ func run() error {
 		return fmt.Errorf("creating framework: %w", err)
 	}
 
-	event := fw.VM().ToValue(map[string]any{
-		"type": "add-edition",
-		"isbn": "my-isbn",
-		"title": "cheech-and-chong-learn-event-sourcing",
-		"timestamp": "2025-01-24T15:54:32Z",
-	})
-
-	err = model.CheckLibraryEvents(event, "event")
-	if err != nil {
-		return err
-	}
-
+	// create a query
 	bookList := model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext, prev *[]Book) []Book {
 		var out []Book
 		for isbn := range qx.Editions() {
@@ -51,6 +40,7 @@ func run() error {
 		return out
 	})
 
+	// subscribe to the output of the query
 	bookList.Subscribe(func(books[]Book) {
 		fmt.Printf("have books:\n")
 		for _, book := range books {
@@ -58,7 +48,39 @@ func run() error {
 		}
 	})
 
-	fw.Run()
+	// create an event
+	event := fw.VM().ToValue(map[string]any{
+		"type": "add-edition",
+		"isbn": "my-isbn",
+		"title": "cheech-and-chong-learn-event-sourcing",
+		"timestamp": "2025-01-24T15:54:32Z",
+	})
+
+	// invoke the generated checker
+	err = model.CheckLibraryEvents(event, "event")
+	if err != nil {
+		return err
+	}
+
+	// feed event to framework
+	fw.RecvEvents(fw.VM().ToValue([]goja.Value{event}))
+	err = fw.Run()
+	if err != nil {
+		return err
+	}
+
+	// feed another event to framework
+	event = fw.VM().ToValue(map[string]any{
+		"type": "add-edition",
+		"isbn": "my-isbn-2",
+		"title": "everyone-else-learns-event-sourcing",
+		"timestamp": "2025-01-24T15:54:32Z",
+	})
+	fw.RecvEvents(fw.VM().ToValue([]goja.Value{event}))
+	err = fw.Run()
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

@@ -662,7 +662,7 @@ func NewJSDecoder[E any](name string) Decoder[E] {
 
 func (d JSDecoder) ToDecoder(vm *goja.Runtime) (func(goja.Value) (goja.Value, error), error) {
 	jsfn := vm.GlobalObject().Get(d.name)
-	if goja.IsUndefined(jsfn) {
+	if jsfn == nil {
 		return nil, fmt.Errorf("unable to create decoder: no such symbol: %v", d.name)
 	}
 	fn, ok := goja.AssertFunction(jsfn)
@@ -692,7 +692,7 @@ func NewJSShaper[E any, P any](name string) Shaper[E, P] {
 
 func (s JSShaper) ToShaper(vm *goja.Runtime) (goja.Value, error) {
 	jsfn := vm.GlobalObject().Get(s.name)
-	if goja.IsUndefined(jsfn) {
+	if jsfn == nil {
 		return nil, fmt.Errorf("unable to create shaper: no such symbol: %v", s.name)
 	}
 	_, ok := goja.AssertFunction(jsfn)
@@ -760,12 +760,12 @@ func NewJSProjector[PX any, E any](px, projector string) Projector[PX, E] {
 
 func (s JSProjector) ToProjector(vm *goja.Runtime) (goja.Value, goja.Value, error) {
 	px := vm.GlobalObject().Get(s.px)
-	if goja.IsUndefined(px) {
+	if px == nil {
 		return nil, nil, fmt.Errorf("unable to create px: no such symbol: %v", s.px)
 	}
 
 	projector := vm.GlobalObject().Get(s.projector)
-	if goja.IsUndefined(projector) {
+	if projector == nil {
 		return nil, nil, fmt.Errorf("unable to create projector: no such symbol: %v", s.projector)
 	}
 	_, ok := goja.AssertFunction(projector)
@@ -901,7 +901,7 @@ func NewFramework[QX QueryContext, PX any, E any, C any, P any](
 
 	// call `new Framework()`
 	fwClass := vm.GlobalObject().Get("Framework")
-	if goja.IsUndefined(fwClass) {
+	if fwClass == nil {
 		return nil, errors.New("unable to locate Framework symbol")
 	}
 	fwConstructor, ok := goja.AssertConstructor(fwClass)
