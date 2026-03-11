@@ -161,9 +161,9 @@ function *runTxn<T>(
 ): Future<T> {
   // ignore late callbacks
   let valid = true;
-  let ans: StorageAnswer = {get: {}, set: {}, del: {}};
-  let ready = false;
   try {
+    let ans: StorageAnswer = {get: {}, set: {}, del: {}};
+    let ready = false;
     while (true) {
       const {value, done} = g.next(ans);
       if (done) return value;
