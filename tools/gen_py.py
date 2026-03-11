@@ -335,14 +335,18 @@ def generate_checkers(d, annos, checkers, t):
     visit(t)
 
 
+def context_name(name):
+    return name[:-5] if name.endswith("Store") else name
+
+
 def generate_store(d, annos, store):
     # pick super classes
     if not store.deps:
         supers = ""
     else:
-        supers = "(" + ", ".join(f"{dep.name}QueryContext" for dep in store.deps) +  ")"
+        supers = "(" + ", ".join(f"{context_name(dep.name)}QueryContext" for dep in store.deps) +  ")"
     # Generate the QueryContext class.
-    d.print(f"\nclass {store.name}QueryContext{supers}:\n")
+    d.print(f"\nclass {context_name(store.name)}QueryContext{supers}:\n")
     d.indent("    ")
     # generate getters like:
     #
@@ -366,6 +370,10 @@ def generate_store(d, annos, store):
     if not original_items:
         d.print("pass\n")
     d.dedent()
+
+
+def framework_name(name):
+    return name if name.endswith("Framework") else (name + 'Framework')
 
 
 def generate_framework(d, annos, f):
@@ -393,13 +401,13 @@ def generate_framework(d, annos, f):
                 projector="deciderProjector",
             )
     """
-    QX = f"{f.store.name}QueryContext"
-    PX = f"{f.store.name}ProjectorContext"
+    QX = f"{context_name(f.store.name)}QueryContext"
+    PX = f"{context_name(f.store.name)}ProjectorContext"
     E = annos[f.event_type]
     C = annos[f.event_type]
     d.print("\n")
     d.print("\n")
-    d.print(f"class {f.name}[P](BaseFramework[\n")
+    d.print(f"class {framework_name(f.name)}[P](BaseFramework[\n")
     d.print(f"    {QX},  # python query context, enabling python queries\n")
     d.print(f"    _quickjs.Value,  # projector context assumes we're using javascript projectors\n")
     d.print(f"    {E},  # event type from server\n")

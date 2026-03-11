@@ -54,18 +54,18 @@ import {
   EndCheckout,
   OverdueCheckout,
   LibraryEvents,
-  BookStoreProjectorContext,
-  PatronStoreProjectorContext,
-  StatusStoreProjectorContext,
-  VStatusStoreProjectorContext,
-  DeciderStoreProjectorContext,
-  UserStoreProjectorContext,
+  BookProjectorContext,
+  PatronProjectorContext,
+  StatusProjectorContext,
+  VStatusProjectorContext,
+  DeciderProjectorContext,
+  UserProjectorContext,
 
   ProjectorGenerator,
 } from './library.gen';
 
 
-type BooksPX = typeof BookStoreProjectorContext;
+type BooksPX = typeof BookProjectorContext;
 
 function *projectAddEdition(px: BooksPX, e: AddEdition): ProjectorGenerator<void> {
   // add this edition
@@ -115,7 +115,7 @@ function *projectRemoveBook(px: BooksPX, e: RemoveBook): ProjectorGenerator<void
   yield* px.set.edition(book.isbn, edition);
 }
 
-type PatronsPX = typeof PatronStoreProjectorContext;
+type PatronsPX = typeof PatronProjectorContext;
 
 function *projectAddPatron(px: PatronsPX, e: AddPatron): ProjectorGenerator<void> {
   yield* px.set.patron(e.id, {
@@ -150,7 +150,7 @@ function *projectAssignPatron(px: PatronsPX, e: AssignPatron): ProjectorGenerato
   return invalidHolds;
 }
 
-type StatusPX = typeof StatusStoreProjectorContext & PatronsPX & BooksPX;
+type StatusPX = typeof StatusProjectorContext & PatronsPX & BooksPX;
 
 // returns rejection reason, or an empty string
 function *projectTryHold(px: StatusPX, e: TryHold): ProjectorGenerator<string> {
@@ -391,7 +391,7 @@ function *projectEndCheckout(px: StatusPX, e: EndCheckout): ProjectorGenerator<v
 
 // reusable for either status or vstatus stores
 function *projectOverdueCheckout(
-  px: typeof StatusStoreProjectorContext | typeof VStatusStoreProjectorContext,
+  px: typeof StatusProjectorContext | typeof VStatusProjectorContext,
   e: OverdueCheckout,
 ): ProjectorGenerator<void> {
   const checkout = yield* (px as any).get.checkout(e.checkout); // TODO: fix types
@@ -399,7 +399,7 @@ function *projectOverdueCheckout(
   yield* px.set.checkout(e.checkout, checkout);
 }
 
-type VStatusPX = typeof VStatusStoreProjectorContext & BooksPX & PatronsPX;
+type VStatusPX = typeof VStatusProjectorContext & BooksPX & PatronsPX;
 
 function *projectNewVHold(px: VStatusPX, e: NewVHold): ProjectorGenerator<void> {
   const hold: VHold = {
@@ -478,7 +478,7 @@ function *projectVEndCheckout(px: VStatusPX, e: EndCheckout): ProjectorGenerator
 /* ---------------------- */
 
 export function *deciderProjector(
-  px: typeof DeciderStoreProjectorContext, events: LibraryEvents[],
+  px: typeof DeciderProjectorContext, events: LibraryEvents[],
 ): ProjectorGenerator<void> {
   const deciderEvents: DeciderEvents[] = [];
 
@@ -557,7 +557,7 @@ export function *deciderProjector(
 
 // client composition
 export function *userProjector(
-  px: typeof UserStoreProjectorContext, events: LibraryEvents[],
+  px: typeof UserProjectorContext, events: LibraryEvents[],
 ): ProjectorGenerator<void> {
   for (const e of events) {
     // extend read model

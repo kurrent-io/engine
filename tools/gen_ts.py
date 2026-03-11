@@ -310,9 +310,13 @@ def generate_store_prereqs(d):
     d.print("};\n")
 
 
+def context_name(name):
+    return name[:-5] if name.endswith("Store") else name
+
+
 def generate_store(d, annos, store):
     # Generate the QueryContext singleton.
-    d.print(f"\nexport const {store.name}QueryContext = {{\n")
+    d.print(f"\nexport const {context_name(store.name)}QueryContext = {{\n")
     d.indent("  ")
     # generate getters like:
     # topic: (topic_uuid: Uuid) => queryGet<Topic>(`topic.${topic_uuid}`)
@@ -329,7 +333,7 @@ def generate_store(d, annos, store):
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{dep.name}QueryContext.get,\n")
+        d.print(f"...{context_name(dep.name)}QueryContext.get,\n")
     d.dedent()
     d.print("},\n")
     d.dedent()
@@ -337,7 +341,7 @@ def generate_store(d, annos, store):
     d.print("\n")
 
     # Generate the ProjectorContext singleton.
-    d.print(f"export const {store.name}ProjectorContext = {{\n")
+    d.print(f"export const {context_name(store.name)}ProjectorContext = {{\n")
     d.indent("  ")
 
     # generate old getters like:
@@ -354,7 +358,7 @@ def generate_store(d, annos, store):
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{dep.name}ProjectorContext.old,\n")
+        d.print(f"...{context_name(dep.name)}ProjectorContext.old,\n")
     d.dedent()
     d.print("},\n")
 
@@ -372,7 +376,7 @@ def generate_store(d, annos, store):
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{dep.name}ProjectorContext.get,\n")
+        d.print(f"...{context_name(dep.name)}ProjectorContext.get,\n")
     d.dedent()
     d.print("},\n")
 
@@ -392,7 +396,7 @@ def generate_store(d, annos, store):
         d.print(f"`, value),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{dep.name}ProjectorContext.set,\n")
+        d.print(f"...{context_name(dep.name)}ProjectorContext.set,\n")
     d.dedent()
     d.print("},\n")
 
@@ -412,30 +416,23 @@ def generate_store(d, annos, store):
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{dep.name}ProjectorContext.del,\n")
+        d.print(f"...{context_name(dep.name)}ProjectorContext.del,\n")
     d.dedent()
     d.print("},\n")
 
     d.dedent()
     d.print(f"}};\n")
 
-    ###################################
-
-    d.print(f"export const {store.name}Context = {{\n")
-    d.print(f"  query: {store.name}QueryContext,\n")
-    d.print(f"  projector: {store.name}ProjectorContext,\n")
-    d.print(f"}}\n")
-
 def generate_framework(d, annos, f):
     event_type = annos[f.event_type]
     command_type = annos[f.command_type]
-    px = f"{f.store.name}ProjectorContext"
-    qx = f"{f.store.name}QueryContext"
+    px = f"{context_name(f.store.name)}ProjectorContext"
+    qx = f"{context_name(f.store.name)}QueryContext"
     px_type = "typeof " + px
     qx_type = "typeof " + qx
 
     d.print(f"""
-export class {f.name}<P> extends Framework<P, {event_type}, {command_type}, {px_type}, {qx_type}> {{
+export class {f.name}<P> extends Framework<{qx_type}, {px_type}, {event_type}, {command_type}, P> {{
   constructor(
     storage: Storage,
     callbacks: {{
@@ -453,7 +450,7 @@ export class {f.name}<P> extends Framework<P, {event_type}, {command_type}, {px_
       onCommands?: (commands: {command_type}[], onSent: ()=> void)=> void,
     }},
   ) {{
-    super({px}, {qx}, storage, callbacks);
+    super({qx}, {px}, storage, callbacks);
   }}
 }}
 """)
@@ -489,6 +486,6 @@ def generate(d, concretes, roots, stores, frameworks, args):
     for s in stores:
         generate_store(d, annos, s)
 
-    # # Generate frameworks
-    # for f in frameworks:
-    #     generate_framework(d, annos, f)
+    # Generate frameworks
+    for f in frameworks:
+        generate_framework(d, annos, f)

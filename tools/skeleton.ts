@@ -1110,12 +1110,12 @@ export class QueryGraph<QX> {
 
 // frameworks /////////////////////////////////////////////////////////////////
 
-// "E"vents
-// "C"ommands
 // check"p"oint
 // "P"rojectorConte"x"t
 // "Q"ueryConte"x"t
-export class Framework<E, C, P, PX, QX> {
+// "E"vents
+// "C"ommands
+export class Framework<QX, PX, E, C, P> {
   #storage: Storage;
   #shaper: (events: E[]) => {events: E[], checkpoint: P};
   #projector: (events: E[]) => ProjectorGenerator<void>; // wrapper around user's projector
@@ -1141,8 +1141,8 @@ export class Framework<E, C, P, PX, QX> {
   #newQueries: boolean = false;
 
   constructor(
-    px: PX,
     qx: QX,
+    px: PX,
     storage: Storage,
     callbacks: {
       // required: new events from the wire may be batched, and a checkpoint is produced

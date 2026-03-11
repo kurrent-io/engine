@@ -1,12 +1,5 @@
 {
     "type": "module",
-    "scripts": {
-        "gen": "python tools/protos.py -i tools -i model gen_ts library > src/library.gen.ts",
-        "build": "rollup --config rollup.config.ts --configPlugin typescript",
-        "serve": "rollup --config rollup.config.ts --configPlugin typescript --watch",
-        "test": "jest",
-        "module": "pnpm rollup -m -p typescript -o build/module.js"
-    },
     "devDependencies": {
         "@rollup/plugin-commonjs": "^29.0.0",
         "@rollup/plugin-node-resolve": "^16.0.3",
@@ -15,6 +8,7 @@
         "@rollup/plugin-typescript": "^12.3.0",
         "@rollup/plugin-url": "^8.0.2",
         "@types/jest": "^30.0.0",
+        "dts-bundle-generator": "^9.5.1",
         "jest": "^30.2.0",
         "rollup": "^4.53.3",
         "rollup-plugin-livereload": "^2.0.5",

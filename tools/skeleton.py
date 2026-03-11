@@ -182,7 +182,7 @@ class BaseFramework[QX, PX, E, C, P]:
             b64 = text[sourcemap_index:].split(",", maxsplit=1)[1].split("\n", maxsplit=1)[0]
             sourcemap = json.loads(base64.b64decode(b64))
 
-        flags = 1 | (1<<5) # JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILIE_ONLY
+        flags = 1 | (1<<5) # JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
         m = self._js.eval(text, file=bundle, sourcemap=sourcemap, flags=flags)
 
         if isinstance(decoder, str):
@@ -220,8 +220,8 @@ class BaseFramework[QX, PX, E, C, P]:
             projector = m[projector]
 
         self._framework: _quickjs.Value = self._js.eval(
-            "(cls, px, qx, storage, callbacks) => new cls(px, qx, storage, callbacks)",
-        )(m["Framework"], pxjs, qxjs, storage, {
+            "(cls, qx, px, storage, callbacks) => new cls(qx, px, storage, callbacks)",
+        )(m["Framework"], qxjs, pxjs, storage, {
             "shaper": shaper,
             "projector": projector
         })

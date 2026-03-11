@@ -1,33 +1,26 @@
 import { createRoot } from 'react-dom/client';
 
-import App from './App';
-import './styles.css';
-import { InMemStorage } from './storage';
-import { Framework } from './framework';
-import { clientProjector } from './reducers';
 import {
-  UserStoreProjectorContext,
-  UserStoreQueryContext,
+  InMemStorage,
+  UserFramework,
+  UserQueryContext,
   LibraryEvents,
   AddEdition,
   AddBook,
-} from './library.gen';
-import { generateUuid } from './util';
+  userProjector,
+} from './model';
 
-const typeset = {
-  px: UserStoreProjectorContext,
-  qx: UserStoreQueryContext,
-  isEvent(_: LibraryEvents): true { return true; },
-  isCommand(_: LibraryEvents): true { return true; },
-};
+import App from './App';
+import './styles.css';
+import { generateUuid } from './util';
 
 const storage = new InMemStorage();
 
-const fw = new Framework(typeset, storage, {
+const fw = new UserFramework(storage, {
   shaper(events: LibraryEvents[]) {
     return {events, checkpoint: null};
   },
-  projector: clientProjector,
+  projector: userProjector,
 });
 
 // populate the storage with some initial data
@@ -40,7 +33,7 @@ fw.recvEvents([{
 }]);
 
 export type FW = typeof fw;
-export type QX = typeof UserStoreQueryContext;
+export type QX = typeof UserQueryContext;
 
 const bookUuids: string[] = [];
 

@@ -1,7 +1,7 @@
 export {
   Framework,
   InMemStorage,
-  DeciderStoreProjectorContext,
+  DeciderProjectorContext,
   DecodeLibraryEvents,
   ExternalCallbackStorage } from "./library.gen";
 export { deciderProjector } from "./reducers";

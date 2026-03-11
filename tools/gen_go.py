@@ -936,7 +936,7 @@ def generate_framework(d, annos, f):
     name = framework_name(f.name)
     QX = context_name(f.store.name) + 'QueryContext'
     PX = "goja.Value"
-    px_name = context_name(f.store.name) + 'StoreProjectorContext'
+    px_name = context_name(f.store.name) + 'ProjectorContext'
     E = annos[f.event_type]
     C = annos[f.command_type]
 

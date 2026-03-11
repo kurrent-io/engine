@@ -1050,7 +1050,7 @@ func NewFramework[QX QueryContext, PX any, E any, C any, P any](
 	if !ok {
 		return nil, errors.New("Framework symbol is not a constructor")
 	}
-	fw, err := fwConstructor(nil, px, jsqx, storageVal, callbacks)
+	fw, err := fwConstructor(nil, jsqx, px, storageVal, callbacks)
 	if err != nil {
 		return nil, fmt.Errorf("new Framework(): %w", err)
 	}

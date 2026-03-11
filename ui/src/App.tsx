@@ -1,7 +1,7 @@
 import { Button, ConfigProvider, Flex, Card, List, Spin, theme } from 'antd';
 import { Suspense, useCallback, useMemo, useState, useEffect } from 'react';
 
-import { Query, QueryFunction, QueryGenerator } from './query';
+import { Query, QueryFunction, QueryGenerator } from './model';
 import { FW, QX, makeAddBook, makeAddCheckout, makeRetitleBook } from './index';
 
 type Book = { title: string, copies: number };

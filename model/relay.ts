@@ -1,2 +1,2 @@
-export { Framework, InMemStorage, DeciderStoreProjectorContext, DecodeLibraryEvents } from "./library.gen";
+export { Framework, InMemStorage, DeciderProjectorContext, DecodeLibraryEvents } from "./library.gen";
 export { deciderProjector } from "./reducers";
