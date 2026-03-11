@@ -8,39 +8,39 @@ by both backend and frontend services.
 
 ## Repo Layout (wip)
 
-The framework and the demo application are currently mixed together in `src/`, because I don't know
-anything about packaging typescript libraries yet.  So the following files are framework files:
+The tooling for defining types and generating code is in `tools/`:
 
-- `src/framework.ts`
-- `src/query.ts`
-- `src/projector.ts`
-- `src/storage.ts`
-- `src/future.ts`
-- `src/util.ts`
+- `tools/protos.py` defines the available types
+- `tools/skeleton.{ts,py,go}` are starting points for the code generators
+- `tools/gen_{ts,py,go}.py` are the code generators themselves
 
-And the demo files are:
+The data model is defined in `model/`.  The basic idea is that a bundler (`rollup`, in this case) is
+used to capture the all the business logic in `model/` and expose it to one of the system components
+(the `ui`, the `relay`, or the `decider`):
 
-- `src/index.ts`
-- `src/App.tsx`
-- `src/styles.css`
-- `src/reducers.ts`
+- `model/library.py` defines the data types using types from `tools/protos.py`
+- `model/library.gen.ts` is the output of running `tools/gen_ts.py` to `model/library.py`
+- `model/reducers.ts` contains the business logic for compiling snapshots from events
+- `model/{ui,relay,decider}.ts` are the stubs that export names for use in each system component.
 
-Additionally, the proto defintions is separated into framework components:
+Each system component (`ui/`, `relay/`, `decider`) follows a similar pattern:
 
-- `tools/protos.py`
-- `tools/gen_ts.py`
+- The `model/` is bundled into a json file:
+    - `relay/model.py`
+    - `decider/model/model.go`
+    - `ui/src/{model.js,model.d.ts}`
+- The remaining files implement approximately the user code needed to consume the framework.
+- The relay additioanl contains quickjs bindings for python in `relay/_quickjs.c`.
 
-and a demo-specific file defining the protos for the data model:
-
-- `model/library.py`
-
-And by running `pnpm gen`, a file `src/library.gen.ts` is created.
+All outputs (except the built ui) can be generated or built by running `make`.  Type checking for
+python and typescript can be ran with `make check`.
 
 ## Running the Demo
 
-- `pnpm i`: install dependencies
-- `pnpm gen`: generate code for data model
-- `pnpm serve`: then access `http://localhost:3000` from a browser
+- `cd model && pnpm i`: install dependencies for model
+- `cd ui && pnpm i`: install dependencies for ui
+- `make`: generate and compile all non-ui outputs
+- `cd ui && pnpm serve`: run the ui demo
 
 ## Architecture Diagrams
 
@@ -91,7 +91,10 @@ UI).
 
 ### Frontend Diagram (full w/ optimistic updates)
 
-The abstract nature of the business logic in the
+The abstract nature of the business logic encourages the reducers block to be free of side-effects,
+making it easy to to reuse that business logic with an in-memory storage overlay to achieve
+optimistic UI updates.  This requires an extra function from the user, which I call a "forecaster",
+that produces events the application expects the server to create from each outgoing command.
 
 ```
 (* = owned by user)
@@ -185,7 +188,6 @@ H: new events to forecasters
 I: new events saved to storage (outbox)
 
 J: new events get sent over websocket
-
 
 
 ## Backend Diagram

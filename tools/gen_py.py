@@ -380,7 +380,7 @@ def generate_framework(d, annos, f):
     """
     class DeciderFramework[P](BaseFramework[
         DeciderStoreQueryContext,  # QX: a python object, enabling python queries
-        _quickjs.Value,  # PX: a javascript object, because projectors come from javascript
+        _quickjs.Value,  # RX: a javascript object, because reducers come from javascript
         LibraryEvents,  # E: events from the server
         LibraryEvents,  # C: commands to the server
         P,  # P: checkpoint type, configured by user
@@ -395,21 +395,21 @@ def generate_framework(d, annos, f):
                 bundle,
                 storage=storage,
                 decoder="DecodeLibraryEvents",
-                px="DeciderStoreProjectorContext",
+                rx="DeciderStoreReducerContext",
                 qx=DeciderStoreQueryContext(),
                 shaper=shaper,
-                projector="deciderProjector",
+                reducer="deciderReducer",
             )
     """
     QX = f"{context_name(f.store.name)}QueryContext"
-    PX = f"{context_name(f.store.name)}ProjectorContext"
+    RX = f"{context_name(f.store.name)}ReducerContext"
     E = annos[f.event_type]
     C = annos[f.event_type]
     d.print("\n")
     d.print("\n")
     d.print(f"class {framework_name(f.name)}[P](BaseFramework[\n")
     d.print(f"    {QX},  # python query context, enabling python queries\n")
-    d.print(f"    _quickjs.Value,  # projector context assumes we're using javascript projectors\n")
+    d.print(f"    _quickjs.Value,  # reducer context assumes we're using javascript reducer\n")
     d.print(f"    {E},  # event type from server\n")
     d.print(f"    {C},  # command type to server\n")
     d.print(f"    P,  # checkpoint type, configured by user\n")
@@ -419,15 +419,15 @@ def generate_framework(d, annos, f):
     d.print(f"        bundle: str,\n")
     d.print(f"        storage: Callable[[bool], Txn] | str,\n")
     d.print(f"        shaper: Callable[[List[{E}]], ShaperOutput[{E}, P]] | str,\n")
-    d.print(f"        projector: str,\n")
+    d.print(f"        reducer: str,\n")
     d.print(f"    ):\n")
     d.print(f"        super().__init__(\n")
     d.print(f"            bundle,\n")
     d.print(f"            storage=storage,\n")
     d.print(f"            shaper=shaper,\n")
-    d.print(f"            projector=projector,\n")
+    d.print(f"            reducer=reducer,\n")
     d.print(f"            decoder='Decode{f.event_type.name}',\n")
-    d.print(f"            px='{PX}',\n")
+    d.print(f"            rx='{RX}',\n")
     d.print(f"            qx={QX}(),\n")
     d.print(f"        )\n")
 

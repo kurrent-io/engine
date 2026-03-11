@@ -117,10 +117,10 @@ class Txn(Protocol):
     def delete(self, key: str) -> None: ...
 
 
-class BaseFramework[QX, PX, E, C, P]:
+class BaseFramework[QX, RX, E, C, P]:
     '''
     BaseFramework chooses not to make assumptions about how you implement:
-      - projectors can be written in python, if you want.
+      - reducers can be written in python, if you want.
       - you can use a javascript query context with python query functions.  Weird, but ok.
       - all this at the cost of way too many type parameters.
 
@@ -134,9 +134,9 @@ class BaseFramework[QX, PX, E, C, P]:
         decoder: Callable[[Any], E] | str,
         storage: Callable[[bool], Txn] | str,
         qx: QX | str,
-        px: PX | str,
+        rx: RX | str,
         shaper: Callable[[List[E]], ShaperOutput] | str,
-        projector: Callable[[PX, List[E]], None] | str,
+        reducer: Callable[[RX, List[E]], None] | str,
     ) -> None:
         self._js = _quickjs.QuickJS()
 
@@ -207,23 +207,23 @@ class BaseFramework[QX, PX, E, C, P]:
         else:
             qxjs = _quickjs.Opaque(qx)
 
-        if isinstance(px, str):
-            px = m[px]
-            pxjs = px
+        if isinstance(rx, str):
+            rx = m[rx]
+            rxjs = rx
         else:
-            pxjs = _quickjs.Opaque(px)
+            rxjs = _quickjs.Opaque(rx)
 
         if isinstance(shaper, str):
             shaper = self._js.eval(shaper)
 
-        if isinstance(projector, str):
-            projector = m[projector]
+        if isinstance(reducer, str):
+            reducer = m[reducer]
 
         self._framework: _quickjs.Value = self._js.eval(
-            "(cls, qx, px, storage, callbacks) => new cls(qx, px, storage, callbacks)",
-        )(m["Framework"], qxjs, pxjs, storage, {
+            "(cls, qx, rx, storage, callbacks) => new cls(qx, rx, storage, callbacks)",
+        )(m["Framework"], qxjs, rxjs, storage, {
             "shaper": shaper,
-            "projector": projector
+            "reducer": reducer
         })
 
     def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:

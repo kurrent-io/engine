@@ -886,37 +886,37 @@ func (s GoStorage) ToStorage(vm *goja.Runtime) (goja.Value, error) {
 
 //
 
-type Projector[PX any, E any] interface {
-	// returns a [PX, projectorFunc]
-	ToProjector(vm *goja.Runtime) (goja.Value, goja.Value, error)
+type Reducer[RX any, E any] interface {
+	// returns a [RX, reducerFunc]
+	ToReducer(vm *goja.Runtime) (goja.Value, goja.Value, error)
 }
 
-type JSProjector struct {
-	px string
-	projector string
+type JSReducer struct {
+	rx string
+	reducer string
 }
 
-func NewJSProjector[PX any, E any](px, projector string) Projector[PX, E] {
-	return JSProjector{px, projector}
+func NewJSReducer[RX any, E any](rx, reducer string) Reducer[RX, E] {
+	return JSReducer{rx, reducer}
 }
 
-func (s JSProjector) ToProjector(vm *goja.Runtime) (goja.Value, goja.Value, error) {
-	px := vm.GlobalObject().Get(s.px)
-	if px == nil {
-		return nil, nil, fmt.Errorf("unable to create px: no such symbol: %v", s.px)
+func (s JSReducer) ToReducer(vm *goja.Runtime) (goja.Value, goja.Value, error) {
+	rx := vm.GlobalObject().Get(s.rx)
+	if rx == nil {
+		return nil, nil, fmt.Errorf("unable to create rx: no such symbol: %v", s.rx)
 	}
 
-	projector := vm.GlobalObject().Get(s.projector)
-	if projector == nil {
-		return nil, nil, fmt.Errorf("unable to create projector: no such symbol: %v", s.projector)
+	reducer := vm.GlobalObject().Get(s.reducer)
+	if reducer == nil {
+		return nil, nil, fmt.Errorf("unable to create reducer: no such symbol: %v", s.reducer)
 	}
-	_, ok := goja.AssertFunction(projector)
+	_, ok := goja.AssertFunction(reducer)
 	if !ok {
 		return nil, nil, fmt.Errorf(
-			"unable to create projector: symbol is not a function: %v", s.projector,
+			"unable to create reducer: symbol is not a function: %v", s.reducer,
 		)
 	}
-	return px, projector, nil
+	return rx, reducer, nil
 }
 
 //
@@ -972,7 +972,7 @@ func makeSetTimeout() (func (goja.FunctionCall) goja.Value, func() error) {
 	return setTimeout, run
 }
 
-type Framework[QX QueryContext, PX any, E any, C any, P any] struct {
+type Framework[QX QueryContext, RX any, E any, C any, P any] struct {
 	vm *goja.Runtime
 	fw *goja.Object
 	decoder func (events goja.Value) (goja.Value, error)
@@ -982,14 +982,14 @@ type Framework[QX QueryContext, PX any, E any, C any, P any] struct {
 	qxFactory func(*goja.Runtime, Ask) QX
 }
 
-func NewFramework[QX QueryContext, PX any, E any, C any, P any](
+func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 	source Source,
 	storage Storage,
 	decoder Decoder[E],
 	shaper Shaper[E, P],
-	projector Projector[PX, E],
+	reducer Reducer[RX, E],
 	qxFactory func(*goja.Runtime, Ask) QX,
-) (*Framework[QX, PX, E, C, P], error) {
+) (*Framework[QX, RX, E, C, P], error) {
 	vm := goja.New()
 
 	// configure a console.log()
@@ -1028,15 +1028,15 @@ func NewFramework[QX QueryContext, PX any, E any, C any, P any](
 		return nil, fmt.Errorf("shaper: %w", err)
 	}
 
-	px, projectorFn, err := projector.ToProjector(vm)
+	rx, reducerFn, err := reducer.ToReducer(vm)
 	if err != nil {
-		return nil, fmt.Errorf("projector: %w", err)
+		return nil, fmt.Errorf("reducer: %w", err)
 	}
 
 	// build callbacks
 	callbacks := vm.NewObject()
 	callbacks.Set("shaper", shaperFn)
-	callbacks.Set("projector", projectorFn)
+	callbacks.Set("reducer", reducerFn)
 
 	// we handle QX entirely in go
 	jsqx := goja.Undefined()
@@ -1050,7 +1050,7 @@ func NewFramework[QX QueryContext, PX any, E any, C any, P any](
 	if !ok {
 		return nil, errors.New("Framework symbol is not a constructor")
 	}
-	fw, err := fwConstructor(nil, jsqx, px, storageVal, callbacks)
+	fw, err := fwConstructor(nil, jsqx, rx, storageVal, callbacks)
 	if err != nil {
 		return nil, fmt.Errorf("new Framework(): %w", err)
 	}
@@ -1065,7 +1065,7 @@ func NewFramework[QX QueryContext, PX any, E any, C any, P any](
 		return nil, errors.New(".recvEvents() method not callable")
 	}
 
-	return &Framework[QX, PX, E, C, P]{
+	return &Framework[QX, RX, E, C, P]{
 		vm,
 		fw,
 		decoderFn,
@@ -1076,15 +1076,15 @@ func NewFramework[QX QueryContext, PX any, E any, C any, P any](
 	}, nil
 }
 
-func (f *Framework[QX, PX, E, C, P]) VM() *goja.Runtime {
+func (f *Framework[QX, RX, E, C, P]) VM() *goja.Runtime {
 	return f.vm
 }
 
-func (f *Framework[QX, PX, E, C, P]) Run() error {
+func (f *Framework[QX, RX, E, C, P]) Run() error {
 	return f.run()
 }
 
-func (f *Framework[QX, PX, E, C, P]) RecvEvents(rawEvents goja.Value) error {
+func (f *Framework[QX, RX, E, C, P]) RecvEvents(rawEvents goja.Value) error {
 	_, err := f.recvEvents(f.fw, rawEvents)
 	return err
 }
@@ -1185,8 +1185,8 @@ func (q *Query[T]) Subscribe(fn func(T)) func() {
 	}
 }
 
-func NewQuery[QX QueryContext, PX any, E any, C any, P any, T any](
-	fw *Framework[QX, PX, E, C, P],
+func NewQuery[QX QueryContext, RX any, E any, C any, P any, T any](
+	fw *Framework[QX, RX, E, C, P],
 	fn func(vm *goja.Runtime, qx QX, prev *T) T,
 ) *Query[T] {
 	// each time a query is run, we create a new javascript iterator around a new coroutine

@@ -7,7 +7,7 @@ import {
   LibraryEvents,
   AddEdition,
   AddBook,
-  userProjector,
+  userReducer,
 } from './model';
 
 import App from './App';
@@ -20,7 +20,7 @@ const fw = new UserFramework(storage, {
   shaper(events: LibraryEvents[]) {
     return {events, checkpoint: null};
   },
-  projector: userProjector,
+  reducer: userReducer,
 });
 
 // populate the storage with some initial data

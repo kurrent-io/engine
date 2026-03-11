@@ -2,7 +2,7 @@ export {
   UserFramework,
   InMemStorage,
   UserQueryContext,
-  UserProjectorContext,
+  UserReducerContext,
   DecodeLibraryEvents,
 } from "./library.gen";
-export { userProjector } from "./reducers";
+export { userReducer } from "./reducers";

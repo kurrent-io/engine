@@ -24,7 +24,7 @@ func run() error {
 		model.NewGoStorage(NewInMemStorage()),
 		"DecodeLibraryEvents",
 		"deciderShaper",
-		"deciderProjector",
+		"deciderReducer",
 	)
 	if err != nil {
 		return fmt.Errorf("creating framework: %w", err)

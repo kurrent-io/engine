@@ -542,9 +542,9 @@ export class ExternalCallbackStorage {
   }
 }
 
-// projectors /////////////////////////////////////////////////////////////////
+// reducers /////////////////////////////////////////////////////////////////
 
-export type ProjectorQuestion = {
+export type ReducerQuestion = {
   // keys to look up
   old?: Record<string, true>,
   // keys to look up
@@ -555,7 +555,7 @@ export type ProjectorQuestion = {
   del?: Record<string, true>,
 };
 
-export type ProjectorAnswer = {
+export type ReducerAnswer = {
   old: Record<string, StorageValue>,
   // key-value lookup results
   get: Record<string, StorageValue>,
@@ -565,18 +565,18 @@ export type ProjectorAnswer = {
   del: Record<string, StorageDone>,
 };
 
-export type ProjectorGenerator<T> = Generator<ProjectorQuestion, T, ProjectorAnswer>;
-// ProjectorContext looks like:
-// yield* px.set.project(key, val): set new value (you only get to set it once per txn)
-// yield* px.get.project(key): get the current value for key, possibly setting it from old
-// yield* px.old.project(key): explicitly get the old value for key
+export type ReducerGenerator<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
+// ReducerContext looks like:
+// yield* rx.set.project(key, val): set new value (you only get to set it once per txn)
+// yield* rx.get.project(key): get the current value for key, possibly setting it from old
+// yield* rx.old.project(key): explicitly get the old value for key
 
-// wrap a ProjectorGenerator so it acts like a WStorageGenerator, returning a set of updated keys
-export function *runProjector(g: ProjectorGenerator<void>): WStorageGenerator<string[]> {
+// wrap a ReducerGenerator so it acts like a WStorageGenerator, returning a set of updated keys
+export function *runReducer(g: ReducerGenerator<void>): WStorageGenerator<string[]> {
   const old: Record<string, StorageValue> = {};
   const updates: Record<string, StorageValue> = {};
 
-  let ans: ProjectorAnswer = {old: {}, get: {}, set: {}, del: {}};
+  let ans: ReducerAnswer = {old: {}, get: {}, set: {}, del: {}};
   // inflight is for gets we have submitted but haven't received
   // (you can have many olds or gets in flight simultaneously, but only one set, and it cannot be
   //  simultaneous with any gets)
@@ -589,7 +589,7 @@ export function *runProjector(g: ProjectorGenerator<void>): WStorageGenerator<st
   let pending: Record<string, {old?: true, get?: true, set?: true, del?: true}> = {};
   let storageQuestion: WStorageQuestion = {get: {}, set: {}, del: {}};
 
-  // run the projector to completion
+  // run the reducer to completion
   while (true) {
     let ready = true;
     while (ready) {
@@ -686,10 +686,10 @@ export function *runProjector(g: ProjectorGenerator<void>): WStorageGenerator<st
       }
     }
 
-    // interact with storage until we have an answer to return to the projectors
-    // TODO: this control flow has the weird effect that if parallel projector operations are in
+    // interact with storage until we have an answer to return to the reducers
+    // TODO: this control flow has the weird effect that if parallel reducer operations are in
     // flight, and one of those is a set or del requiring a get beforehand, we may likely only do
-    // the get, then return control to the projector, and only start the set after it returns again.
+    // the get, then return control to the reducer, and only start the set after it returns again.
     // But in practice, I think that is probably not a big concern.
     while (!ready) {
       const storageAnswer = yield storageQuestion;
@@ -1111,14 +1111,14 @@ export class QueryGraph<QX> {
 // frameworks /////////////////////////////////////////////////////////////////
 
 // check"p"oint
-// "P"rojectorConte"x"t
+// "R"educerConte"x"t
 // "Q"ueryConte"x"t
 // "E"vents
 // "C"ommands
-export class Framework<QX, PX, E, C, P> {
+export class Framework<QX, RX, E, C, P> {
   #storage: Storage;
   #shaper: (events: E[]) => {events: E[], checkpoint: P};
-  #projector: (events: E[]) => ProjectorGenerator<void>; // wrapper around user's projector
+  #reducer: (events: E[]) => ReducerGenerator<void>; // wrapper around user's reducer
   #forecaster: null | ((commands: C[]) => E[]);
   #forecastKey: null | ((event: E) => string);
   #onCommands: null | ((commands: C[], onSent: ()=> void) => void);
@@ -1142,13 +1142,13 @@ export class Framework<QX, PX, E, C, P> {
 
   constructor(
     qx: QX,
-    px: PX,
+    rx: RX,
     storage: Storage,
     callbacks: {
       // required: new events from the wire may be batched, and a checkpoint is produced
       shaper: (events: E[]) => {events: E[], checkpoint: P},
-      // required: project a batch of events into the read model
-      projector: (px: PX, events: E[]) => ProjectorGenerator<void>,
+      // required: reduce a batch of events into the read model
+      reducer: (rx: RX, events: E[]) => ReducerGenerator<void>,
       // optional: forecast the events a server will send for a command
       forecaster?: (commands: C[]) => E[],
       // required if using forecaster: create a unique forecast key for an event; used to create a
@@ -1161,7 +1161,7 @@ export class Framework<QX, PX, E, C, P> {
   ) {
     this.#storage = storage;
     this.#shaper = callbacks.shaper;
-    this.#projector = (events: E[]) => callbacks.projector(px, events);
+    this.#reducer = (events: E[]) => callbacks.reducer(rx, events);
     this.#forecaster = callbacks.forecaster ?? null;
     this.#forecastKey = callbacks.forecastKey ?? null;
     this.#onCommands = callbacks.onCommands ?? null;
@@ -1252,7 +1252,7 @@ export class Framework<QX, PX, E, C, P> {
 
     // populate the initial overlay
     yield* withWTxn(this.#fx, this.#overlay, function*() {
-      yield* runProjector(self.#projector(forecasts));
+      yield* runReducer(self.#reducer(forecasts));
       // ignore updated keys and don't trigger a run of the graph; let that happen as part of the
       // normal newQuery processing
     });
@@ -1265,7 +1265,7 @@ export class Framework<QX, PX, E, C, P> {
     // what are the different things we can have to do?
     // - receive events,
     //     - then shape them,
-    //     - then pass shaped events into projectors,
+    //     - then pass shaped events into reducers,
     //     - then commit that result along with the checkpoint,
     //     - then take the commit and pass it to the query graph
     // - recieve sentCommands and update commands in storage
@@ -1273,7 +1273,7 @@ export class Framework<QX, PX, E, C, P> {
     //     - then commit them to storage,
     //         - then send those to onCommand hook
     //     - then forecast events,
-    //     - then pass them to projectors,
+    //     - then pass them to reducers,
     //     - then commit that result to the overlay
     //     - then pass that commit to the query graph
     // - recieve a new query
@@ -1324,8 +1324,8 @@ export class Framework<QX, PX, E, C, P> {
       // update our checkpoint when this txn finishes
       yield* txnSet(".checkpoint", checkpoint);
 
-      // run the projector with our new events
-      return yield* runProjector(self.#projector(events));
+      // run the reducer with our new events
+      return yield* runReducer(self.#reducer(events));
     })
     this.#graph.dirty(updates);
 
@@ -1344,8 +1344,8 @@ export class Framework<QX, PX, E, C, P> {
     // rebuild overlay using all remaining forecasts
     if (this.#forecasts.size > 0) {
       yield* withWTxn(this.#fx, this.#overlay, function*(){
-        const updates = yield* runProjector(
-          self.#projector([...self.#forecasts.values()]),
+        const updates = yield* runReducer(
+          self.#reducer([...self.#forecasts.values()]),
         );
         self.#graph.dirty(updates);
       });
@@ -1394,7 +1394,7 @@ export class Framework<QX, PX, E, C, P> {
 
         // open a write txn against the existing overlay
         const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
-          return yield* runProjector(self.#projector(forecasts));
+          return yield* runReducer(self.#reducer(forecasts));
         });
         this.#graph.dirty(updates);
 

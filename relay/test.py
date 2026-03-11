@@ -54,7 +54,7 @@ assert x1 == x2, (x1, x2)
 class XErr(Exception):
     pass
 
-def inner():
+def inner() -> None:
     raise XErr(x1)
 
 try:

@@ -921,44 +921,44 @@ def generate_framework(d, annos, f):
         storage Storage,
         decoder Decoder[MyE],
         shaper Shaper[MyE, P],
-        projector string,
+        reducer string,
     ) (*MyFramework[P], error) {
         return NewFramework[MyQX, goja.Value, MyE, MyC, P](
             source,
             storage,
             decoder,
             shaper,
-            NewJSProjector[goja.Value, MyE]("MyPX", projector),
+            NewJSReducer[goja.Value, MyE]("MyRX", reducer),
             NewMyQX,
         )
     }
     """
     name = framework_name(f.name)
     QX = context_name(f.store.name) + 'QueryContext'
-    PX = "goja.Value"
-    px_name = context_name(f.store.name) + 'ProjectorContext'
+    RX = "goja.Value"
+    rx_name = context_name(f.store.name) + 'ReducerContext'
     E = annos[f.event_type]
     C = annos[f.command_type]
 
-    # type Framework[QX QueryContext, PX any, E any, C any, P any] struct {
-    d.print(f'\ntype {name}[P any] = Framework[{QX}, {PX}, {E}, {C}, P]\n')
+    # type Framework[QX QueryContext, RX any, E any, C any, P any] struct {
+    d.print(f'\ntype {name}[P any] = Framework[{QX}, {RX}, {E}, {C}, P]\n')
     d.print(f'\nfunc New{name}[P any](\n')
     d.indent('\t')
     d.print(f'script string,\n')
     d.print(f'storage Storage,\n')
     d.print(f'decoder string,\n')
     d.print(f'shaper string,\n')
-    d.print(f'projector string,\n')
+    d.print(f'reducer string,\n')
     d.dedent()
     d.print(f') (*{name}[P], error) {{\n')
     d.indent('\t')
-    d.print(f'return NewFramework[{QX}, {PX}, {E}, {C}, P](\n')
+    d.print(f'return NewFramework[{QX}, {RX}, {E}, {C}, P](\n')
     d.indent('\t')
     d.print(f'NewStringSource("bundle.js", script),\n')
     d.print(f'storage,\n')
     d.print(f'NewJSDecoder[{E}](decoder),\n')
     d.print(f'NewJSShaper[{E}, P](shaper),\n')
-    d.print(f'NewJSProjector[{PX}, {E}]("{px_name}", projector),\n')
+    d.print(f'NewJSReducer[{RX}, {E}]("{rx_name}", reducer),\n')
     d.print(f'func(vm *goja.Runtime, ask Ask) {QX} {{\n')
     d.print(f'\treturn New{QX}(vm, ask)\n')
     d.print(f'}},\n')

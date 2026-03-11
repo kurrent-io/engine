@@ -2,13 +2,13 @@ import dataclasses
 import os
 from typing import Any, List
 
-import library_gen as lg
+import model as model
 
-fw = lg.DeciderFramework[Any](
+fw = model.DeciderFramework[Any](
     os.path.join(os.path.dirname(__file__), "relay.js"),
     "InMemStorage",
     lambda events: {"events": events, "checkpoint": None},
-    "deciderProjector",
+    "deciderReducer",
 )
 
 event = {
@@ -17,7 +17,7 @@ event = {
     "title": "cheech-and-chong-learn-event-sourcing",
     "timestamp": "2025-01-24T15:54:32Z",
 }
-assert not (errors := lg.checkLibraryEvents(event)), "errors:\n  - " + "\n  - ".join(errors)
+assert not (errors := model.checkLibraryEvents(event)), "errors:\n  - " + "\n  - ".join(errors)
 
 @dataclasses.dataclass
 class Book:
@@ -25,7 +25,7 @@ class Book:
     copies: int
 
 @fw.new_query
-async def book_list(qx: lg.DeciderStoreQueryContext, *_: Any) -> List[Book]:
+async def book_list(qx: model.DeciderQueryContext, *_: Any) -> List[Book]:
     return [
         Book(
             title=(edition := await qx.edition(isbn)).title,

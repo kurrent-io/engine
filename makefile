@@ -6,7 +6,7 @@ LDFLAGS=-lpython3
 
 QUICKJS_LIBS=quickjs quickjs-libc libregexp libunicode cutils dtoa
 
-all: model python go ui
+all: model relay decider ui
 
 tools/gen_ts.py: tools/protos.py tools/skeleton.ts
 	@touch $@
@@ -23,33 +23,33 @@ model: model/library.gen.ts
 model/library.gen.ts: model/library.py tools/gen_ts.py model/reducers.ts model/tsconfig.json
 	python tools/protos.py -i tools -i model gen_ts library > $@
 
-.PHONY: python
-python: python/relay.js python/library_gen.py python/_quickjs.so
+.PHONY: relay
+relay: relay/relay.js relay/model.py relay/_quickjs.so
 
-python/relay.js: model/library.gen.ts model/relay.ts
-	cd model && pnpm rollup -m inline --exports named -p typescript relay.ts -o ../python/relay.js
+relay/relay.js: model/library.gen.ts model/relay.ts
+	cd model && pnpm rollup -m inline --exports named -p typescript relay.ts -o ../relay/relay.js
 
-python/library_gen.py: model/library.py tools/gen_py.py
+relay/model.py: model/library.py tools/gen_py.py
 	python tools/protos.py -i tools -i model gen_py library > $@
 
-python/quickjs/.obj/%.pic.o:
-	cd python/quickjs && $(MAKE) .obj/$(notdir $@)
+relay/quickjs/.obj/%.pic.o:
+	cd relay/quickjs && $(MAKE) .obj/$(notdir $@)
 
-python/_quickjs.so: python/_quickjs.c $(foreach lib,$(QUICKJS_LIBS),python/quickjs/.obj/$(lib).pic.o)
+relay/_quickjs.so: relay/_quickjs.c $(foreach lib,$(QUICKJS_LIBS),relay/quickjs/.obj/$(lib).pic.o)
 	$(CC) $(CFLAGS) -shared -o $@ $^ $(LDFLAGS)
 
-.PHONY: go
-go: go/decider
+.PHONY: decider
+decider: decider/decider
 
-go/decider.js: model/library.gen.ts model/decider.ts
-	cd model && pnpm rollup -m inline --format=cjs -p typescript decider.ts -o ../go/decider.js
+decider/decider.js: model/library.gen.ts model/decider.ts
+	cd model && pnpm rollup -m inline --format=cjs -p typescript decider.ts -o ../decider/decider.js
 
-go/model/model.go: model/library.py tools/gen_go.py
-	mkdir -p go/model
+decider/model/model.go: model/library.py tools/gen_go.py
+	mkdir -p decider/model
 	python tools/protos.py -i tools -i model gen_go library -- model > $@
 
-go/decider: go/decider.js go/main.go go/model/model.go
-	cd go && go build -o decider .
+decider/decider: decider/decider.js decider/main.go decider/model/model.go
+	cd decider && go build -o decider .
 
 .PHONY: ui
 ui: ui/src/model.js ui/src/model.d.ts
@@ -60,9 +60,14 @@ ui/src/model.js:
 ui/src/model.d.ts: model/library.gen.ts model/ui.ts
 	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
 
-.PHONY: ui/tsc
-ui/tsc: ui
+.PHONY: check
+check: model ui
+	cd model && tsc
 	cd ui && tsc
+	cd relay && mypy .
 
 clean:
-	@rm -f model/library.gen.ts python/relay.js python/_quickjs.so
+	@rm -f model/library.gen.ts \
+		relay/relay.js relay/_quickjs.so \
+		decider/decider decider/model/model.go \
+		ui/src/model.js ui/src/model.d.ts

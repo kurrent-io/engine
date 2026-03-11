@@ -284,26 +284,26 @@ def generate_store_prereqs(d):
     d.print("  return sv.value as T\n")
     d.print("};\n")
     d.print("\n")
-    d.print("function *projectorOld<T>(key: string): ProjectorGenerator<T> {\n")
+    d.print("function *reducerOld<T>(key: string): ReducerGenerator<T> {\n")
     d.print("  const ans = yield {'old': {[key]: true}};\n")
     d.print("  const sv = ans.old[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
     d.print("  return sv.value as T\n")
     d.print("};\n")
     d.print("\n")
-    d.print("function *projectorGet<T>(key: string): ProjectorGenerator<T> {\n")
+    d.print("function *reducerGet<T>(key: string): ReducerGenerator<T> {\n")
     d.print("  const ans = yield {'get': {[key]: true}};\n")
     d.print("  const sv = ans.get[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
     d.print("  return sv.value as T\n")
     d.print("};\n")
     d.print("\n")
-    d.print("function *projectorSet<T>(key: string, value: T): ProjectorGenerator<void> {\n")
+    d.print("function *reducerSet<T>(key: string, value: T): ReducerGenerator<void> {\n")
     d.print("  const ans = yield {'set': {[key]: value}};\n")
     d.print("  const sv = ans.set[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
     d.print("};\n")
-    d.print("function *projectorDel(key: string): ProjectorGenerator<void> {\n")
+    d.print("function *reducerDel(key: string): ReducerGenerator<void> {\n")
     d.print("  const ans = yield {'del': {[key]: true}};\n")
     d.print("  const sv = ans.del[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
@@ -340,48 +340,48 @@ def generate_store(d, annos, store):
     d.print(f"}};\n")
     d.print("\n")
 
-    # Generate the ProjectorContext singleton.
-    d.print(f"export const {context_name(store.name)}ProjectorContext = {{\n")
+    # Generate the ReducerContext singleton.
+    d.print(f"export const {context_name(store.name)}ReducerContext = {{\n")
     d.indent("  ")
 
     # generate old getters like:
-    # topic: (topic_uuid: Uuid) => projectorGetter<Topic>(`topic.${topic_uuid}`)
+    # topic: (topic_uuid: Uuid) => reducerGetter<Topic>(`topic.${topic_uuid}`)
     d.print("old: {\n")
     d.indent("  ")
     for si in original_items:
         d.print(f"{si.name}: (")
         d.print(", ".join(p + ": string" for p in si.params))
-        d.print(f") => projectorOld<{annos[si.type]}>(`")
+        d.print(f") => reducerOld<{annos[si.type]}>(`")
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{context_name(dep.name)}ProjectorContext.old,\n")
+        d.print(f"...{context_name(dep.name)}ReducerContext.old,\n")
     d.dedent()
     d.print("},\n")
 
     # generate getters like:
-    # topic: (topic_uuid: Uuid) => projectorGetter<Topic>(`topic.${topic_uuid}`)
+    # topic: (topic_uuid: Uuid) => reducerGetter<Topic>(`topic.${topic_uuid}`)
     d.print("get: {\n")
     d.indent("  ")
     for si in original_items:
         d.print(f"{si.name}: (")
         d.print(", ".join(p + ": string" for p in si.params))
-        d.print(f") => projectorGet<{annos[si.type]}>(`")
+        d.print(f") => reducerGet<{annos[si.type]}>(`")
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{context_name(dep.name)}ProjectorContext.get,\n")
+        d.print(f"...{context_name(dep.name)}ReducerContext.get,\n")
     d.dedent()
     d.print("},\n")
 
     # generate setters like:
-    # topic: (topic_uuid: Uuid, value: Topic) => projectorSetter(`topic.${topic_uuid}`, value)
+    # topic: (topic_uuid: Uuid, value: Topic) => reducerSetter(`topic.${topic_uuid}`, value)
     d.print("set: {\n")
     d.indent("  ")
     for si in original_items:
@@ -389,19 +389,19 @@ def generate_store(d, annos, store):
         d.print(", ".join(
             [*(p + f": string" for p in si.params), f"value: {annos[si.type]}"]
         ))
-        d.print(") => projectorSet(`")
+        d.print(") => reducerSet(`")
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
         d.print(f"`, value),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{context_name(dep.name)}ProjectorContext.set,\n")
+        d.print(f"...{context_name(dep.name)}ReducerContext.set,\n")
     d.dedent()
     d.print("},\n")
 
     # generate deleters like:
-    # topic: (topic_uuid: Uuid) => projectorDeleter(`topic.${topic_uuid}`)
+    # topic: (topic_uuid: Uuid) => reducerDeleter(`topic.${topic_uuid}`)
     d.print("del: {\n")
     d.indent("  ")
     for si in original_items:
@@ -409,14 +409,14 @@ def generate_store(d, annos, store):
         if not si.params: continue
         d.print(f"{si.name}: (")
         d.print(", ".join(p + f": string" for p in si.params))
-        d.print(") => projectorDel(`")
+        d.print(") => reducerDel(`")
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
         d.print(f"`),\n")
     # also use the spread operator to reuse definitions from our deps
     for dep in store.deps:
-        d.print(f"...{context_name(dep.name)}ProjectorContext.del,\n")
+        d.print(f"...{context_name(dep.name)}ReducerContext.del,\n")
     d.dedent()
     d.print("},\n")
 
@@ -426,20 +426,20 @@ def generate_store(d, annos, store):
 def generate_framework(d, annos, f):
     event_type = annos[f.event_type]
     command_type = annos[f.command_type]
-    px = f"{context_name(f.store.name)}ProjectorContext"
+    rx = f"{context_name(f.store.name)}ReducerContext"
     qx = f"{context_name(f.store.name)}QueryContext"
-    px_type = "typeof " + px
+    rx_type = "typeof " + rx
     qx_type = "typeof " + qx
 
     d.print(f"""
-export class {f.name}<P> extends Framework<{qx_type}, {px_type}, {event_type}, {command_type}, P> {{
+export class {f.name}<P> extends Framework<{qx_type}, {rx_type}, {event_type}, {command_type}, P> {{
   constructor(
     storage: Storage,
     callbacks: {{
       // required: new events from the wire may be batched, and a checkpoint is produced
       shaper: (events: {event_type}[]) => {{events: {event_type}[], checkpoint: P}},
-      // required: project a batch of events into the read model
-      projector: (px: {px_type}, events: {event_type}[]) => ProjectorGenerator<void>,
+      // required: reduce a batch of events into the read model
+      reducer: (rx: {rx_type}, events: {event_type}[]) => ReducerGenerator<void>,
       // optional: forecast the events a server will send for a command
       forecaster?: (commands: {command_type}[]) => {event_type}[],
       // required if using forecaster: create a unique forecast key for an event; used to create a
@@ -450,7 +450,7 @@ export class {f.name}<P> extends Framework<{qx_type}, {px_type}, {event_type}, {
       onCommands?: (commands: {command_type}[], onSent: ()=> void)=> void,
     }},
   ) {{
-    super({qx}, {px}, storage, callbacks);
+    super({qx}, {rx}, storage, callbacks);
   }}
 }}
 """)
