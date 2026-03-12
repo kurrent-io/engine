@@ -565,14 +565,14 @@ export type ReducerAnswer = {
   del: Record<string, StorageDone>,
 };
 
-export type ReducerGenerator<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
+export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
 // ReducerContext looks like:
 // yield* rx.set.project(key, val): set new value (you only get to set it once per txn)
 // yield* rx.get.project(key): get the current value for key, possibly setting it from old
 // yield* rx.old.project(key): explicitly get the old value for key
 
-// wrap a ReducerGenerator so it acts like a WStorageGenerator, returning a set of updated keys
-export function *runReducer(g: ReducerGenerator<void>): WStorageGenerator<string[]> {
+// wrap a Reducer so it acts like a WStorageGenerator, returning a set of updated keys
+export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
   const old: Record<string, StorageValue> = {};
   const updates: Record<string, StorageValue> = {};
 
@@ -1118,7 +1118,7 @@ export class QueryGraph<QX> {
 export class Framework<QX, RX, E, C, P> {
   #storage: Storage;
   #shaper: (events: E[]) => {events: E[], checkpoint: P};
-  #reducer: (events: E[]) => ReducerGenerator<void>; // wrapper around user's reducer
+  #reducer: (events: E[]) => Reducer<void>; // wrapper around user's reducer
   #forecaster: null | ((commands: C[]) => E[]);
   #forecastKey: null | ((event: E) => string);
   #onCommands: null | ((commands: C[], onSent: ()=> void) => void);
@@ -1148,7 +1148,7 @@ export class Framework<QX, RX, E, C, P> {
       // required: new events from the wire may be batched, and a checkpoint is produced
       shaper: (events: E[]) => {events: E[], checkpoint: P},
       // required: reduce a batch of events into the read model
-      reducer: (rx: RX, events: E[]) => ReducerGenerator<void>,
+      reducer: (rx: RX, events: E[]) => Reducer<void>,
       // optional: forecast the events a server will send for a command
       forecaster?: (commands: C[]) => E[],
       // required if using forecaster: create a unique forecast key for an event; used to create a

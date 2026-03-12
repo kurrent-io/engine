@@ -284,39 +284,67 @@ def generate_store_prereqs(d):
     d.print("  return sv.value as T\n")
     d.print("};\n")
     d.print("\n")
-    d.print("function *reducerOld<T>(key: string): ReducerGenerator<T> {\n")
+    d.print("function *reducerOld<T>(key: string): Reducer<T> {\n")
     d.print("  const ans = yield {'old': {[key]: true}};\n")
     d.print("  const sv = ans.old[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
     d.print("  return sv.value as T\n")
     d.print("};\n")
     d.print("\n")
-    d.print("function *reducerGet<T>(key: string): ReducerGenerator<T> {\n")
+    d.print("function *reducerGet<T>(key: string): Reducer<T> {\n")
     d.print("  const ans = yield {'get': {[key]: true}};\n")
     d.print("  const sv = ans.get[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
     d.print("  return sv.value as T\n")
     d.print("};\n")
     d.print("\n")
-    d.print("function *reducerSet<T>(key: string, value: T): ReducerGenerator<void> {\n")
+    d.print("function *reducerSet<T>(key: string, value: T): Reducer<void> {\n")
     d.print("  const ans = yield {'set': {[key]: value}};\n")
     d.print("  const sv = ans.set[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
     d.print("};\n")
-    d.print("function *reducerDel(key: string): ReducerGenerator<void> {\n")
+    d.print("function *reducerDel(key: string): Reducer<void> {\n")
     d.print("  const ans = yield {'del': {[key]: true}};\n")
     d.print("  const sv = ans.del[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
     d.print("};\n")
+    d.print("function *reducerUpdate<T, R>(key: string, fn: (t: T) => R): Reducer<R> {\n")
+    d.print("  const obj = yield* reducerGet<T>(key);\n")
+    d.print("  const out = fn(obj);\n")
+    d.print("  yield* reducerSet(key, obj);\n")
+    d.print("  return out;\n")
+    d.print("}\n")
+    d.print('export type NoSet<T extends {\n')
+    d.print('  "get": unknown, "old": unknown, "del": unknown, "update": unknown\n')
+    d.print('}> = Pick<T, "get"|"old"|"del"|"update">;\n')
 
 
 def context_name(name):
     return name[:-5] if name.endswith("Store") else name
 
 
+def is_updatable(t):
+    """
+    is_updatable returns if a type is suitable for an rx.update member.
+
+    The rx.update pattern is to accept a mutator function which updates-in-place its parameter.
+    This is for two reasons:
+    - ergonomically, it means many updates are one-liners
+    - it makes it possible to write a type-safe updater that works against many variants of a store
+
+    Therefore we can only create updaters for certain kinds of types.
+    """
+    if isinstance(t, (ConcreteArray, ConcreteTuple, ConcreteStruct, ConcreteObject)):
+        return True
+    if isinstance(t, ConcreteUnion):
+        return all(is_mutable(ut) for ut in t.types)
+    return False
+
+
 def generate_store(d, annos, store):
+    ctx_name = context_name(store.name)
     # Generate the QueryContext singleton.
-    d.print(f"\nexport const {context_name(store.name)}QueryContext = {{\n")
+    d.print(f"\nexport const {ctx_name}QueryContext = {{\n")
     d.indent("  ")
     # generate getters like:
     # topic: (topic_uuid: Uuid) => queryGet<Topic>(`topic.${topic_uuid}`)
@@ -339,9 +367,11 @@ def generate_store(d, annos, store):
     d.dedent()
     d.print(f"}};\n")
     d.print("\n")
+    # also create typeof shorthand
+    d.print(f"\nexport type {ctx_name}QX = typeof {ctx_name}QueryContext;\n")
 
     # Generate the ReducerContext singleton.
-    d.print(f"export const {context_name(store.name)}ReducerContext = {{\n")
+    d.print(f"export const {ctx_name}ReducerContext = {{\n")
     d.indent("  ")
 
     # generate old getters like:
@@ -408,7 +438,7 @@ def generate_store(d, annos, store):
         # no point in adding deleters for indices (when there isn't a param)
         if not si.params: continue
         d.print(f"{si.name}: (")
-        d.print(", ".join(p + f": string" for p in si.params))
+        d.print(", ".join(p + ": string" for p in si.params))
         d.print(") => reducerDel(`")
         for chunk, param in zip(si.chunks[:-1], si.params):
             d.print(chunk + "${" + param + "}")
@@ -420,26 +450,47 @@ def generate_store(d, annos, store):
     d.dedent()
     d.print("},\n")
 
+    # compound types (objects and arrays) also get updaters
+    d.print("update: {\n")
+    d.indent("  ")
+    for si in original_items:
+        if not is_updatable(si.type): continue
+        d.print(f"{si.name}: <R>(")
+        d.print("".join(p + ": string, " for p in si.params))
+        d.print(f"fn: (value: {annos[si.type]}) => R")
+        d.print(") => reducerUpdate(`")
+        for chunk, param in zip(si.chunks[:-1], si.params):
+            d.print(chunk + "${" + param + "}")
+        d.print(si.chunks[-1])
+        d.print(f"`, fn),\n")
+    d.dedent()
+    for dep in store.deps:
+        d.print(f"...{context_name(dep.name)}ReducerContext.update,\n")
+    d.print("},\n")
+
     d.dedent()
     d.print(f"}};\n")
+    # also create typeof shorthand
+    d.print(f"\nexport type {ctx_name}RX = typeof {ctx_name}ReducerContext;\n")
 
 def generate_framework(d, annos, f):
     event_type = annos[f.event_type]
     command_type = annos[f.command_type]
-    rx = f"{context_name(f.store.name)}ReducerContext"
-    qx = f"{context_name(f.store.name)}QueryContext"
-    rx_type = "typeof " + rx
-    qx_type = "typeof " + qx
+    ctx_name = context_name(f.store.name)
+    rx = f"{ctx_name}ReducerContext"
+    qx = f"{ctx_name}QueryContext"
+    RX = f"{ctx_name}RX"
+    QX = f"{ctx_name}QX"
 
     d.print(f"""
-export class {f.name}<P> extends Framework<{qx_type}, {rx_type}, {event_type}, {command_type}, P> {{
+export class {f.name}<P> extends Framework<{QX}, {RX}, {event_type}, {command_type}, P> {{
   constructor(
     storage: Storage,
     callbacks: {{
       // required: new events from the wire may be batched, and a checkpoint is produced
       shaper: (events: {event_type}[]) => {{events: {event_type}[], checkpoint: P}},
       // required: reduce a batch of events into the read model
-      reducer: (rx: {rx_type}, events: {event_type}[]) => ReducerGenerator<void>,
+      reducer: (rx: {RX}, events: {event_type}[]) => Reducer<void>,
       // optional: forecast the events a server will send for a command
       forecaster?: (commands: {command_type}[]) => {event_type}[],
       // required if using forecaster: create a unique forecast key for an event; used to create a

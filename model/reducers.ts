@@ -28,8 +28,6 @@ time (for instance, there is a book signed by the author that we want to keep as
 
 */
 
-// import { ReducerGenerator } from './skeleton';
-
 import {
   Book,
   Hold,
@@ -54,20 +52,18 @@ import {
   EndCheckout,
   OverdueCheckout,
   LibraryEvents,
-  BookReducerContext,
-  PatronReducerContext,
-  StatusReducerContext,
-  VStatusReducerContext,
-  DeciderReducerContext,
-  UserReducerContext,
+  BookRX,
+  PatronRX,
+  StatusRX,
+  VStatusRX,
+  DeciderRX,
+  UserRX,
+  NoSet,
 
-  ReducerGenerator,
+  Reducer,
 } from './library.gen';
 
-
-type BooksRX = typeof BookReducerContext;
-
-function *reduceAddEdition(rx: BooksRX, e: AddEdition): ReducerGenerator<void> {
+function *reduceAddEdition(rx: BookRX, e: AddEdition): Reducer<void> {
   // add this edition
   yield* rx.set.edition(e.isbn, {
     isbn: e.isbn,
@@ -76,18 +72,16 @@ function *reduceAddEdition(rx: BooksRX, e: AddEdition): ReducerGenerator<void> {
     holds: {},
   });
   // create new edition
-  const editions = (yield* rx.get.editions()) ?? {}; // TODO: maybe formalize migrations somehow?
+  const editions = (yield* rx.get.editions()) ?? {}; // TODO: figure out a migration strategy
   editions[e.isbn] = true;
   yield* rx.set.editions(editions);
 }
 
-function *reduceUpdateEditionTitle(rx: BooksRX, e: UpdateEditionTitle): ReducerGenerator<void> {
-  const edition = yield* rx.get.edition(e.isbn);
-  edition.title = e.title;
-  yield* rx.set.edition(e.isbn, edition);
+function *reduceUpdateEditionTitle(rx: BookRX, e: UpdateEditionTitle): Reducer<void> {
+  yield* rx.update.edition(e.isbn, (edition) => edition.title = e.title);
 }
 
-function *reduceAddBook(rx: BooksRX, e: AddBook): ReducerGenerator<void> {
+function *reduceAddBook(rx: BookRX, e: AddBook): Reducer<void> {
   // create new book
   yield* rx.set.book(e.id, {
     id: e.id,
@@ -95,29 +89,21 @@ function *reduceAddBook(rx: BooksRX, e: AddBook): ReducerGenerator<void> {
     restricted: e.restricted,
   });
   // add book to edition
-  const edition = yield* rx.get.edition(e.isbn);
-  edition.books[e.id] = true
-  yield* rx.set.edition(e.isbn, edition);
+  yield* rx.update.edition(e.isbn, (edition) => edition.books[e.id] = true);
 }
 
-function *reduceUpdateBookRestricted(rx: BooksRX, e: UpdateBookRestricted): ReducerGenerator<void> {
-  const book = yield* rx.get.book(e.id);
-  book.restricted = e.restricted;
-  yield* rx.set.book(e.id, book);
+function *reduceUpdateBookRestricted(rx: BookRX, e: UpdateBookRestricted): Reducer<void> {
+  yield* rx.update.book(e.id, (book) => book.restricted = true);
 }
 
-function *reduceRemoveBook(rx: BooksRX, e: RemoveBook): ReducerGenerator<void> {
+function *reduceRemoveBook(rx: BookRX, e: RemoveBook): Reducer<void> {
   const book = yield* rx.get.book(e.id);
   yield* rx.del.book(e.id);
   // just remove from edition
-  const edition = yield* rx.get.edition(book.isbn);
-  delete edition.books[e.id];
-  yield* rx.set.edition(book.isbn, edition);
+  yield* rx.update.edition(book.isbn, (edition) => delete edition.books[e.id]);
 }
 
-type PatronsRX = typeof PatronReducerContext;
-
-function *reduceAddPatron(rx: PatronsRX, e: AddPatron): ReducerGenerator<void> {
+function *reduceAddPatron(rx: PatronRX, e: AddPatron): Reducer<void> {
   yield* rx.set.patron(e.id, {
     id: e.id,
     name: e.name,
@@ -127,33 +113,35 @@ function *reduceAddPatron(rx: PatronsRX, e: AddPatron): ReducerGenerator<void> {
   });
 }
 
-function *reduceRenamePatron(rx: PatronsRX, e: RenamePatron): ReducerGenerator<void> {
-  const patron = yield* rx.get.patron(e.id);
-  patron.name = e.name;
-  yield* rx.set.patron(e.id, patron);
+function *reduceRenamePatron(rx: PatronRX, e: RenamePatron): Reducer<void> {
+  yield* rx.update.patron(e.id, (patron) => patron.name = e.name);
 }
 
 // returns nowInvalidHolds
-function *reduceAssignPatron(rx: PatronsRX, e: AssignPatron): ReducerGenerator<string[]> {
+function *reduceAssignPatron(
+  rx: PatronRX & BookRX & NoSet<StatusRX|VStatusRX>, e: AssignPatron,
+): Reducer<string[]> {
   const patron = yield* rx.get.patron(e.id);
   patron.researcher = e.researcher;
   // check for now-invalid holds
   const invalidHolds: string[] = [];
-  for (const hold_uuid of Object.keys(patron.holds)) {
-    const hold = yield* (rx as any).get.hold(hold_uuid);  // TODO: fix types
-    if ("edition" in hold.target) continue;
-    const book = yield* (rx as any).get.book(hold.target.book); // TODO: fix types
-    if (!book.restricted) continue;
-    invalidHolds.push(hold_uuid);
+  if (!patron.researcher) {
+    for (const hold_uuid of Object.keys(patron.holds)) {
+      const hold = yield* rx.get.hold(hold_uuid);
+      if ("edition" in hold.target) continue;
+      const book = yield* rx.get.book(hold.target.book);
+      if (!book.restricted) continue;
+      invalidHolds.push(hold_uuid);
+    }
   }
   yield* rx.set.patron(e.id, patron);
   return invalidHolds;
 }
 
-type StatusRX = typeof StatusReducerContext & PatronsRX & BooksRX;
+type FullStatusRX = StatusRX & PatronRX & BookRX;
 
 // returns rejection reason, or an empty string
-function *reduceTryHold(rx: StatusRX, e: TryHold): ReducerGenerator<string> {
+function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
   // patron checks
   const patron = yield* rx.get.patron(e.id);
   if (!patron.researcher && e.open) {
@@ -223,13 +211,10 @@ function *reduceTryHold(rx: StatusRX, e: TryHold): ReducerGenerator<string> {
 
   if ("book" in e.target) {
     // add the hold to this book
-    const book = yield* rx.get.book(e.target.book);
-    book.status = { hold: hold.id };
-    yield* rx.set.book(e.target.book, book);
+    yield* rx.update.book(e.target.book, (book) => book.status = { hold: hold.id });
   } else {
     // add the hold to this edition
-    edition.holds[hold.id] = true;
-    yield* rx.set.edition(e.target.edition, edition);
+    yield* rx.update.edition(e.target.edition, (edition) => edition.holds[hold.id] = true);
   }
 
   // TODO: update patron.holds
@@ -238,7 +223,7 @@ function *reduceTryHold(rx: StatusRX, e: TryHold): ReducerGenerator<string> {
   return "";
 }
 
-function *reduceEndHold(rx: StatusRX, e: CancelHold|ExpireHold): ReducerGenerator<void> {
+function *reduceEndHold(rx: FullStatusRX, e: CancelHold|ExpireHold): Reducer<void> {
   // look up the hold
   const hold = yield* rx.get.hold(e.hold);
   // be idempotent
@@ -247,26 +232,18 @@ function *reduceEndHold(rx: StatusRX, e: CancelHold|ExpireHold): ReducerGenerato
   yield* rx.del.hold(e.hold);
   // update hold target (book or edition)
   if ("book" in hold.target) {
-    const book = yield* rx.get.book(hold.target.book);
-    delete book.status;
-    yield* rx.set.book(hold.target.book, book);
+    yield* rx.update.book(hold.target.book, (book) => delete book.status);
   } else {
-    const edition = yield* rx.get.edition(hold.target.edition);
-    delete edition.holds[e.hold]
-    yield* rx.set.edition(hold.target.edition, edition);
+    yield* rx.update.edition(hold.target.edition, (edition) => delete edition.holds[e.hold]);
   }
   // update patron
-  const patron = yield* rx.get.patron(hold.patron);
-  delete patron.holds[hold.id];
-  yield* rx.set.patron(hold.patron, patron);
+  yield* rx.update.patron(hold.patron, (patron) => delete patron.holds[hold.id]);
   // update active holds
-  const active_holds = yield* rx.get.active_holds();
-  delete active_holds[e.hold];
-  yield* rx.set.active_holds(active_holds);
+  yield* rx.update.active_holds((active_holds) => delete active_holds[e.hold]);
 }
 
 // returns rejection reason, or an empty string
-function *reduceTryCheckout(rx: StatusRX, e: TryCheckout): ReducerGenerator<string> {
+function *reduceTryCheckout(rx: FullStatusRX, e: TryCheckout): Reducer<string> {
   /* the domain description does not mention if hold limits and overdue restrictions
      apply to checkouts, but let us assume that they do */
 
@@ -370,38 +347,29 @@ function *reduceTryCheckout(rx: StatusRX, e: TryCheckout): ReducerGenerator<stri
   return "";
 }
 
-function *reduceEndCheckout(rx: StatusRX, e: EndCheckout): ReducerGenerator<void> {
+function *reduceEndCheckout(rx: FullStatusRX, e: EndCheckout): Reducer<void> {
   const checkout = yield* rx.get.checkout(e.checkout);
   /* no need for idempotency; only the front desk can end a checkout and that system should
      guarantee exactly-once behavior */
   yield* rx.del.checkout(e.checkout);
   // update book
-  const book = yield* rx.get.book(checkout.book);
-  delete book.status;
-  yield* rx.set.book(checkout.book, book);
+  yield* rx.update.book(checkout.book, (book) => delete book.status);
   // update patron
-  const patron = yield* rx.get.patron(checkout.patron);
-  delete patron.checkouts[checkout.id];
-  yield* rx.set.patron(checkout.patron, patron);
+  yield* rx.update.patron(checkout.patron, (patron) => delete patron.checkouts[e.checkout]);
   // update active checkouts
-  const active_checkouts = yield* rx.get.active_checkouts();
-  delete active_checkouts[e.checkout];
-  yield* rx.set.active_checkouts(active_checkouts);
+  yield* rx.update.active_checkouts((active_checkouts) => delete active_checkouts[e.checkout])
 }
 
 // reusable for either status or vstatus stores
 function *reduceOverdueCheckout(
-  rx: typeof StatusReducerContext | typeof VStatusReducerContext,
-  e: OverdueCheckout,
-): ReducerGenerator<void> {
-  const checkout = yield* (rx as any).get.checkout(e.checkout); // TODO: fix types
-  checkout.overdue = true
-  yield* rx.set.checkout(e.checkout, checkout);
+  rx: NoSet<StatusRX | VStatusRX>, e: OverdueCheckout,
+): Reducer<void> {
+  yield* rx.update.checkout(e.checkout, (checkout) => checkout.overdue = true);
 }
 
-type VStatusRX = typeof VStatusReducerContext & BooksRX & PatronsRX;
+type FullVStatusRX = VStatusRX & BookRX & PatronRX;
 
-function *reduceNewVHold(rx: VStatusRX, e: NewVHold): ReducerGenerator<void> {
+function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold): Reducer<void> {
   const hold: VHold = {
     id: e.id,
     target: e.target,
@@ -410,12 +378,12 @@ function *reduceNewVHold(rx: VStatusRX, e: NewVHold): ReducerGenerator<void> {
   yield* rx.set.hold(e.id, hold);
 }
 
-function *reduceVHoldRejected(rx: VStatusRX, e: VHoldRejected): ReducerGenerator<void> {
+function *reduceVHoldRejected(rx: FullVStatusRX, e: VHoldRejected): Reducer<void> {
   // TODO: handle this
   console.log(rx, e);
 }
 
-function *reduceVEndHold(rx: VStatusRX, e: CancelHold|ExpireHold): ReducerGenerator<void> {
+function *reduceVEndHold(rx: FullVStatusRX, e: CancelHold|ExpireHold): Reducer<void> {
   // look up the hold
   const hold = yield* rx.get.hold(e.hold);
   // be idempotent
@@ -424,23 +392,17 @@ function *reduceVEndHold(rx: VStatusRX, e: CancelHold|ExpireHold): ReducerGenera
   yield* rx.del.hold(e.hold);
   // update hold target (book or edition)
   if ("book" in hold.target) {
-    const book = yield* rx.get.book(hold.target.book);
-    delete book.status;
-    yield* rx.set.book(hold.target.book, book);
+    yield* rx.update.book(hold.target.book, (book) => delete book.status);
   } else {
-    const edition = yield* rx.get.edition(hold.target.edition);
-    delete edition.holds[e.hold]
-    yield* rx.set.edition(hold.target.edition, edition);
+    yield* rx.update.edition(hold.target.edition, (edition) => delete edition.holds[e.hold]);
   }
   // update patron
   if (hold.patron) {
-    const patron = yield* rx.get.patron(hold.patron);
-    delete patron.holds[hold.id];
-    yield* rx.set.patron(hold.patron, patron);
+    yield* rx.update.patron(hold.patron, (patron) => delete patron.holds[hold.id]);
   }
 }
 
-function *reduceNewVCheckout(rx: VStatusRX, e: NewVCheckout): ReducerGenerator<void> {
+function *reduceNewVCheckout(rx: FullVStatusRX, e: NewVCheckout): Reducer<void> {
   console.log("handling new vcheckout");
   const checkout: VCheckout = {
     id: e.id,
@@ -448,38 +410,30 @@ function *reduceNewVCheckout(rx: VStatusRX, e: NewVCheckout): ReducerGenerator<v
     expires: e.expires,
     overdue: false,
   };
+  yield* rx.set.checkout(e.id, checkout);
   if (e.patron){
     checkout.patron = e.patron;
     // also update our patron object
-    const patron = yield* rx.get.patron(e.patron);
-    patron.checkouts[e.id] = true;
-    yield* rx.set.patron(e.patron, patron);
+    yield *rx.update.patron(e.patron, (patron) => patron.checkouts[e.id] = true);
   }
-  yield* rx.set.checkout(e.id, checkout);
 }
 
-function *reduceVEndCheckout(rx: VStatusRX, e: EndCheckout): ReducerGenerator<void> {
+function *reduceVEndCheckout(rx: FullVStatusRX, e: EndCheckout): Reducer<void> {
   const checkout = yield* rx.get.checkout(e.checkout);
   /* no need for idempotency; only the front desk can end a checkout and that system should
      guarantee exactly-once behavior */
   yield* rx.del.checkout(e.checkout);
   // update book
-  const book = yield* rx.get.book(checkout.book);
-  delete book.status;
-  yield* rx.set.book(checkout.book, book);
+  yield* rx.update.book(checkout.book, (book) => delete book.status);
   // update patron
   if (checkout.patron) {
-    const patron = yield* rx.get.patron(checkout.patron);
-    delete patron.checkouts[checkout.id];
-    yield* rx.set.patron(checkout.patron, patron);
+    yield* rx.update.patron(checkout.patron, (patron) => delete patron.checkouts[checkout.id]);
   }
 }
 
 /* ---------------------- */
 
-export function *deciderReducer(
-  rx: typeof DeciderReducerContext, events: LibraryEvents[],
-): ReducerGenerator<void> {
+export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer<void> {
   const deciderEvents: DeciderEvents[] = [];
 
   for (const e of events) {
@@ -498,18 +452,15 @@ export function *deciderReducer(
           const hold = yield* rx.get.hold(hold_uuid);
           if ("book" in hold.target) {
             // update book as not held
-            const book = yield* rx.get.book(hold.target.book);
-            delete book.status;
-            yield* rx.set.book(hold.target.book, book);
+            yield* rx.update.book(hold.target.book, (book) => delete book.status);
           } else {
             // remove a hold from the edition
-            const edition = yield* rx.get.edition(hold.target.edition);
-            delete edition.holds[hold.id];
-            yield* rx.set.edition(hold.target.edition, edition);
+            yield* rx.update.edition(
+              hold.target.edition, (edition) => delete edition.holds[hold.id],
+            );
           }
           // remove hold from patron
-          const patron = yield* rx.get.patron(hold.patron);
-          delete patron.holds[hold_uuid];
+          yield* rx.update.patron(hold.patron, (patron) => delete patron.holds[hold_uuid]);
           // delete this hold
           yield* rx.del.hold(hold_uuid);
         }
@@ -556,9 +507,7 @@ export function *deciderReducer(
 }
 
 // client composition
-export function *userReducer(
-  rx: typeof UserReducerContext, events: LibraryEvents[],
-): ReducerGenerator<void> {
+export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<void> {
   for (const e of events) {
     // extend read model
     switch(e.type){
