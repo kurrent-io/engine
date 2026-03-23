@@ -9,6 +9,1065 @@ export function setdefault<T>(obj: Record<string, T>, key: string, dfault: T): T
   }
 }
 
+const copySym = Symbol();
+
+export function deepCopy<T>(base: T): T {
+  switch (typeof base) {
+    case "boolean":
+    case "bigint":
+    case "number":
+    case "string":
+    case "undefined":
+      // these types are already immutable
+      return base;
+
+    case "object":
+      // null handled here
+      if (base === null) return base;
+      // general objects handled below
+      break;
+
+    case "symbol":
+    case "function":
+    default:
+      throw new Error(`base of type "${typeof base}" not handled by readOnly`);
+  }
+
+  // handle read-only and proxy objects in an efficient way
+  const copier = (base as any)[copySym];
+  if (copier) return copier();
+
+  // object handling
+  if (Array.isArray(base)) return [...base].map(deepCopy) as T;
+  if (base instanceof Map) {
+    const out = new Map();
+    for (const [k, v] of base) out.set(k, deepCopy(v));
+    return out as T;
+  }
+  if (base instanceof Set) return new Set(base) as T;  // object keys not allowed anyway
+  if (base instanceof Date) return new Date(base) as T;
+  const proto = Object.getPrototypeOf(base);
+  if (proto && proto !== Object.prototype) {
+    throw new Error(`base has a nonstandard protoype`);
+  }
+
+  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, deepCopy(v)])) as T;
+}
+
+export function readOnly<T>(base: T): Readonly<T> {
+  switch (typeof base) {
+    case "boolean":
+    case "bigint":
+    case "number":
+    case "string":
+    case "undefined":
+      // these types are already immutable
+      return base;
+
+    case "object":
+      // null handled here
+      if (base === null) return base;
+      // general objects handled below
+      break;
+
+    case "symbol":
+    case "function":
+    default:
+      throw new Error(`base of type "${typeof base}" not handled by readOnly`);
+  }
+
+  // object handling
+  if (Array.isArray(base)) return readOnlyArray(base) as T;
+  if (base instanceof Map) return readOnlyMap(base) as T;
+  if (base instanceof Set) return readOnlySet(base) as T;
+  if (base instanceof Date) return readOnlyDate(base) as T;
+  const proto = Object.getPrototypeOf(base);
+  if (proto && proto !== Object.prototype) {
+    throw new Error(`base has a nonstandard protoype`);
+  }
+
+  return readOnlyObject(base as any) as T;
+}
+
+function throwReadOnlyError(): any {
+  throw new Error("object is read-only and may not be modified");
+}
+
+function readOnlyObject<T>(base: Record<string, T>): Readonly<Record<string, T>> {
+  const cache: Record<string, any> = {};
+
+  return new Proxy(base, {
+    defineProperty: throwReadOnlyError,
+    deleteProperty: throwReadOnlyError,
+    set: throwReadOnlyError,
+    get(_, prop: any) {
+      if (prop === copySym) return () => deepCopy(base);
+
+      if (Object.hasOwn(cache, prop)) return cache[prop];
+      if (Object.hasOwn(base, prop)) {
+        const value = readOnly(base[prop]);
+        cache[prop] = value;
+        return value;
+      }
+
+      let value = base[prop];
+
+      if (value === undefined) {
+        return value;
+      }
+
+      if (value instanceof Function) {
+        return (...args: any[]) => value.apply(base, args);
+      }
+
+      const ro = readOnly(value);
+      cache[prop] = ro;
+      return ro;
+    },
+  });
+}
+
+function readOnlyArray<T>(base: T[]): Readonly<T[]> {
+  const cache = Array(base.length);
+  let filled = false;
+
+  function dirty1(n: number): T | undefined {
+    if (Object.hasOwn(cache, n)) return cache[n];
+    if (!Object.hasOwn(base, n)) return undefined;
+    const ro = readOnly(base[n]);
+    cache[n] = ro;
+    return ro;
+  }
+
+  function dirtyAll(){
+    // all items at once
+    if (filled) return cache;
+    filled = true;
+    for (const n of base.keys()) dirty1(n);
+    return cache;
+  }
+
+  const roArrayMethods: any = {
+    // special
+    at: (index: number) => dirty1(index > -1 ? index : base.length + index),
+
+    // things which require dirtyAll(), then run against the full shallow copy
+    concat: (...args: any) => base.concat.apply(dirtyAll(), args),
+    entries: (...args: any) => base.entries.apply(dirtyAll(), args),
+    every: (...args: any) => base.every.apply(dirtyAll(), args),
+    filter: (...args: any) => base.filter.apply(dirtyAll(), args),
+    find: (...args: any) => base.find.apply(dirtyAll(), args),
+    findIndex: (...args: any) => base.findIndex.apply(dirtyAll(), args),
+    findLast: (...args: any) => (base as any).findLast.apply(dirtyAll(), args),
+    findLastIndex: (...args: any) => (base as any).findLastIndex.apply(dirtyAll(), args),
+    flat: (...args: any) => base.flat.apply(dirtyAll(), args),
+    flatMap: (...args: any) => base.flatMap.apply(dirtyAll(), args),
+    forEach: (...args: any) => base.forEach.apply(dirtyAll(), args),
+    map: (...args: any) => base.map.apply(dirtyAll(), args),
+    reduce: (...args: any) => base.reduce.apply(dirtyAll(), args),
+    reduceRight: (...args: any) => base.reduceRight.apply(dirtyAll(), args),
+    slice: (...args: any) => base.slice.apply(dirtyAll(), args),
+    some: (...args: any) => base.some.apply(dirtyAll(), args),
+    toReversed: (...args: any) => (base as any).toReversed.apply(dirtyAll(), args),
+    toSorted: (...args: any) => (base as any).toSorted.apply(dirtyAll(), args),
+    toSpliced: (...args: any) => (base as any).toSpliced.apply(dirtyAll(), args),
+    values: (...args: any) => base.values.apply(dirtyAll(), args),
+    with: (...args: any) => (base as any).with.apply(dirtyAll(), args),
+    [Symbol.iterator]: (...args: any) => base[Symbol.iterator].apply(dirtyAll(), args),
+
+    // safe getters
+    indexOf: (...args: any) => (base as any).indexOf(...args),
+    join: (...args: any) => (base as any).join(...args),
+    keys: (...args: any) => (base as any).keys(...args),
+    lastIndexOf: (...args: any) => (base as any).lastIndexOf(...args),
+    toLocaleString: (...args: any) => (base as any).toLocaleString(...args),
+    toString: (...args: any) => (base as any).toString(...args),
+
+    // disallowed
+    push: throwReadOnlyError,
+    pop: throwReadOnlyError,
+    shift: throwReadOnlyError,
+    reverse: throwReadOnlyError,
+    copyWithin: throwReadOnlyError,
+    fill: throwReadOnlyError,
+    sort: throwReadOnlyError,
+    splice: throwReadOnlyError,
+    unshift: throwReadOnlyError,
+  };
+
+  return new Proxy(base, {
+    defineProperty: throwReadOnlyError,
+    deleteProperty: throwReadOnlyError,
+    set: throwReadOnlyError,
+
+    get(_, prop: any) {
+      if (prop === copySym) return () => deepCopy(base);
+
+      if (Object.hasOwn(cache, prop)) return cache[prop];
+      if (Object.hasOwn(base, prop)) {
+        const value = readOnly(base[prop]);
+        cache[prop] = value;
+        return value;
+      }
+
+      const method = roArrayMethods[prop];
+      if (method) return method;
+
+      return base[prop];
+    },
+  });
+}
+
+const roDatePrototype = {
+  setDate: throwReadOnlyError,
+  setFullYear: throwReadOnlyError,
+  setHours: throwReadOnlyError,
+  setMilliseconds: throwReadOnlyError,
+  setMinutes: throwReadOnlyError,
+  setMonth: throwReadOnlyError,
+  setSeconds: throwReadOnlyError,
+  setTime: throwReadOnlyError,
+  setUTCDate: throwReadOnlyError,
+  setUTCFullYear: throwReadOnlyError,
+  setUTCHours: throwReadOnlyError,
+  setUTCMilliseconds: throwReadOnlyError,
+  setUTCMinutes: throwReadOnlyError,
+  setUTCMonth: throwReadOnlyError,
+  setUTCSeconds: throwReadOnlyError,
+  setYear: throwReadOnlyError,
+}
+Object.setPrototypeOf(roDatePrototype, Date.prototype);
+
+function readOnlyDate(base: Date): Readonly<Date> {
+  // copy instead of proxy
+  const out = new Date(base);
+  Object.setPrototypeOf(out, roDatePrototype);
+  return out;
+}
+
+function readOnlyMap<K, V>(base: Map<K, V>): Readonly<Map<K, Readonly<V>>> {
+  const cache: Map<K, Readonly<V>> = new Map();
+  let filled = false;
+
+  function dirty1(k: K): V | undefined {
+    if (filled || cache.has(k)) return cache.get(k);
+    if (!base.has(k)) return undefined;
+    const ro = readOnly(base.get(k)!);
+    cache.set(k, ro);
+    return ro;
+  }
+
+  function dirtyAll() {
+    if (filled) return cache;
+    filled = true;
+    for (const k of base.keys()) {
+      if (cache.has(k)) continue;
+      cache.set(k, readOnly(base.get(k)!));
+    }
+    return cache;
+  }
+
+  const roMapMethods: any = {
+    // special
+    get: (key: any) => dirty1(key),
+
+    // requires dirtyAll
+    entries: (...args: any) => base.entries.apply(dirtyAll(), args),
+    forEach: (...args: any) => base.forEach.apply(dirtyAll(), args),
+    values: (...args: any) => base.values.apply(dirtyAll(), args),
+    [Symbol.iterator]: (...args: any) => base[Symbol.iterator].apply(dirtyAll(), args),
+
+    // passthru
+    has: (...args: any[]) => (base as any).has(...args),
+    keys: (...args: any[]) => (base as any).keys(...args),
+
+    // mutators
+    clear: throwReadOnlyError,
+    delete: throwReadOnlyError,
+    getOrInsert: throwReadOnlyError,
+    getOrInsertComputed: throwReadOnlyError,
+    set: throwReadOnlyError,
+  };
+  Object.setPrototypeOf(roMapMethods, null);
+
+  return new Proxy(base, {
+    defineProperty: throwReadOnlyError,
+    deleteProperty: throwReadOnlyError,
+    set: throwReadOnlyError,
+
+    get(_, prop: any) {
+      if (prop === copySym) return () => deepCopy(base);
+      const method = roMapMethods[prop];
+      if (method) return method;
+
+      return (base as any)[prop];
+    },
+  });
+}
+
+// no cache needed, since we don't support object keys and there are no values
+function readOnlySet<K>(base: Set<K>): Readonly<Set<K>> {
+  return new Proxy(base, {
+    defineProperty: throwReadOnlyError,
+    deleteProperty: throwReadOnlyError,
+    set: throwReadOnlyError,
+
+    get(_, prop: any) {
+      if (prop === copySym) return () => deepCopy(base);
+
+      // just disallow mutations
+      if (prop === "add" || prop === "delete") return throwReadOnlyError;
+
+      const value = (base as any)[prop];
+      if (value instanceof Function) {
+        return (...args: any) => value.apply(base, args);
+      }
+      return value;
+    },
+  });
+}
+
+export function copyOnWrite<T>(base: T, parent?: () => void): T {
+  switch (typeof base) {
+    case "boolean":
+    case "bigint":
+    case "number":
+    case "string":
+    case "undefined":
+      // these types are already immutable
+      return base;
+
+    case "object":
+      // null handled here
+      if (base === null) return base;
+      if (base instanceof Date) return new Date(base) as T; // trivial copy
+      // general objects handled below
+      break;
+
+    case "symbol":
+    case "function":
+    default:
+      throw new Error(`base of type "${typeof base}" not handled by readOnly`);
+  }
+
+  // object handling
+  if (Array.isArray(base)) return copyOnWriteArray(base, parent) as T;
+  if (base instanceof Map) return copyOnWriteMap(base, parent) as T;
+  if (base instanceof Set) return copyOnWriteSet(base, parent) as T;
+  const proto = Object.getPrototypeOf(base);
+  if (proto && proto !== Object.prototype) {
+    throw new Error(`base has a nonstandard protoype`);
+  }
+
+  return copyOnWriteObject(base as any, parent) as T;
+}
+
+const recoverSym = Symbol();
+
+export function recover<T>(base: T): T {
+  switch (typeof base) {
+    case "boolean":
+    case "bigint":
+    case "number":
+    case "string":
+    case "undefined":
+      // leaf type found; nothing was cow
+      return base;
+
+    case "object":
+      if (base === null) return base;
+      if (base instanceof Date) return base;
+      // general objects handled below
+      break;
+
+    case "symbol":
+    case "function":
+    default:
+      throw new Error(`base of type "${typeof base}" not handled by readOnly`);
+  }
+
+  // check if object was returned by copyOnWrite; recover its inner value
+  const rcvr: () => T = (base as any)[recoverSym];
+  if (rcvr) return rcvr();
+
+  // otherwise walk normal objects looking for anything that came out of a copyOnWrite.
+
+  if (Array.isArray(base)) {
+    for (const [i, item] of base.entries()) {
+      const r = recover(item);
+      if (r !== item) {
+        base[i] = r;
+      }
+    }
+    return base;
+  }
+
+  if (base instanceof Map) {
+    for(const [key, value] of base.entries()) {
+      const r = recover(value);
+      if (r !== value) {
+        base.set(key, r);
+      }
+    }
+    return base;
+  }
+
+  // Set with non-primitive keys is not supported, so nothing to be checked
+  if (base instanceof Set) return base;
+
+  const proto = Object.getPrototypeOf(base);
+  if (proto && proto !== Object.prototype) {
+    throw new Error(`base has a nonstandard protoype`);
+  }
+
+  // plain objects
+  for (const [key, value] of Object.entries(base)) {
+    const r = recover(value);
+    if (r !== value) {
+      (base as any)[key] = r;
+    }
+  }
+  return base as T;
+}
+
+const DELETED = Symbol("DELETED");
+
+function copyOnWriteObject<T>(base: Record<string, T>, parent?: () => void): Record<string, T> {
+  // build our cache incrementally, to reduce the number of copyOnWrite calls to a minimum
+  const cache: Record<string, T | typeof DELETED> = {};
+  let clean = true;
+  let full = false;
+
+  function mark() {
+    if (clean) {
+      clean = false;
+      // dirty our parent too
+      if (parent) parent();
+    }
+  }
+
+  function copy() {
+    if (clean) return deepCopy(base);
+    const out: Record<string, T> = {};
+    if (!full) {
+      for (const [key, val] of Object.entries(base)) {
+        if (!Object.hasOwn(cache, key)) out[key] = deepCopy(val);
+      }
+    }
+    for (const [key, val] of Object.entries(cache)) {
+      if (val !== DELETED) out[key] = deepCopy(val as T);
+    }
+    return out;
+  }
+
+  function rcvr() {
+    // was any modification made?
+    if (clean) return base;
+    if (full) {
+      const out: Record<string, T> = {};
+      for (const [key, val] of Object.entries(cache)) {
+        if (val !== DELETED) out[key] = recover(val);
+      }
+      return out;
+    }
+    // start with a shallow copy of base
+    const out = { ...base };
+    for (const [key, val] of Object.entries(cache)) {
+      if (val === DELETED) {
+        delete out[key];
+      } else {
+        out[key] = recover(val);
+      }
+    }
+    return out;
+  }
+
+  return new Proxy(base, {
+    defineProperty() {
+      throw new Error("not supported by copyOnWrite");
+    },
+
+    deleteProperty(_, prop: any) {
+      mark();
+      cache[prop] = DELETED;
+      return true;
+    },
+
+    getOwnPropertyDescriptor(_, prop: any) {
+      if (cache[prop] === DELETED) return undefined;
+      return Object.getOwnPropertyDescriptor(cache, prop) ??
+        Object.getOwnPropertyDescriptor(base, prop);
+    },
+
+    get(_, prop: any) {
+      if (prop === copySym) return copy;
+      if (prop === recoverSym) return rcvr;
+
+      // lookup value in cache first
+      if (Object.hasOwn(cache, prop)) {
+        const value = cache[prop];
+        return value !== DELETED ? value : undefined;
+      }
+      // then get cacheable value from base
+      if (Object.hasOwn(base, prop)) {
+        const value = copyOnWrite(base[prop], mark);
+        cache[prop] = value;
+        return value;
+      }
+
+      const value = base[prop];
+      if (value instanceof Function) {
+        return (...args: any) => value.apply(cache, args);
+      }
+      return value;
+    },
+
+    has(_, prop: any) {
+      if (Object.hasOwn(cache, prop)) return cache[prop] !== DELETED;
+      return prop in base;
+    },
+
+    ownKeys() {
+      const out = [];
+      for (const key of Object.keys(base)) {
+        if (cache[key] === DELETED) continue;
+        out.push(key);
+      }
+      for (const key of Object.keys(cache)) {
+        if (Object.hasOwn(base, key)) continue;
+        if (cache[key] !== DELETED) out.push(key);
+      }
+      return out;
+    },
+
+    set(_, prop: any, value: T) {
+      mark();
+      cache[prop] = value;
+      return true;
+    },
+  });
+}
+
+function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
+  // build our cache incrementally, to reduce the number of copyOnWrite calls to a minimum
+  const cache = Array<T | typeof DELETED>(base.length);
+  let clean = true;
+  let full = false;
+
+  function mark() {
+    if (clean) {
+      clean = false;
+      if (parent) parent();
+    }
+  }
+
+  function dirty1(n: number){
+    if (full) return cache[n];
+    if (Object.hasOwn(cache, n)){
+      const out = cache[n];
+      return out !== DELETED ? out : undefined;
+    }
+    if (!Object.hasOwn(base, n)) return undefined;
+    const ro = copyOnWrite(base[n]);
+    cache[n] = ro;
+    return ro;
+  }
+
+  function dirtyAll(){
+    if (full) return cache;
+    full = true;
+    // use Object.keys() instead of .keys() to preserve holes
+    for (const key of Object.keys(base)) {
+      if (!Object.hasOwn(cache, key)) {
+        cache[key as any] = copyOnWrite(base[key as any], mark);
+      }
+    }
+    // to make things like iteration easy, we remove DELETED after we iterate
+    for (const [key, value] of Object.entries(cache)) {
+      if (value === DELETED) delete cache[key as any];
+    }
+    return cache;
+  }
+
+  const cowArrayMethods: any = {
+    // special
+    at: (index: number) => dirty1(index > -1 ? index : base.length + index),
+    push: (...args: any[]) => cache.push(...args),
+
+
+    // things which require dirtyAll(), then run against the full shallow copy
+    concat: (...args: any) => base.concat.apply(dirtyAll(), args),
+    entries: (...args: any) => base.entries.apply(dirtyAll(), args),
+    every: (...args: any) => base.every.apply(dirtyAll(), args),
+    filter: (...args: any) => base.filter.apply(dirtyAll(), args),
+    find: (...args: any) => base.find.apply(dirtyAll(), args),
+    findIndex: (...args: any) => base.findIndex.apply(dirtyAll(), args),
+    findLast: (...args: any) => (base as any).findLast.apply(dirtyAll(), args),
+    findLastIndex: (...args: any) => (base as any).findLastIndex.apply(dirtyAll(), args),
+    flat: (...args: any) => base.flat.apply(dirtyAll(), args),
+    flatMap: (...args: any) => base.flatMap.apply(dirtyAll(), args),
+    forEach: (...args: any) => base.forEach.apply(dirtyAll(), args),
+    map: (...args: any) => base.map.apply(dirtyAll(), args),
+    reduce: (...args: any) => base.reduce.apply(dirtyAll(), args),
+    reduceRight: (...args: any) => base.reduceRight.apply(dirtyAll(), args),
+    slice: (...args: any) => base.slice.apply(dirtyAll(), args),
+    some: (...args: any) => base.some.apply(dirtyAll(), args),
+    toReversed: (...args: any) => (base as any).toReversed.apply(dirtyAll(), args),
+    toSorted: (...args: any) => (base as any).toSorted.apply(dirtyAll(), args),
+    toSpliced: (...args: any) => (base as any).toSpliced.apply(dirtyAll(), args),
+    values: (...args: any) => base.values.apply(dirtyAll(), args),
+    with: (...args: any) => (base as any).with.apply(dirtyAll(), args),
+    [Symbol.iterator]: (...args: any) => base[Symbol.iterator].apply(dirtyAll(), args),
+
+    // mutators that require a dirtyAll() due to possible index changes
+    pop: (...args: any) => base.pop.apply(dirtyAll(), args),
+    reverse: (...args: any) => base.reverse.apply(dirtyAll(), args),
+    copyWithin: (...args: any) => base.copyWithin.apply(dirtyAll(), args),
+    fill: (...args: any) => base.fill.apply(dirtyAll(), args),
+    sort: (...args: any) => base.sort.apply(dirtyAll(), args),
+    splice: (...args: any) => base.splice.apply(dirtyAll(), args),
+    unshift: (...args: any) => base.unshift.apply(dirtyAll(), args),
+
+    // getters which don't HAVE to cowify the whole array, but would need something about as expensive
+    toLocaleString: (...args: any) => base.toLocaleString.apply(dirtyAll(), args),
+    toString: (...args: any) => base.toString.apply(dirtyAll(), args),
+    join: (...args: any) => base.join.apply(dirtyAll(), args),
+
+    // getters which work against cache as-is
+    keys: () => cache.keys(),
+
+    // getters which can operate on a frankenstein array where base is prototype of cache
+    includes: (...args: any) => {
+      const old = Object.getPrototypeOf(cache);
+      try {
+        Object.setPrototypeOf(cache, base);
+        return (cache as any).includes(...args);
+      } finally {
+        Object.setPrototypeOf(cache, old);
+      }
+    },
+    indexOf: (...args: any) => {
+      const old = Object.getPrototypeOf(cache);
+      try {
+        Object.setPrototypeOf(cache, base);
+        return (cache as any).indexOf(...args);
+      } finally {
+        Object.setPrototypeOf(cache, old);
+      }
+    },
+    lastIndexOf: (...args: any) => {
+      const old = Object.getPrototypeOf(cache);
+      try {
+        Object.setPrototypeOf(cache, base);
+        return (cache as any).lastIndexOf(...args);
+      } finally {
+        Object.setPrototypeOf(cache, old);
+      }
+    },
+  };
+  Object.setPrototypeOf(cowArrayMethods, null);
+
+  function copy() {
+    if (clean) return deepCopy(base);
+    if (full) return deepCopy(cache);
+    const out = Array(cache.length);
+    for (const [key, value] of Object.entries(base)) {
+      if (!Object.hasOwn(cache, key)) out[key as any] = deepCopy(value);
+    }
+    for (const [key, value] of Object.entries(cache)) {
+      if (value !== DELETED) out[key as any] = deepCopy(value);
+    }
+    return out;
+  }
+
+  function rcvr() {
+    // was any modification made?
+    if (clean) return base;
+    if (full) {
+      const out = Array(cache.length)
+      for (const [key, val] of Object.entries(cache)) {
+        out[key as any] = recover(val);
+      }
+      return out;
+    }
+    const out = Array(cache.length);
+    for (const [key, val] of Object.entries(base)) {
+      if (!Object.hasOwn(cache, key)) out[key as any] = val;
+    }
+    for (const [key, val] of Object.entries(cache)) {
+      if (val !== DELETED) out[key as any] = recover(val);
+    }
+    return out;
+  }
+
+  return new Proxy(base, {
+    defineProperty() {
+      throw new Error("not supported by copyOnWrite");
+    },
+
+    deleteProperty(_, prop: any) {
+      if (full) {
+        delete cache[prop];
+        return true;
+      }
+      mark();
+      cache[prop] = DELETED;
+      return true;
+    },
+
+    getOwnPropertyDescriptor(_, prop: any) {
+      if (full) return Object.getOwnPropertyDescriptor(cache, prop);
+      if (cache[prop] === DELETED) return undefined;
+      return Object.getOwnPropertyDescriptor(cache, prop) ??
+        Object.getOwnPropertyDescriptor(base, prop);
+    },
+
+    get(_, prop: any) {
+      if (prop === copySym) return copy;
+      if (prop === recoverSym) return rcvr;
+
+      // special logic if we have no more DELETEDs in cache
+      if (full) {
+        if (Object.hasOwn(cache, prop)) {
+          return cache[prop];
+        }
+        const method = cowArrayMethods[prop];
+        if (method) return method;
+        return cache[prop];
+      }
+
+      // lookup value in cache first
+      if (Object.hasOwn(cache, prop)) {
+        const value = cache[prop];
+        return value !== DELETED ? value : undefined;
+      }
+      // then get cacheable value from base
+      if (Object.hasOwn(base, prop)) {
+        const value = copyOnWrite(base[prop], mark);
+        cache[prop] = value;
+        return value;
+      }
+
+      // get methods
+      const method = cowArrayMethods[prop];
+      if (method) return method;
+
+      const value = base[prop];
+      if (value instanceof Function) {
+        return (...args: any) => value.apply(cache, args);
+      }
+      return value;
+    },
+
+    has(_, prop: any) {
+      if (full) return Object.hasOwn(cache, prop);
+      if (Object.hasOwn(cache, prop)) return cache[prop] !== DELETED;
+      return prop in base;
+    },
+
+    ownKeys() {
+      if (full) return Object.getOwnPropertyNames(cache);
+      const out = ["length"];
+      for (const key of Object.keys(base)) {
+        if (cache[key as any] === DELETED) continue;
+        out.push(key);
+      }
+      for (const key of Object.keys(cache)) {
+        if (Object.hasOwn(base, key)) continue;
+        if (cache[key as any] !== DELETED) out.push(key);
+      }
+      return out;
+    },
+
+    set(_, prop: any, value: T) {
+      mark();
+      cache[prop] = value;
+      return true;
+    },
+  });
+}
+
+function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
+  // build our cache incrementally, to reduce the number of copyOnWrite calls to a minimum
+  const cache: Map<K, V | typeof DELETED> = new Map();
+  let clean = true;
+  let full = false;
+  let ndeletions = 0;
+  let noverlap = 0;
+
+  function size() {
+    if (full) return cache.size;
+    return base.size + cache.size - ndeletions - noverlap;
+  }
+
+  function mark() {
+    if (clean) {
+      clean = false;
+      if (parent) parent();
+    }
+  }
+
+  function dirty1(k: K) {
+    if (full) return cache.get(k);
+    if (cache.has(k)) {
+      const out = cache.get(k);
+      return out !== DELETED ? out : undefined;
+    }
+    if (!base.has(k)) return undefined;
+    const cow = copyOnWrite(base.get(k)!, mark);
+    cache.set(k, cow);
+    noverlap++;
+    return cow;
+  }
+
+  function dirtyAll(){
+    if (full) return cache;
+    full = true;
+    const deleted = new Set<K>();
+    for (const [k, v] of cache) {
+      if (v === DELETED) deleted.add(k);
+    }
+    for (const [k, v] of base) {
+      if (!cache.has(k)) {
+        cache.set(k, copyOnWrite(v, mark));
+      }
+    }
+    for (const k of deleted) {
+      cache.delete(k);
+    }
+    ndeletions = 0;
+    return cache;
+  }
+
+  function copy() {
+    if (clean) return deepCopy(base);
+    if (full) return deepCopy(cache);
+    const out = new Map();
+    for (const [key, value] of base.entries()) {
+      if (!cache.has(key)) out.set(key, deepCopy(value));
+    }
+    for (const [key, value] of cache.entries()) {
+      if (value !== DELETED) out.set(key, deepCopy(value));
+    }
+    return out;
+  }
+
+  function rcvr() {
+    // was any modification made?
+    if (clean) return base;
+    // did we already copy all keys and eliminate deletions?
+    if (full) {
+      const out = new Map();
+      for (const [k, v] of cache) {
+        out.set(k, recover(v));
+      }
+      return out;
+    }
+    // start with a shallow copy
+    const out = new Map(base);
+    for (const [k, v] of cache) {
+      if (v === DELETED) {
+        out.delete(k);
+      } else {
+        out.set(k, recover(v));
+      }
+    }
+    return out;
+  }
+
+  let proxy: Map<K, V>;
+
+  // create a one-off methods object, since we have a lot of stuff to bind into it
+  const cowMapMethods: any = {
+    // special
+    get: (key: K) => dirty1(key),
+    has: (key: K) => {
+      if (full) return cache.has(key);
+      if (cache.has(key)) {
+        return cache.get(key) !== DELETED;
+      }
+      return base.has(key);
+    },
+    clear() {
+      mark();
+      full = true;
+      return cache.clear();
+    },
+
+    // requires dirtyAll
+    entries: (...args: any) => base.entries.apply(dirtyAll(), args),
+    forEach: (...args: any) => base.forEach.apply(dirtyAll(), args),
+    values: (...args: any) => base.values.apply(dirtyAll(), args),
+    [Symbol.iterator]: (...args: any) => base[Symbol.iterator].apply(dirtyAll(), args),
+
+    // mutators
+    delete: (key: K) =>{
+      if (full) return cache.delete(key);
+      const old = cache.get(key);
+      if (old === DELETED) return false; // noop; already marked as deleted
+      const incache = old !== undefined || cache.has(key);
+      if (!base.has(key)) {
+        // key not in base: is it newly added to cache, or totally missing?
+        if (!incache) return false;
+        cache.delete(key);
+        return true;
+      }
+      // key is in base; add a new deletion marker
+      cache.set(key, DELETED);
+      ndeletions++;
+      if (!incache) {
+        noverlap++;
+        mark();
+      }
+      return true;
+    },
+    getOrInsert: (key: K, defaultValue: V) => {
+      let old = cache.get(key);
+      if (old === DELETED) {
+        // undelete a deleted key
+        cache.set(key, defaultValue);
+        ndeletions--;
+        return defaultValue;
+      }
+      if (old !== undefined || cache.has(key)) return old;
+      // not in cache; check base
+      old = base.get(key);
+      if (old !== undefined || base.has(key)) return old;
+      // not in base either; do an insert
+      cache.set(key, defaultValue);
+      return defaultValue;
+    },
+    getOrInsertComputed: (key: K, callback: (key: K) => V) => {
+      let old = cache.get(key);
+      if (old === DELETED) {
+        // undelete a deleted key
+        const value = callback(key);
+        cache.set(key, value);
+        ndeletions--;
+        return value;
+      }
+      if (old !== undefined || cache.has(key)) return old;
+      // not in cache; check base
+      old = base.get(key);
+      if (old !== undefined || base.has(key)) return old;
+      // not in base either; do an insert
+      const value = callback(key);
+      cache.set(key, value);
+      return value;
+    },
+    set: (key: K, value: V) => {
+      mark();
+      const old = cache.get(key);
+      if (old === DELETED) ndeletions--;
+      const incache = old !== undefined || cache.has(key);
+      if (!incache && base.has(key)) noverlap++;
+      cache.set(key, value);
+      // don't return the cache or the base; return the copy-on-write proxy
+      return proxy;
+    },
+  };
+  Object.setPrototypeOf(cowMapMethods, null);
+
+  proxy = new Proxy(base, {
+    defineProperty() {
+      throw new Error("not supported by copyOnWrite");
+    },
+
+    deleteProperty() {
+      throw new Error("not supported by copyOnWriteMap");
+    },
+
+    getOwnPropertyDescriptor() {
+      throw new Error("not supported by copyOnWriteMap");
+    },
+
+    set() {
+      throw new Error("not supported by copyOnWriteMap");
+    },
+
+    get(_, prop: any) {
+      if (prop === copySym) return copy;
+      if (prop === recoverSym) return rcvr;
+
+      if (prop === "size") return size();
+
+      // get methods
+      const method = cowMapMethods[prop];
+      if (method) return method;
+
+      const value = (base as any)[prop];
+      if (value instanceof Function) {
+        return (...args: any) => value.apply(cache, args);
+      }
+      return value;
+    },
+
+    has(_, prop: any) {
+      // we don't support custom own properties or prototypes, so this is sufficient
+      return prop in cache;
+    },
+
+    ownKeys() {
+      // we don't support custom own properties
+      return [];
+    },
+  });
+
+  return proxy;
+}
+
+function copyOnWriteSet<K>(base: Set<K>, parent?: () => void) {
+  // since we have no child cow objects, as soon as we get an update we do a full copy and use that
+  let cache: Set<K> | undefined = undefined;
+
+  return new Proxy(base, {
+    defineProperty() {
+      throw new Error("not supported by copyOnWrite");
+    },
+
+    deleteProperty() {
+      throw new Error("not supported by copyOnWriteSet");
+    },
+
+    getOwnPropertyDescriptor() {
+      throw new Error("not supported by copyOnWriteSet");
+    },
+
+    set() {
+      throw new Error("not supported by copyOnWriteSet");
+    },
+
+    get(_, prop: any) {
+      if (prop === copySym) return () => deepCopy(cache ?? base);
+      if (prop === recoverSym) return () => cache ?? base;
+
+      if (prop === "add" || prop === "delete") {
+        if (cache === undefined) {
+          // break the glass
+          cache = new Set(base);
+          if(parent) parent();
+        }
+      }
+
+      const value = ((cache ?? base) as any)[prop];
+      if (value instanceof Function) {
+        return (...args: any) => value.apply(cache ?? base, args);
+      }
+      return value;
+    },
+
+    has(_, prop: any) {
+      // we don't support custom own properties or prototypes, so this is sufficient
+      return prop in (cache as any);
+    },
+
+    ownKeys(_) {
+      // we don't support custom own properties
+      return [];
+    },
+  });
+}
+
 // futures ////////////////////////////////////////////////////////////////////
 
 /* A Future is a function that yields nothing, is woken up with nothing, and eventually returns T */
@@ -370,8 +1429,6 @@ class InMemTxn {
   }
 }
 
-//
-
 export class OverlayStorage {
   #base: Storage;
   #data: Record<string, unknown> = {};
@@ -573,20 +1630,49 @@ export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
 
 // wrap a Reducer so it acts like a WStorageGenerator, returning a set of updated keys
 export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
-  const old: Record<string, StorageValue> = {};
-  const updates: Record<string, StorageValue> = {};
+  // our cache of get's we've already completed
+  const old: Record<string, unknown> = Object.create(null);
+  // our planned sets and dels that we submit at the end
+  const cur: Record<string, unknown> = Object.create(null);
+
+  function *finish(): WStorageGenerator<string[]> {
+    const updates = [];
+    const question: WStorageQuestion = {get: {}, set: {}, del: {}};
+    for (const [k, v] of Object.entries(cur)) {
+      // de-copyOnWrite-ify the value
+      const r = recover(v);
+      // get the old value
+      const o = old[k];
+      // detect noop
+      if (r === o) continue;
+      // otherwise write the value to storage
+      updates.push(k);
+      if (r === DELETED) {
+        question.del![k] = true;
+      } else {
+        question.set![k] = r;
+      }
+    }
+    // actually yield the write request to storage
+    const ans = yield question;
+    // check every result
+    for (const [k, v] of Object.entries(ans.set ?? {})) {
+      if ("err" in v) throw new Error(`setting "${k}" after reducer: ${v.err}`)
+    }
+    for (const [k, v] of Object.entries(ans.del ?? {})) {
+      if ("err" in v) throw new Error(`deleting "${k}" after reducer: ${v.err}`)
+    }
+    return updates;
+  }
 
   let ans: ReducerAnswer = {old: {}, get: {}, set: {}, del: {}};
   // inflight is for gets we have submitted but haven't received
   // (you can have many olds or gets in flight simultaneously, but only one set, and it cannot be
   //  simultaneous with any gets)
   let inflight: Record<string, true> = {};
-  // delayedSets is for sets that were delayed because we had to do a get first
-  let delayedSets: Record<string, unknown> = {};
   // pending is for answers we're trying to deliver
-  // note: old may always be present, but get/set/del are mutually exclusive.
   // {key: pending_ops}
-  let pending: Record<string, {old?: true, get?: true, set?: true, del?: true}> = {};
+  let pending: Record<string, {old?: true, get?: true}> = {};
   let storageQuestion: WStorageQuestion = {get: {}, set: {}, del: {}};
 
   // run the reducer to completion
@@ -594,7 +1680,7 @@ export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
     let ready = true;
     while (ready) {
       const {value, done} = g.next(ans);
-      if (done) return Object.keys(updates);
+      if (done) return yield* finish();
 
       ans = {old: {}, get: {}, set: {}, del: {}};
       ready = false;
@@ -602,7 +1688,8 @@ export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
       for (const key of Object.keys(value.old ?? {})) {
         if (key in old) {
           // we already know this one
-          ans.old[key] = old[key];
+          // note that copyOnWrite() is applied inside the ReducerContext; not here
+          ans.old[key] = {value: old[key]};
           ready = true;
         } else if (!inflight[key]) {
           inflight[key] = true;
@@ -612,17 +1699,17 @@ export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
       }
 
       for (const key of Object.keys(value.get ?? {})) {
-        if (pending[key]?.set) {
-          ans.set[key] = {err: new Error('simultaneous set and get')};
-          ready = true;
-        } else if (key in updates) {
+        if (key in cur) {
           // value was already set
-          ans.get[key] = updates[key];
+          // TODO: let copyOnWrite() fork an existing copyOnWrite object, so we don't have to
+          //       materialize the updated object until we call finish()
+          const cached = cur[key];
+          ans.get[key] = {value: recover(cached !== DELETED ? cached : undefined)};
           ready = true;
         } else if (key in old) {
-          // an implicit set
-          updates[key] = old[key];
-          ans.get[key] = old[key];
+          // we looked this up before
+          // note that copyOnWrite() is applied inside the ReducerContext; not here
+          ans.get[key] = {value: old[key]};
         } else if (!inflight[key]) {
           inflight[key] = true;
           storageQuestion.get![key] = true;
@@ -631,119 +1718,42 @@ export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
       }
 
       for (const [key, val] of Object.entries(value.set ?? {})) {
-        const pnd = pending[key] ?? {};
-        /*if (key in updates) {
-          ans.set[key] = {err: new Error('call to set after a get, set, or del')};
-          ready = true;
-        } else */ if (pnd.set) {
-          ans.set[key] = {err: new Error('simultaneous sets')};
-          ready = true;
-        } else if (pnd.del) {
-          ans.set[key] = {err: new Error('simultaneous set and del')};
-          ready = true;
-        } else if (pnd.get) {
-          ans.set[key] = {err: new Error('simultaneous set and get')};
-          ready = true;
-        } else {
-          if (!(key in old)) {
-            // do a get now, and a set later
-            storageQuestion.get![key] = true;
-            delayedSets[key] = val;
-          } else {
-            // do the set immediately
-            storageQuestion.set![key] = val;
-          }
-          setdefault(pending, key, {}).set = true;
-          updates[key] = {value: val};
-        }
+        // just store this in memory for now
+        cur[key] = val;
+        ans.set[key] = {value: true};
+        ready = true;
       }
 
       for (const key of Object.keys(value.del ?? {})) {
-        const pnd = pending[key] ?? {};
-        /* if (key in updates) {
-          ans.set[key] = {err: new Error('call to set after a get, set, or del')};
-          ready = true;
-        } else*/ if (pnd.del) {
-          ans.set[key] = {err: new Error('simultaneous deletes')};
-          ready = true;
-        } else if (pnd.set) {
-          ans.set[key] = {err: new Error('simultaneous del and set')};
-          ready = true;
-        } else if (pnd.get) {
-          ans.set[key] = {err: new Error('simultaneous del and get')};
-          ready = true;
-        } else {
-          if (!(key in old)) {
-            // do a get now, and a del later
-            storageQuestion.get![key] = true;
-          } else {
-            // do the del immediately
-            storageQuestion.del![key] = true;
-          }
-          setdefault(pending, key, {}).del = true;
-          updates[key] = {value: undefined};
-        }
+        // just store this in memory for now
+        cur[key] = DELETED;
+        ans.del[key] = {value: true};
+        ready = true;
       }
     }
 
     // interact with storage until we have an answer to return to the reducers
-    // TODO: this control flow has the weird effect that if parallel reducer operations are in
-    // flight, and one of those is a set or del requiring a get beforehand, we may likely only do
-    // the get, then return control to the reducer, and only start the set after it returns again.
-    // But in practice, I think that is probably not a big concern.
     while (!ready) {
       const storageAnswer = yield storageQuestion;
       storageQuestion = {get: {}, set: {}, del: {}};
 
       for (const [key, val] of Object.entries(storageAnswer.get)) {
-        // remember the answer for later
-        old[key] = val;
+        // cache successful results
+        if ("value" in val) old[key] = val.value;
         // done with this query
         delete inflight[key];
         const pnd = pending[key];
-        let keepPending: {set?: true, del?: true} | undefined = undefined;
         // why did we need this again?
-        // (note: get/set/del are mutually exclusive, but old is not)
         if (pnd.old) {
+          // note that copyOnWrite() is applied inside the ReducerContext; not here
           ans.old[key] = val;
           ready = true;
         }
         if (pnd.get) {
+          // note that copyOnWrite() is applied inside the ReducerContext; not here
           ans.get[key] = val;
           ready = true;
-        } else if (pnd.set) {
-          // we needed to do a get before we did a set; issue the set now
-          storageQuestion.set![key] = delayedSets[key];
-          delete delayedSets[key];
-          // preserve only the pending .set=true
-          keepPending = {del: true};
-          pending[key] = {set: true};
-        } else if (pnd.del) {
-          // we needed to do a get before we did a set; issue the set now
-          storageQuestion.del![key] = true;
-          // preserve only the pending .del=true
-          keepPending = {del: true};
         }
-        if (keepPending) {
-          pending[key] = keepPending;
-        } else {
-          delete pending[key];
-        }
-      }
-
-      for (const [key, val] of Object.entries(storageAnswer.set)) {
-        ans.set[key] = val;
-        ready = true;
-        // note: when we send the StorageQuestion for set, we already have the old value cached so
-        // pending must have been only {set: true}.
-        delete pending[key];
-      }
-
-      for (const [key, val] of Object.entries(storageAnswer.del)) {
-        ans.del[key] = val;
-        ready = true;
-        // note: when we send the StorageQuestion for del, we already have the old value cached so
-        // pending must have been only {del: true}.
         delete pending[key];
       }
     }

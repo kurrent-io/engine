@@ -4,7 +4,7 @@ import _quickjs
 
 q = _quickjs.QuickJS()
 q.eval("""
-    let x = {a: ["zero", "one", "two"], b: 2, c: () => 9, 0: "nine"};
+    let x = new Proxy({a: ["zero", "one", "two"], b: 2, c: () => 9, 0: "nine"}, {});
     x;
 """)
 a = q.eval('x')

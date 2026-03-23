@@ -34,7 +34,10 @@ async def book_list(qx: model.DeciderQueryContext, *_: Any) -> List[Book]:
         for isbn in await qx.editions()
     ]
 
-book_list.subscribe(lambda bl: print("book list is:", bl))
+@book_list.subscribe
+def book_list_sub(bl):
+    print("book list is:")
+    print("  - " + "\n  - ".join(f"{b.title} (x{b.copies})" for b in bl))
 
 fw.recv_events([event])
 fw.run()

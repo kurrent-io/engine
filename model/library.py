@@ -115,14 +115,14 @@ class Timestamp(Concrete):
 
 Uuid = Alias(String)
 Isbn = Alias(String)
-Set = Object(Literal(True))
+Setx = Object(Literal(True))
 
 Edition = Struct(
     isbn=Isbn,
     title=String,
-    books=Set,
+    books=Setx,
     # edition-level holds
-    holds=Set,
+    holds=Setx,
 )
 
 Book = Struct(
@@ -136,7 +136,7 @@ Book = Struct(
 # servers and clients keep the same data
 BookStore = Store({
     "edition.{edition_isbn}": Edition,
-    "editions": Set,
+    "editions": Setx,
     "book.{book_uuid}": Book,
 })
 
@@ -144,15 +144,15 @@ Patron = Struct(
     id=Uuid,
     name=String,
     researcher=Bool,
-    checkouts=Set,
-    holds=Set,
+    checkouts=Setx,
+    holds=Setx,
 )
 
 # servers and clients keep data in the same shape, but clients will only have
 # their own info here
 PatronStore = Store({
     "patron.{patron_uuid}": Patron,
-    "patrons": Set,
+    "patrons": Setx,
 })
 
 Hold = Struct(
@@ -173,8 +173,8 @@ Checkout = Struct(
 StatusStore = Store({
     "hold.{hold_uuid}": Hold,
     "checkout.{checkout_uuid}": Checkout,
-    "active_holds": Set,
-    "active_checkouts": Set,
+    "active_holds": Setx,
+    "active_checkouts": Setx,
 })
 
 # "virtualized" hold, or maybe "view of hold", but just not the whole thing

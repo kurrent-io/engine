@@ -281,33 +281,33 @@ def generate_store_prereqs(d):
     d.print("  const ans = yield {'store': {[key]: true}};\n")
     d.print("  const sv = ans.store[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
-    d.print("  return sv.value as T\n")
-    d.print("};\n")
+    d.print("  return readOnly(sv.value) as T\n")
+    d.print("}\n")
     d.print("\n")
     d.print("function *reducerOld<T>(key: string): Reducer<T> {\n")
     d.print("  const ans = yield {'old': {[key]: true}};\n")
     d.print("  const sv = ans.old[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
-    d.print("  return sv.value as T\n")
-    d.print("};\n")
+    d.print("  return copyOnWrite(sv.value) as T\n")
+    d.print("}\n")
     d.print("\n")
     d.print("function *reducerGet<T>(key: string): Reducer<T> {\n")
     d.print("  const ans = yield {'get': {[key]: true}};\n")
     d.print("  const sv = ans.get[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
-    d.print("  return sv.value as T\n")
-    d.print("};\n")
+    d.print("  return copyOnWrite(sv.value) as T\n")
+    d.print("}\n")
     d.print("\n")
     d.print("function *reducerSet<T>(key: string, value: T): Reducer<void> {\n")
     d.print("  const ans = yield {'set': {[key]: value}};\n")
     d.print("  const sv = ans.set[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
-    d.print("};\n")
+    d.print("}\n")
     d.print("function *reducerDel(key: string): Reducer<void> {\n")
     d.print("  const ans = yield {'del': {[key]: true}};\n")
     d.print("  const sv = ans.del[key];\n")
     d.print("  if ('err' in sv) throw sv.err;\n");
-    d.print("};\n")
+    d.print("}\n")
     d.print("function *reducerUpdate<T, R>(key: string, fn: (t: T) => R): Reducer<R> {\n")
     d.print("  const obj = yield* reducerGet<T>(key);\n")
     d.print("  const out = fn(obj);\n")
@@ -375,7 +375,7 @@ def generate_store(d, annos, store):
     d.indent("  ")
 
     # generate old getters like:
-    # topic: (topic_uuid: Uuid) => reducerGetter<Topic>(`topic.${topic_uuid}`)
+    # topic: (topic_uuid: Uuid) => reducerGet<Topic>(`topic.${topic_uuid}`)
     d.print("old: {\n")
     d.indent("  ")
     for si in original_items:
@@ -393,7 +393,7 @@ def generate_store(d, annos, store):
     d.print("},\n")
 
     # generate getters like:
-    # topic: (topic_uuid: Uuid) => reducerGetter<Topic>(`topic.${topic_uuid}`)
+    # topic: (topic_uuid: Uuid) => reducerGet<Topic>(`topic.${topic_uuid}`)
     d.print("get: {\n")
     d.indent("  ")
     for si in original_items:
