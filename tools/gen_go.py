@@ -920,6 +920,7 @@ def generate_framework(d, annos, f):
         source Source,
         storage Storage,
         decoder Decoder[MyE],
+        migrate string,
         reducer string,
     ) (*MyFramework[P], error) {
         return NewFramework[MyQX, goja.Value, MyE, MyC, P](
@@ -927,6 +928,7 @@ def generate_framework(d, annos, f):
             storage,
             decoder,
             NewJSReducer[goja.Value, MyE]("MyRX", reducer),
+            NewJSMigrate(migrate),
             NewMyQX,
         )
     }
@@ -945,6 +947,7 @@ def generate_framework(d, annos, f):
     d.print(f'script string,\n')
     d.print(f'storage Storage,\n')
     d.print(f'decoder string,\n')
+    d.print(f'migrate string,\n')
     d.print(f'reducer string,\n')
     d.dedent()
     d.print(f') (*{name}[P], error) {{\n')
@@ -954,6 +957,7 @@ def generate_framework(d, annos, f):
     d.print(f'NewStringSource("bundle.js", script),\n')
     d.print(f'storage,\n')
     d.print(f'NewJSDecoder[{E}](decoder),\n')
+    d.print(f'NewJSMigrate[{RX}](migrate),\n')
     d.print(f'NewJSReducer[{RX}, {E}]("{rx_name}", reducer),\n')
     d.print(f'func(vm *goja.Runtime, ask Ask) {QX} {{\n')
     d.print(f'\treturn New{QX}(vm, ask)\n')

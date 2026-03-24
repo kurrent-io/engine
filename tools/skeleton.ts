@@ -1653,6 +1653,8 @@ export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
         question.set![k] = r;
       }
     }
+    // is there any storage updates to make?
+    if (updates.length === 0) return updates;
     // actually yield the write request to storage
     const ans = yield question;
     // check every result
@@ -2126,8 +2128,10 @@ export class QueryGraph<QX> {
 // "E"vents
 // "C"ommands
 export class Framework<QX, RX, E, C, P> {
+  #rx: RX;
   #storage: Storage;
-  #reducer: (events: E[]) => Reducer<void>; // wrapper around user's reducer
+  #migrate: null | ((rx: RX) => Reducer<void>);
+  #reducer: (rx: RX, events: E[]) => Reducer<void>;
   #forecaster: null | ((commands: C[]) => E[]);
   #forecastKey: null | ((event: E) => string);
   #onCommands: null | ((commands: C[], onSent: ()=> void) => void);
@@ -2155,6 +2159,8 @@ export class Framework<QX, RX, E, C, P> {
     rx: RX,
     storage: Storage,
     callbacks: {
+      // optional: configure storage before any events arrive
+      migrate?: (rx: RX) => Reducer<void>,
       // required: reduce a batch of events into the read model
       reducer: (rx: RX, events: E[]) => Reducer<void>,
       // optional: forecast the events a server will send for a command
@@ -2167,8 +2173,10 @@ export class Framework<QX, RX, E, C, P> {
       onCommands?: (commands: C[], onSent: ()=> void)=> void,
     },
   ) {
+    this.#rx = rx;
     this.#storage = storage;
-    this.#reducer = (events: E[]) => callbacks.reducer(rx, events);
+    this.#migrate = callbacks.migrate ?? null;
+    this.#reducer = callbacks.reducer;
     this.#forecaster = callbacks.forecaster ?? null;
     this.#forecastKey = callbacks.forecastKey ?? null;
     this.#onCommands = callbacks.onCommands ?? null;
@@ -2230,6 +2238,16 @@ export class Framework<QX, RX, E, C, P> {
 
   *#initialize(): Generator<void, void, void> {
     const self = this;
+
+    // run migration logic on the data store
+    if (self.#migrate) {
+      yield* withWTxn(this.#fx, this.#storage, function*() {
+        yield* runReducer(self.#migrate!(self.#rx));
+        // ignore updated keys and don't trigger a run of the graph
+      });
+    }
+
+    // reload forecasted state
     if (!this.#forecaster) return;
 
     // load unset commands from storage, along with the highest-yet command id
@@ -2260,9 +2278,8 @@ export class Framework<QX, RX, E, C, P> {
 
     // populate the initial overlay
     yield* withWTxn(this.#fx, this.#overlay, function*() {
-      yield* runReducer(self.#reducer(forecasts));
-      // ignore updated keys and don't trigger a run of the graph; let that happen as part of the
-      // normal newQuery processing
+      yield* runReducer(self.#reducer(self.#rx, forecasts));
+      // ignore updated keys and don't trigger a run of the graph
     });
   }
 
@@ -2335,7 +2352,7 @@ export class Framework<QX, RX, E, C, P> {
       yield* txnSet(".checkpoint", checkpoint);
 
       // run the reducer with our new events
-      return yield* runReducer(self.#reducer(events));
+      return yield* runReducer(self.#reducer(self.#rx, events));
     })
     this.#graph.dirty(updates);
 
@@ -2354,9 +2371,7 @@ export class Framework<QX, RX, E, C, P> {
     // rebuild overlay using all remaining forecasts
     if (this.#forecasts.size > 0) {
       yield* withWTxn(this.#fx, this.#overlay, function*(){
-        const updates = yield* runReducer(
-          self.#reducer([...self.#forecasts.values()]),
-        );
+        const updates = yield* runReducer(self.#reducer(self.#rx, [...self.#forecasts.values()]));
         self.#graph.dirty(updates);
       });
     }
@@ -2404,7 +2419,7 @@ export class Framework<QX, RX, E, C, P> {
 
         // open a write txn against the existing overlay
         const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
-          return yield* runReducer(self.#reducer(forecasts));
+          return yield* runReducer(self.#reducer(self.#rx, forecasts));
         });
         this.#graph.dirty(updates);
 

@@ -5,4 +5,4 @@ export {
   UserReducerContext,
   DecodeLibraryEvents,
 } from "./library.gen";
-export { userReducer } from "./reducers";
+export { userMigrate, userReducer } from "./reducers";

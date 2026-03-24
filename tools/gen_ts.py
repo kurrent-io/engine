@@ -487,6 +487,8 @@ export class {f.name}<P> extends Framework<{QX}, {RX}, {event_type}, {command_ty
   constructor(
     storage: Storage,
     callbacks: {{
+      // optional: configure storage before any events arrive
+      migrate?: (rx: {RX}) => Reducer<void>,
       // required: reduce a batch of events into the read model
       reducer: (rx: {RX}, events: {event_type}[]) => Reducer<void>,
       // optional: forecast the events a server will send for a command

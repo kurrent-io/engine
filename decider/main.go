@@ -23,6 +23,7 @@ func run() error {
 		deciderScript,
 		model.NewGoStorage(NewInMemStorage()),
 		"DecodeLibraryEvents",
+		"deciderMigrate",
 		"deciderReducer",
 	)
 	if err != nil {

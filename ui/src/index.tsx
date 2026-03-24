@@ -4,9 +4,9 @@ import {
   InMemStorage,
   UserFramework,
   UserQueryContext,
-  LibraryEvents,
   AddEdition,
   AddBook,
+  userMigrate,
   userReducer,
 } from './model';
 
@@ -17,6 +17,7 @@ import { generateUuid } from './util';
 const storage = new InMemStorage();
 
 const fw = new UserFramework(storage, {
+  migrate: userMigrate,
   reducer: userReducer,
 });
 

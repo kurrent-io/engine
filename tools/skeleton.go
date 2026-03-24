@@ -836,6 +836,34 @@ func (s GoStorage) ToStorage(vm *goja.Runtime) (goja.Value, error) {
 
 //
 
+type Migrate[RX any] interface {
+	// returns a migrateFunc; the rx is borrowed from Reducer
+	ToMigrate(vm *goja.Runtime) (goja.Value, error)
+}
+
+type JSMigrate struct {
+	migrate string
+}
+
+func NewJSMigrate[RX any](migrate string) Migrate[RX] {
+	if migrate == "" { return nil }
+	return JSMigrate{migrate}
+}
+
+func (s JSMigrate) ToMigrate(vm *goja.Runtime) (goja.Value, error) {
+	migrate := vm.GlobalObject().Get(s.migrate)
+	if migrate == nil {
+		return nil, fmt.Errorf("unable to create migrate: no such symbol: %v", s.migrate)
+	}
+	_, ok := goja.AssertFunction(migrate)
+	if !ok {
+		return nil, fmt.Errorf("unable to create migrate: symbol is not a function: %v", s.migrate)
+	}
+	return migrate, nil
+}
+
+//
+
 type Reducer[RX any, E any] interface {
 	// returns a [RX, reducerFunc]
 	ToReducer(vm *goja.Runtime) (goja.Value, goja.Value, error)
@@ -936,6 +964,7 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 	source Source,
 	storage Storage,
 	decoder Decoder[E],
+	migrate Migrate[RX],
 	reducer Reducer[RX, E],
 	qxFactory func(*goja.Runtime, Ask) QX,
 ) (*Framework[QX, RX, E, C, P], error) {
@@ -972,6 +1001,14 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 		return nil, fmt.Errorf("decoder: %w", err)
 	}
 
+	var migrateFn goja.Value
+	if migrate != nil {
+		migrateFn, err = migrate.ToMigrate(vm)
+		if err != nil {
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
+	}
+
 	rx, reducerFn, err := reducer.ToReducer(vm)
 	if err != nil {
 		return nil, fmt.Errorf("reducer: %w", err)
@@ -980,6 +1017,9 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 	// build callbacks
 	callbacks := vm.NewObject()
 	callbacks.Set("reducer", reducerFn)
+	if migrateFn != nil {
+		callbacks.Set("migrate", migrateFn)
+	}
 
 	// we handle QX entirely in go
 	jsqx := goja.Undefined()

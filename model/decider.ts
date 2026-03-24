@@ -4,4 +4,4 @@ export {
   DeciderReducerContext,
   DecodeLibraryEvents,
   ExternalCallbackStorage } from "./library.gen";
-export { deciderReducer } from "./reducers";
+export { deciderMigrate, deciderReducer } from "./reducers";

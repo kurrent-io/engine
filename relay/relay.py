@@ -7,6 +7,7 @@ import model as model
 fw = model.DeciderFramework[Any](
     os.path.join(os.path.dirname(__file__), "relay.js"),
     "InMemStorage",
+    "deciderMigrate",
     "deciderReducer",
 )
 
@@ -34,7 +35,7 @@ async def book_list(qx: model.DeciderQueryContext, *_: Any) -> List[Book]:
     ]
 
 @book_list.subscribe
-def book_list_sub(bl):
+def book_list_sub(bl: List[Book]) -> None:
     print("book list is:")
     print("  - " + "\n  - ".join(f"{b.title} (x{b.copies})" for b in bl))
 

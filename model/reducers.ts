@@ -63,6 +63,45 @@ import {
   Reducer,
 } from './library.gen';
 
+/* ----- migrations ----- */
+
+function *migrateBooks(rx: BookRX): Reducer<void> {
+  yield* rx.set.editions(
+    (yield* rx.get.editions()) ?? {}
+  );
+}
+
+function *migratePatrons(rx: PatronRX): Reducer<void> {
+  yield* rx.set.patrons(
+    (yield* rx.get.patrons()) ?? {}
+  );
+}
+
+function *migrateStatus(rx: StatusRX): Reducer<void> {
+  yield* rx.set.active_holds(
+    (yield* rx.get.active_holds()) ?? {}
+  );
+  yield* rx.set.active_checkouts(
+    (yield* rx.get.active_checkouts()) ?? {}
+  );
+}
+
+export function *deciderMigrate(rx: DeciderRX): Reducer<void> {
+  yield* migrateBooks(rx);
+  yield* migratePatrons(rx);
+  yield* migrateStatus(rx);
+  yield* rx.set.decider_events(
+    (yield* rx.get.decider_events()) ?? []
+  );
+}
+
+export function *userMigrate(rx: UserRX): Reducer<void> {
+  yield* migrateBooks(rx);
+  yield* migratePatrons(rx);
+}
+
+/* ----- individual reducers ----- */
+
 function *reduceAddEdition(rx: BookRX, e: AddEdition): Reducer<void> {
   // add this edition
   yield* rx.set.edition(e.isbn, {
@@ -72,7 +111,7 @@ function *reduceAddEdition(rx: BookRX, e: AddEdition): Reducer<void> {
     holds: {},
   });
   // create new edition
-  const editions = (yield* rx.get.editions()) ?? {}; // TODO: figure out a migration strategy
+  const editions = yield* rx.get.editions();
   editions[e.isbn] = true;
   yield* rx.set.editions(editions);
 }
@@ -403,7 +442,6 @@ function *reduceVEndHold(rx: FullVStatusRX, e: CancelHold|ExpireHold): Reducer<v
 }
 
 function *reduceNewVCheckout(rx: FullVStatusRX, e: NewVCheckout): Reducer<void> {
-  console.log("handling new vcheckout");
   const checkout: VCheckout = {
     id: e.id,
     book: e.book,
@@ -431,7 +469,7 @@ function *reduceVEndCheckout(rx: FullVStatusRX, e: EndCheckout): Reducer<void> {
   }
 }
 
-/* ---------------------- */
+/* ----- compositions of individual reducers ----- */
 
 export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer<void> {
   const deciderEvents: DeciderEvents[] = [];

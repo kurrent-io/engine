@@ -130,6 +130,7 @@ class BaseFramework[QX, RX, E, C, P]:
         storage: Callable[[bool], Txn] | str,
         qx: QX | str,
         rx: RX | str,
+        migrate: Callable[[RX], None] | str | None,
         reducer: Callable[[RX, List[E]], None] | str,
     ) -> None:
         self._js = _quickjs.QuickJS()
@@ -207,14 +208,19 @@ class BaseFramework[QX, RX, E, C, P]:
         else:
             rxjs = _quickjs.Opaque(rx)
 
+        if isinstance(migrate, str):
+            migrate = m[migrate]
+
         if isinstance(reducer, str):
             reducer = m[reducer]
 
+        callbacks = { "reducer": reducer }
+        if migrate is not None:
+            callbacks["migrate"] = migrate
+
         self._framework: _quickjs.Value = self._js.eval(
             "(cls, qx, rx, storage, callbacks) => new cls(qx, rx, storage, callbacks)",
-        )(m["Framework"], qxjs, rxjs, storage, {
-            "reducer": reducer
-        })
+        )(m["Framework"], qxjs, rxjs, storage, callbacks)
 
     def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:
         # queryfunc will wrap the python generator in a javascript iterator
