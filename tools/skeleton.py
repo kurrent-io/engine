@@ -86,11 +86,6 @@ class Query[T]:
         self._query.close()
 
 
-class ShaperOutput[E, P](TypedDict):
-    events: List[E]
-    checkpoint: P
-
-
 # TODO: only synchronous storage is currently supported, for two reasons:
 #
 #  - This strategy of catching an exception and converting it to a {err: "the exception"}
@@ -135,7 +130,6 @@ class BaseFramework[QX, RX, E, C, P]:
         storage: Callable[[bool], Txn] | str,
         qx: QX | str,
         rx: RX | str,
-        shaper: Callable[[List[E]], ShaperOutput] | str,
         reducer: Callable[[RX, List[E]], None] | str,
     ) -> None:
         self._js = _quickjs.QuickJS()
@@ -213,16 +207,12 @@ class BaseFramework[QX, RX, E, C, P]:
         else:
             rxjs = _quickjs.Opaque(rx)
 
-        if isinstance(shaper, str):
-            shaper = self._js.eval(shaper)
-
         if isinstance(reducer, str):
             reducer = m[reducer]
 
         self._framework: _quickjs.Value = self._js.eval(
             "(cls, qx, rx, storage, callbacks) => new cls(qx, rx, storage, callbacks)",
         )(m["Framework"], qxjs, rxjs, storage, {
-            "shaper": shaper,
             "reducer": reducer
         })
 
@@ -253,9 +243,9 @@ class BaseFramework[QX, RX, E, C, P]:
         # wrap _Query in a suitable python interface
         return Query(_query)
 
-    def recv_events(self, raw_events: List[Any]) -> None:
+    def recv_events(self, raw_events: List[Any], checkpoint: P) -> None:
         events = self._decoder(raw_events)
-        self._framework.recvEvents(events)
+        self._framework.recvEvents(events, checkpoint)
 
     def run(self) -> None:
         self._run()

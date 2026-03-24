@@ -208,8 +208,8 @@ var nibbles = [256]uint16{
 	x, x, x, x, x, x,
 }
 
-// jsonToGojaString converts an unescaped utf8-encoded json string to a goja.String (utf16) without
-// any intermediate buffers.
+// jsonToGojaString converts a utf8-encoded json string to a goja.String (utf16) without any
+// intermediate buffers.
 func jsonToGojaString(buf []uint16, s[]byte) ([]uint16, goja.Value, error) {
 	// expand slice to sufficient capacity to hold utf16-encoded s
 	buf = buf[:0]
@@ -341,8 +341,8 @@ func jsonToGojaString(buf []uint16, s[]byte) ([]uint16, goja.Value, error) {
 	return buf[:0], goja.StringFromUTF16(buf[:l]), nil
 }
 
-// jsonToGoString converts an unescaped utf8-encoded json string to a golang string (utf8) without
-// any intermediate buffers.
+// jsonToGoString converts a utf8-encoded json string to a golang string (utf8) without any
+// intermediate buffers.
 func jsonToGoString(s[]byte) (string, error) {
 	// no need to manually manage memory, since strings.Builder manages memory optimally already
 	var b strings.Builder
@@ -519,8 +519,8 @@ func parseJSONNumber(vm *goja.Runtime, s string) (goja.Value, error) {
 
 // JSONToGoja unmarshals directly from raw json bytes into a goja.Value.
 //
-// Internally, it uses jscan to iterate through the json bytes in a single pass and with any
-// additional beyond what the goja.Value requires.
+// Internally, it uses jscan to iterate through the json bytes in a single pass and without any
+// additional allocations beyond what the goja.Value requires.
 func JSONToGoja(vm *goja.Runtime, s []byte) (goja.Value, error) {
 	// create a stack slice which is backed by stack memory, unless the object is very very deep
 	var stackmem [32]*goja.Object
@@ -709,56 +709,6 @@ func (d JSDecoder) ToDecoder(vm *goja.Runtime) (func(goja.Value) (goja.Value, er
 		// just provide an empty `this`
 		return fn(goja.Undefined(), events)
 	}, nil
-}
-
-//
-
-type Shaper[E any, P any] interface {
-	ToShaper(vm *goja.Runtime) (goja.Value, error)
-}
-
-type JSShaper struct {
-	name string
-}
-
-func NewJSShaper[E any, P any](name string) Shaper[E, P] {
-	return JSShaper{name}
-}
-
-func (s JSShaper) ToShaper(vm *goja.Runtime) (goja.Value, error) {
-	jsfn := vm.GlobalObject().Get(s.name)
-	if jsfn == nil {
-		return nil, fmt.Errorf("unable to create shaper: no such symbol: %v", s.name)
-	}
-	_, ok := goja.AssertFunction(jsfn)
-	if !ok {
-		return nil, fmt.Errorf("unable to create shaper: symbol is not a function: %v", s.name)
-	}
-	return jsfn, nil
-}
-
-type GoShaper[E any, P any] struct {
-	shaper func([]E) ([]E, P)
-}
-
-func NewGoShaper[E any, P any](shaper func ([]E) ([]E, P)) Shaper[E, P] {
-	return GoShaper[E, P]{shaper}
-}
-
-func (s GoShaper[E, P]) ToShaper(vm *goja.Runtime) (goja.Value, error) {
-	jsfunc := func(call goja.FunctionCall) goja.Value {
-		var eventsIn []E
-		err := vm.ExportTo(call.Arguments[0], &eventsIn)
-		if err != nil {
-			panic(err)
-		}
-		eventsOut, checkpoint := s.shaper(eventsIn)
-		out := vm.NewObject()
-		out.Set("events", eventsOut)
-		out.Set("checkpoint", checkpoint)
-		return out
-	}
-	return vm.ToValue(jsfunc), nil
 }
 
 //
@@ -986,7 +936,6 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 	source Source,
 	storage Storage,
 	decoder Decoder[E],
-	shaper Shaper[E, P],
 	reducer Reducer[RX, E],
 	qxFactory func(*goja.Runtime, Ask) QX,
 ) (*Framework[QX, RX, E, C, P], error) {
@@ -1023,11 +972,6 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 		return nil, fmt.Errorf("decoder: %w", err)
 	}
 
-	shaperFn, err := shaper.ToShaper(vm)
-	if err != nil {
-		return nil, fmt.Errorf("shaper: %w", err)
-	}
-
 	rx, reducerFn, err := reducer.ToReducer(vm)
 	if err != nil {
 		return nil, fmt.Errorf("reducer: %w", err)
@@ -1035,7 +979,6 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 
 	// build callbacks
 	callbacks := vm.NewObject()
-	callbacks.Set("shaper", shaperFn)
 	callbacks.Set("reducer", reducerFn)
 
 	// we handle QX entirely in go
@@ -1084,8 +1027,8 @@ func (f *Framework[QX, RX, E, C, P]) Run() error {
 	return f.run()
 }
 
-func (f *Framework[QX, RX, E, C, P]) RecvEvents(rawEvents goja.Value) error {
-	_, err := f.recvEvents(f.fw, rawEvents)
+func (f *Framework[QX, RX, E, C, P]) RecvEvents(rawEvents []goja.Value, checkpoint P) error {
+	_, err := f.recvEvents(f.fw, f.vm.ToValue(rawEvents), f.vm.ToValue(checkpoint))
 	return err
 }
 

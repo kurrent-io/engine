@@ -389,7 +389,6 @@ def generate_framework(d, annos, f):
             self,
             bundle: str,
             storage: Callable[[bool], Txn] | str,
-            shaper: Callable[[List[LibraryEvents]], ShaperOutput[LibraryEvents, P]] | str,
         ) -> None:
             super().__init__(
                 bundle,
@@ -397,7 +396,6 @@ def generate_framework(d, annos, f):
                 decoder="DecodeLibraryEvents",
                 rx="DeciderStoreReducerContext",
                 qx=DeciderStoreQueryContext(),
-                shaper=shaper,
                 reducer="deciderReducer",
             )
     """
@@ -418,13 +416,11 @@ def generate_framework(d, annos, f):
     d.print(f"        self,\n")
     d.print(f"        bundle: str,\n")
     d.print(f"        storage: Callable[[bool], Txn] | str,\n")
-    d.print(f"        shaper: Callable[[List[{E}]], ShaperOutput[{E}, P]] | str,\n")
     d.print(f"        reducer: str,\n")
     d.print(f"    ):\n")
     d.print(f"        super().__init__(\n")
     d.print(f"            bundle,\n")
     d.print(f"            storage=storage,\n")
-    d.print(f"            shaper=shaper,\n")
     d.print(f"            reducer=reducer,\n")
     d.print(f"            decoder='Decode{f.event_type.name}',\n")
     d.print(f"            rx='{RX}',\n")

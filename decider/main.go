@@ -23,7 +23,6 @@ func run() error {
 		deciderScript,
 		model.NewGoStorage(NewInMemStorage()),
 		"DecodeLibraryEvents",
-		"deciderShaper",
 		"deciderReducer",
 	)
 	if err != nil {
@@ -49,12 +48,15 @@ func run() error {
 	})
 
 	// create an event
-	event := fw.VM().ToValue(map[string]any{
+	event, err := model.JSONToGoja(fw.VM(), []byte(`{
 		"type": "add-edition",
 		"isbn": "my-isbn",
 		"title": "cheech-and-chong-learn-event-sourcing",
-		"timestamp": "2025-01-24T15:54:32Z",
-	})
+		"timestamp": "2025-01-24T15:54:32Z"
+	}`))
+	if err != nil {
+		return err
+	}
 
 	// invoke the generated checker
 	err = model.CheckLibraryEvents(event, "event")
@@ -63,20 +65,30 @@ func run() error {
 	}
 
 	// feed event to framework
-	fw.RecvEvents(fw.VM().ToValue([]goja.Value{event}))
+	err = fw.RecvEvents([]goja.Value{event}, nil)
+	if err != nil {
+		return err
+	}
 	err = fw.Run()
 	if err != nil {
 		return err
 	}
 
 	// feed another event to framework
-	event = fw.VM().ToValue(map[string]any{
+	event, err = model.JSONToGoja(fw.VM(), []byte(`{
 		"type": "add-edition",
 		"isbn": "my-isbn-2",
 		"title": "everyone-else-learns-event-sourcing",
-		"timestamp": "2025-01-24T15:54:32Z",
-	})
-	fw.RecvEvents(fw.VM().ToValue([]goja.Value{event}))
+		"timestamp": "2025-01-24T15:54:32Z"
+	}`))
+	if err != nil {
+		return err
+	}
+
+	err = fw.RecvEvents([]goja.Value{event}, nil)
+	if err != nil {
+		return err
+	}
 	err = fw.Run()
 	if err != nil {
 		return err

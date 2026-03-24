@@ -17,9 +17,6 @@ import { generateUuid } from './util';
 const storage = new InMemStorage();
 
 const fw = new UserFramework(storage, {
-  shaper(events: LibraryEvents[]) {
-    return {events, checkpoint: null};
-  },
   reducer: userReducer,
 });
 
@@ -30,7 +27,7 @@ fw.recvEvents([{
   name: "JoeBob",
   researcher: true,
   timestamp: new Date(),
-}]);
+}], null);
 
 export type FW = typeof fw;
 export type QX = typeof UserQueryContext;
@@ -77,12 +74,12 @@ export function makeAddBook(fw: FW): () => void {
   return () => {
     // on first pass, include editions
     if (count < editions.length) {
-      fw.recvEvents([{...editions[count], timestamp: new Date()}]);
+      fw.recvEvents([{...editions[count], timestamp: new Date()}], null);
     }
     // then add books
     const bookUuid = generateUuid();
     bookUuids.push(bookUuid);
-    fw.recvEvents([{...books[count % books.length], timestamp: new Date(), id: bookUuid}]);
+    fw.recvEvents([{...books[count % books.length], timestamp: new Date(), id: bookUuid}], null);
     count++;
   };
 }
@@ -97,7 +94,7 @@ export function makeAddCheckout(fw: FW): () => void {
       book: bookUuids[count % bookUuids.length],
       expires: new Date((new Date()).getTime() + 1000 * 60 * 60 * 24 * 5),
       patron: "my-patron-id",
-    }]);
+    }], null);
     count++;
   }
 }
@@ -112,7 +109,7 @@ export function makeRetitleBook(fw: FW): () => void {
       isbn: isbns[count % isbns.length],
       title: `star wars ${count + 1}: a new title`,
       timestamp: new Date(),
-    }]);
+    }], null);
     count++;
   }
 }

@@ -1,0 +1,17 @@
+stages:
+- custom:
+    name: db
+    pre:
+      - sh: rm -rf .db .log
+    cmd:
+      - KurrentDB
+      - --worker-threads=1
+      - --initialization-threads=1
+      - --insecure
+      - --log=.log
+      - --db=.db
+      - --log-level=Debug
+      - --skip-db-verify=true
+    post:
+      - conncheck:
+          port: 2113

@@ -2127,7 +2127,6 @@ export class QueryGraph<QX> {
 // "C"ommands
 export class Framework<QX, RX, E, C, P> {
   #storage: Storage;
-  #shaper: (events: E[]) => {events: E[], checkpoint: P};
   #reducer: (events: E[]) => Reducer<void>; // wrapper around user's reducer
   #forecaster: null | ((commands: C[]) => E[]);
   #forecastKey: null | ((event: E) => string);
@@ -2144,6 +2143,7 @@ export class Framework<QX, RX, E, C, P> {
   // #reconnects is a list of promise resolve functions
   #reconnects: ((value: {checkpoint: P | undefined, commands: C[]}) => void)[] = [];
   #recvdEvents: E[] = [];
+  #checkpoint: P | undefined = undefined;
   #recvdCommands: C[] = [];
   #sentCommands: string[] = [];
   #forecasts: Map<string, E> = new Map();
@@ -2155,8 +2155,6 @@ export class Framework<QX, RX, E, C, P> {
     rx: RX,
     storage: Storage,
     callbacks: {
-      // required: new events from the wire may be batched, and a checkpoint is produced
-      shaper: (events: E[]) => {events: E[], checkpoint: P},
       // required: reduce a batch of events into the read model
       reducer: (rx: RX, events: E[]) => Reducer<void>,
       // optional: forecast the events a server will send for a command
@@ -2170,7 +2168,6 @@ export class Framework<QX, RX, E, C, P> {
     },
   ) {
     this.#storage = storage;
-    this.#shaper = callbacks.shaper;
     this.#reducer = (events: E[]) => callbacks.reducer(rx, events);
     this.#forecaster = callbacks.forecaster ?? null;
     this.#forecastKey = callbacks.forecastKey ?? null;
@@ -2198,8 +2195,9 @@ export class Framework<QX, RX, E, C, P> {
   }
 
   // new events from the wire come here
-  recvEvents(events: E[]): void {
+  recvEvents(events: E[], checkpoint: P): void {
     this.#recvdEvents.push.apply(this.#recvdEvents, events);
+    this.#checkpoint = checkpoint;
     this.#schedule();
   }
 
@@ -2323,9 +2321,11 @@ export class Framework<QX, RX, E, C, P> {
 
   *#onRecvEvents(): Generator<void, void, void> {
     const self = this;
-    // input shaping step, which also produces a checkpoint
-    const {events, checkpoint} = this.#shaper(this.#recvdEvents);
+    // take events and latest checkpoint
+    const events = this.#recvdEvents;
+    const checkpoint = this.#checkpoint as P;
     this.#recvdEvents = [];
+    this.#checkpoint = undefined;
 
     // open a write txn to real storage
     // IDEA: what if we wrote a txn wrapper that could automatically allow high-value gets/sets to

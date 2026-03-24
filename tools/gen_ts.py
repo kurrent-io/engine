@@ -487,8 +487,6 @@ export class {f.name}<P> extends Framework<{QX}, {RX}, {event_type}, {command_ty
   constructor(
     storage: Storage,
     callbacks: {{
-      // required: new events from the wire may be batched, and a checkpoint is produced
-      shaper: (events: {event_type}[]) => {{events: {event_type}[], checkpoint: P}},
       // required: reduce a batch of events into the read model
       reducer: (rx: {RX}, events: {event_type}[]) => Reducer<void>,
       // optional: forecast the events a server will send for a command

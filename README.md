@@ -53,29 +53,29 @@ UI).
 
 ```
 (* = owned by user)
- ____________________________________________________________
-|                                                            |
-|    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
-|   | framework                                           |  |
-|      _______________      ___________       __________     |
-|   | |               |    |           |     |          | |  |
-|     |*input shaping |--->| *reducers |<--->| *storage |    |
-|   | |_______________|    |___________|     |__________| |  |
-|         ^                                       |          |
-|   |     |                                       |       |  |
-|         |                               ________v____      |
-|   |     |                              |             |  |  |
-|         |                              | query graph |     |
-|   |     |                              |_____________|  |  |
-|         |                                     |            |
-|   |_ _ _|_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
-|         |                                     |            |
-|       __|__________                        ___v__          |
-|      |             |                      |      |         |
-|      | *websocket  |<---------------------| *UI  |         |
-|      |_____________|                      |______|         |
-|            ^                                               |
-|____________|_______________________________________________|
+ ____________________________________________
+|                                            |
+|    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
+|   | framework                           |  |
+|      ___________            __________     |
+|   | |           |          |          | |  |
+|     | *reducers |<-------->| *storage |    |
+|   | |___________|          |__________| |  |
+|         ^                       |          |
+|   |     |                       |       |  |
+|         |               ________v____      |
+|   |     |              |             |  |  |
+|         |              | query graph |     |
+|   |     |              |_____________|  |  |
+|         |                     |            |
+|   |_ _ _|_ _ _ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
+|         |                     |            |
+|       __|__________        ___v__          |
+|      |             |      |      |         |
+|      | *websocket  |<-----| *UI  |         |
+|      |_____________|      |______|         |
+|            ^                               |
+|____________|_______________________________|
              |
         _____v______
        |            |
@@ -98,31 +98,31 @@ that produces events the application expects the server to create from each outg
 
 ```
 (* = owned by user)
- ______________________________________________________________________
-|  PWA                                                                 |
-|    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
-|   | framework                                                     |  |
-|      _______________      ___________       ____________________     |
-|   | |               |  C |           |   D |                    | |  |
-|     |*input shaping |--->| *reducers |<--->| *storage + overlay |    |
-|   | |_______________|    |___________|     |____________________| |  |
-|         ^ B                   ^               ^         |            |
-|   |     |                     |               |         | E       |  |
-|         |                _____|_______        |   ______v______      |
-|   |     |               |             |       |  |             |  |  |
-|         |               |*forecasters |       |  | query graph |     |
-|   |     |               |_____________|       |  |_____________|  |  |
-|         |                     ^ H             |         |            |
-|   |     |          J          |           I   |         |         |  |
-|         |       +-------------+---------------+         |            |
-|   |_ _ _|_ _ _ _|_ _ _ _ _ _ _^_ _ _ _ _ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
-|         |       |             |                         | F          |
-|       __|_______v__           |                      ___v__          |
-|      |             |          |       G             |      |         |
-|      | *websocket  |          +---------------------| *UI  |         |
-|      |_____________|                                |______|         |
-|            ^ A                                                       |
-|____________|_________________________________________________________|
+ ______________________________________________________
+|  PWA                                                 |
+|    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
+|   | framework                                     |  |
+|       ___________           ____________________     |
+|   |  |           |       C |                    | |  |
+|      | *reducers |<------->| *storage + overlay |    |
+|   |  |___________|         |____________________| |  |
+|         ^ B    ^              ^         |            |
+|   |     |      |              |         | D       |  |
+|         |     _|___________   |   ______v______      |
+|   |     |    |             |  |  |             |  |  |
+|         |    |*forecasters |  |  | query graph |     |
+|   |     |    |_____________|  |  |_____________|  |  |
+|         |             ^ G     |         |            |
+|   |     |         I   |     H |         |         |  |
+|         |       +-----+-------+         |            |
+|   |_ _ _|_ _ _ _|_ _ _^_ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
+|         |       |     |                 | E          |
+|       __|_______v__   |              ___v__          |
+|      |             |  | F           |      |         |
+|      | *websocket  |  +-------------| *UI  |         |
+|      |_____________|                |______|         |
+|            ^ A                                       |
+|____________|_________________________________________|
              |
         _____v______
        |            |
@@ -144,18 +144,16 @@ A: server to/from websocket:
   - server authorizes and validates incoming write events, relays to KurrentDB
   - websocket automatically reconnects after network disruptions
 
-B: websocket to input shaping:
-  - incoming events get batched for processing
-  - probably a default batching logic is sufficient for most event streams
-  - user can customize if they have specific "packets" boundaries
-
-C: input shaping to reducers:
+B: websocket to reducers:
+  - incoming events accumulate into batches while waiting for processing
+  - checkpoint data is passed along with events
+  - user can customize batch boundaries if they have specific "packet" boundaries to honor
   - reducers process incoming batches
-  - write result to storage
+  - write result to storage, along with provided checkpoint
   - txn will be based on storage
   - overlay is invalidated (and reconstructed if necessary)
 
-D: reducers to storage+overlay
+C: reducers to storage+overlay
   - when reducers run, they are provided a r+w txn
   - for real events, txn is based on storage
       - storage is provided by the user
@@ -165,12 +163,12 @@ D: reducers to storage+overlay
       - reads prefer overlay but fall back to storage
       - writes only go to overlay
 
-E: storage+overlay to query graph
+D: storage+overlay to query graph
   - query graph woken after every write txn
   - query graph always based on overaly
   - modified keys trigger reruns of queries
 
-F: query graph to ui
+D: query graph to ui
   - ui creates queries, which are functions that do a series of key lookups and
     return a result that the UI cares about
   - queries are composable, so they are stored in a graph
@@ -179,15 +177,15 @@ F: query graph to ui
   - queries that return different results on rerun wake up the ui
   - we should offer generic callback api, as well as popular UI integrations
 
-G: ui passes new events into framework
+F: ui passes new events into framework
 
-H: new events to forecasters
+G: new events to forecasters
   - forecaster creates 0 or more forecast events per new event
   - forecast events go to reducers to update overlay
 
-I: new events saved to storage (outbox)
+H: new events saved to storage (outbox)
 
-J: new events get sent over websocket
+I: new events get sent over websocket
 
 
 ## Backend Diagram
