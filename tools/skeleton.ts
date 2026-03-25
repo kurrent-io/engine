@@ -1712,6 +1712,7 @@ export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
           // we looked this up before
           // note that copyOnWrite() is applied inside the ReducerContext; not here
           ans.get[key] = {value: old[key]};
+          ready = true;
         } else if (!inflight[key]) {
           inflight[key] = true;
           storageQuestion.get![key] = true;
@@ -2199,6 +2200,7 @@ export class Framework<QX, RX, E, C, P> {
   reconnect(): Promise<{checkpoint: P | undefined, commands: C[]}> {
     return new Promise((resolve) => {
       this.#reconnects.push(resolve);
+      this.#schedule();
     });
   }
 

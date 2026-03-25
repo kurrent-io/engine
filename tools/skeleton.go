@@ -957,6 +957,7 @@ type Framework[QX QueryContext, RX any, E any, C any, P any] struct {
 	run func() error
 	newQuery goja.Callable
 	recvEvents goja.Callable
+	reconnect goja.Callable
 	qxFactory func(*goja.Runtime, Ask) QX
 }
 
@@ -1047,6 +1048,10 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 	if !ok {
 		return nil, errors.New(".recvEvents() method not callable")
 	}
+	reconnect, ok := goja.AssertFunction(fw.Get("reconnect"))
+	if !ok {
+		return nil, errors.New(".reconnect() method not callable")
+	}
 
 	return &Framework[QX, RX, E, C, P]{
 		vm,
@@ -1055,6 +1060,7 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 		run,
 		newQuery,
 		recvEvents,
+		reconnect,
 		qxFactory,
 	}, nil
 }
@@ -1068,7 +1074,38 @@ func (f *Framework[QX, RX, E, C, P]) Run() error {
 }
 
 func (f *Framework[QX, RX, E, C, P]) RecvEvents(rawEvents []goja.Value, checkpoint P) error {
-	_, err := f.recvEvents(f.fw, f.vm.ToValue(rawEvents), f.vm.ToValue(checkpoint))
+	decoded := make([]goja.Value, len(rawEvents))
+	for i, raw := range rawEvents {
+		dec, err := f.decoder(raw)
+		if err != nil {
+			return err
+		}
+		decoded[i] = dec
+	}
+	_, err := f.recvEvents(f.fw, f.vm.ToValue(decoded), f.vm.ToValue(checkpoint))
+	return err
+}
+
+func (f *Framework[QX, RX, E, C, P]) Reconnect(fn func(*P)) error {
+	jsfn := WrapPanics(f.vm, func(call goja.FunctionCall) (goja.Value, error) {
+		var value goja.Value = call.Arguments[0]
+		// did we get a checkpoint value?
+		if goja.IsUndefined(value) {
+			fn(nil)
+			return nil, nil
+		}
+		// export received checkpoint value
+		var checkpoint P
+		err := f.vm.ExportTo(value, &checkpoint)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"exporting checkpoint value (%v) to target type (%T): %w", value, checkpoint, err,
+			)
+		}
+		fn(&checkpoint)
+		return nil, nil
+	})
+	_, err := f.reconnect(f.fw, jsfn)
 	return err
 }
 

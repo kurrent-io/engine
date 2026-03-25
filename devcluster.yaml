@@ -12,6 +12,8 @@ stages:
       - --db=.db
       - --log-level=Debug
       - --skip-db-verify=true
+      - --run-projections=System
+      - --enable-atom-pub-over-http
     post:
       - conncheck:
           port: 2113

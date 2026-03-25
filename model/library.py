@@ -230,9 +230,19 @@ UserStore = Store(BookStore, PatronStore, VStatusStore)
 ## Event Layer ##
 #################
 
+# list of streams:
+# - books: all edition and book-related info
+# - patron.{patron_uuid}: all patron info, per-patron
+# - status: privileged stream of all checkpoints and holds
+# - vstatus: status decisions; relay will scrub and filter before forwarding to users
+#
+# extra streams:
+# - deciderState: where the decider stores its checkpoint data
+
 BookEvents = Union()
 
 # editions: globally visible
+# stream: "books"
 AddEdition = BookEvents.add(Struct(
     type=Literal("add-edition"),
     isbn=Isbn,
@@ -240,6 +250,7 @@ AddEdition = BookEvents.add(Struct(
     timestamp=Timestamp,
 ))
 
+# stream: "books"
 UpdateEditionTitle = BookEvents.add(Struct(
     type=Literal("update-edition-title"),
     isbn=Isbn,
@@ -249,6 +260,7 @@ UpdateEditionTitle = BookEvents.add(Struct(
 
 # books: globally visible
 
+# stream: "books"
 AddBook = BookEvents.add(Struct(
     type=Literal("add-book"),
     id=Uuid,
@@ -257,6 +269,7 @@ AddBook = BookEvents.add(Struct(
     timestamp=Timestamp,
 ))
 
+# stream: "books"
 UpdateBookRestricted = BookEvents.add(Struct(
     type=Literal("update-book-restricted"),
     id=Uuid,
@@ -264,6 +277,7 @@ UpdateBookRestricted = BookEvents.add(Struct(
     timestamp=Timestamp,
 ))
 
+# stream: "books"
 RemoveBook = BookEvents.add(Struct(
     type=Literal("remove-book"),
     id=Uuid,
@@ -274,6 +288,7 @@ RemoveBook = BookEvents.add(Struct(
 
 PatronEvents = Union()
 
+# stream: "patron.{patron_uuid}"
 AddPatron = PatronEvents.add(Struct(
     type=Literal("add-patron"),
     id=Uuid,
@@ -282,6 +297,7 @@ AddPatron = PatronEvents.add(Struct(
     timestamp=Timestamp,
 ))
 
+# stream: "patron.{patron_uuid}"
 RenamePatron = PatronEvents.add(Struct(
     type=Literal("rename-patron"),
     id=Uuid,
@@ -289,6 +305,7 @@ RenamePatron = PatronEvents.add(Struct(
     timestamp=Timestamp,
 ))
 
+# stream: "patron.{patron_uuid}"
 AssignPatron = PatronEvents.add(Struct(
     type=Literal("assign-patron"),
     id=Uuid,
@@ -300,6 +317,7 @@ StatusEvents = Union()
 
 # holds: fully visible to hold owners; partially visible globally
 
+# stream: "status"
 TryHold = StatusEvents.add(Struct(
     type=Literal("try-hold"),
     id=Uuid,
@@ -310,11 +328,13 @@ TryHold = StatusEvents.add(Struct(
     timestamp=Timestamp,
 ))
 
+# stream: "status"
 CancelHold = StatusEvents.add(Struct(
     type=Literal("cancel-hold"),
     hold=Uuid,
 ))
 
+# stream: "status"
 ExpireHold = StatusEvents.add(Struct(
     type=Literal("expire-hold"),
     hold=Uuid,
@@ -325,6 +345,7 @@ ExpireHold = StatusEvents.add(Struct(
 
 # only valid if it appears valid when reading the log
 # automatically cancels the relevant hold
+# stream: "status"
 TryCheckout = StatusEvents.add(Struct(
     type=Literal("try-checkout"),
     id=Uuid,
@@ -333,6 +354,7 @@ TryCheckout = StatusEvents.add(Struct(
     timestamp=Timestamp,
 ))
 
+# stream: "status"
 EndCheckout = StatusEvents.add(Struct(
     type=Literal("end-checkout"),
     checkout=Uuid,
@@ -340,6 +362,7 @@ EndCheckout = StatusEvents.add(Struct(
 ))
 
 # system-generated event
+# stream: "status"
 OverdueCheckout = StatusEvents.add(Struct(
     type=Literal("overdue-checkout"),
     checkout=Uuid,
@@ -354,6 +377,7 @@ OverdueCheckout = StatusEvents.add(Struct(
 # necessary to tell clients about the hold decisions without exposing all the
 # data required to make those decisions.
 
+# stream: "vstatus"
 NewVHold = DeciderEvents.add(Struct(
     type=Literal("new-vhold"),
     id=Uuid,
@@ -367,6 +391,7 @@ NewVHold = DeciderEvents.add(Struct(
 
 # Similarly, since clients cannot have enough information to make hold decisions
 # on their own, they must be alerted to when their own holds were rejected.
+# stream: "vstatus"
 VHoldRejected = DeciderEvents.add(Struct(
     type=Literal("vhold-rejected"),
     id=Uuid,
@@ -374,6 +399,7 @@ VHoldRejected = DeciderEvents.add(Struct(
 ))
 
 # Similar to NewVHold, but for checkouts.
+# stream: "vstatus"
 NewVCheckout = DeciderEvents.add(Struct(
     type=Literal("new-vcheckout"),
     id=Uuid,

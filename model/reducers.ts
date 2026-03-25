@@ -150,6 +150,7 @@ function *reduceAddPatron(rx: PatronRX, e: AddPatron): Reducer<void> {
     checkouts: {},
     holds: {},
   });
+  yield* rx.update.patrons((patrons) => patrons[e.id] = true);
 }
 
 function *reduceRenamePatron(rx: PatronRX, e: RenamePatron): Reducer<void> {
@@ -182,7 +183,7 @@ type FullStatusRX = StatusRX & PatronRX & BookRX;
 // returns rejection reason, or an empty string
 function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
   // patron checks
-  const patron = yield* rx.get.patron(e.id);
+  const patron = yield* rx.get.patron(e.patron);
   if (!patron.researcher && e.open) {
     // non-researcher not allowed to issue open hold;
     return "non-researcher not allowed to issue open hold";

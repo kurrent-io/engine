@@ -72,7 +72,7 @@ def convert_union(d, name, t, annos, converters):
 
     def visit(solution):
         if isinstance(solution, Match):
-            d.print(f"out := {converters[solution.typ]('x')}\n")
+            d.print(f"out := {converters[solution.typ]('value')}\n")
             d.print(f"return out\n")
         elif isinstance(solution, CheckJsonType):
             d.print(f"switch x.ExportType() {{\n")
@@ -135,7 +135,7 @@ def convert_union(d, name, t, annos, converters):
                     elif isinstance(value, int):
                         govalue = f'"int64({value})"'
                     else:
-                        raise ValueError(f"unexpected literal: {value} if type {type(value).__name__}")
+                        raise ValueError(f"unexpected literal: {value} of type {type(value).__name__}")
                     d.print(f'case x.StrictEquals(vm.ToValue({govalue})):\n')
                     d.indent("\t")
                     visit(sln)
@@ -305,6 +305,8 @@ def generate_types(d, imports, annos, converters, t):
             name = Pascal(t.name or path)
             d.print(f"\ntype {name} interface {{\n")
             d.indent("\t")
+            d.print(f"json.Marshaler\n")
+            d.print(f"json.Unmarshaler\n")
             d.print(f"Is{name}()\n")
             d.dedent()
             d.print(f"}}\n")
@@ -324,6 +326,17 @@ def generate_types(d, imports, annos, converters, t):
             name = Pascal(t.name or path)
             # define the type as a wrapper around goja.Object
             d.print(f"\ntype {name} goja.Object\n")
+            # define the json.Marshaler and Unmarshaler interface
+            d.print(f"\nfunc (x *{name}) MarshalJSON() ([]byte, error) {{\n")
+            d.indent("\t")
+            d.print(f"return (*goja.Object)(x).MarshalJSON()")
+            d.dedent()
+            d.print(f"}}\n")
+            d.print(f"\nfunc (x *{name}) UnmarshalJSON(data []byte) error {{\n")
+            d.indent("\t")
+            d.print(f"return nil // this is as pointless as the goja unmarshaler is\n")
+            d.dedent()
+            d.print(f"}}\n")
             # define the converter
             d.print(f"\nfunc To{name}(vm *goja.Runtime, value goja.Value) *{name} {{\n")
             d.indent("\t")
@@ -975,6 +988,7 @@ def generate(d, concretes, roots, stores, frameworks, args):
 
     # we collect imports as we go, accumulating code in a sub-Denter
     imports = {
+        "encoding/json": None,
         "errors": None,
         "fmt": None,
         "iter": None,
