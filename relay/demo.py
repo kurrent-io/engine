@@ -1,0 +1,51 @@
+import dataclasses
+import os
+from typing import Any, List
+
+import model as model
+
+fw = model.DeciderFramework[Any](
+    os.path.join(os.path.dirname(__file__), "relay.js"),
+    "InMemStorage",
+    "deciderMigrate",
+    "deciderReducer",
+)
+
+event = {
+    "type": "add-edition",
+    "isbn": "my-isbn",
+    "title": "cheech-and-chong-learn-event-sourcing",
+    "timestamp": "2025-01-24T15:54:32Z",
+}
+assert not (errors := model.checkLibraryEvents(event)), "errors:\n  - " + "\n  - ".join(errors)
+
+@dataclasses.dataclass
+class Book:
+    title: str
+    copies: int
+
+@fw.new_query
+async def book_list(qx: model.DeciderQueryContext, *_: Any) -> List[Book]:
+    return [
+        Book(
+            title=(edition := await qx.edition(isbn)).title,
+            copies=len(edition.books),
+        )
+        for isbn in await qx.editions()
+    ]
+
+@book_list.subscribe
+def book_list_sub(bl: List[Book]) -> None:
+    print("book list is:")
+    print("  - " + "\n  - ".join(f"{b.title} (x{b.copies})" for b in bl))
+
+fw.recv_events([event], None)
+fw.run()
+
+fw.recv_events([{
+    "type": "add-edition",
+    "isbn": "my-isbn-2",
+    "title": "everyone-else-learns-event-sourcing",
+    "timestamp": "2025-01-24T15:54:32Z",
+}], None)
+fw.run()

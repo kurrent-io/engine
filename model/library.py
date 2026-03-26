@@ -396,6 +396,9 @@ VHoldRejected = DeciderEvents.add(Struct(
     type=Literal("vhold-rejected"),
     id=Uuid,
     reason=String,
+    # A client will only see vhold-rejected for holds it has itself requested, so
+    # from the client perspective, `patron` will always be its own patron id
+    patron=Uuid,
 ))
 
 # Similar to NewVHold, but for checkouts.
