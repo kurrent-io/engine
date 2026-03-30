@@ -378,7 +378,7 @@ def framework_name(name):
 
 def generate_framework(d, annos, f):
     """
-    class DeciderFramework[P](BaseFramework[
+    class DeciderFramework[P](Framework[
         DeciderStoreQueryContext,  # QX: a python object, enabling python queries
         _quickjs.Value,  # RX: a javascript object, because reducers come from javascript
         LibraryEvents,  # E: events from the server
@@ -405,7 +405,7 @@ def generate_framework(d, annos, f):
     C = annos[f.event_type]
     d.print("\n")
     d.print("\n")
-    d.print(f"class {framework_name(f.name)}[P](BaseFramework[\n")
+    d.print(f"class {framework_name(f.name)}[P](Framework[\n")
     d.print(f"    {QX},  # python query context, enabling python queries\n")
     d.print(f"    _quickjs.Value,  # reducer context assumes we're using javascript reducer\n")
     d.print(f"    {E},  # event type from server\n")
@@ -437,6 +437,7 @@ def generate(d, concretes, roots, stores, frameworks, args):
     # include skeleton code
     with open(os.path.join(os.path.dirname(__file__), "skeleton.py"), "r") as f:
         d.print(f.read())
+    d.print("\n\n")
 
     types_to_visit = (
         [r for r in roots]

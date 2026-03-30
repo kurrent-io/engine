@@ -73,17 +73,26 @@ QueryFunction = Callable[[QX, T | None, bool], QueryGenerator[T]]
 
 
 class Query[T]:
-    def __init__(self, _query: _quickjs.Value):
+    def __init__(self, _query: _quickjs.Value, on_start: Callable[[], None]):
         self._query = _query
+        self._on_start = on_start
 
-    async def result(self) -> T:
-        return cast(T, await _QueryResult(self._query.id))
+    @property
+    def latest(self) -> T | None:
+        return self._query.latest
+
+    def start(self) -> T:
+        self._query.start()
+        self._on_start()
 
     def subscribe(self, cb: Callable[[T], None]) -> Callable[[], None]:
         return cast(Callable[[], None], self._query.subscribe(cb))
 
     def close(self) -> None:
         self._query.close()
+
+    async def result(self) -> T:
+        return cast(T, await _QueryResult(self._query.id))
 
 
 # TODO: only synchronous storage is currently supported, for two reasons:
@@ -112,15 +121,15 @@ class Txn(Protocol):
     def delete(self, key: str) -> None: ...
 
 
-class BaseFramework[QX, RX, E, C, P]:
+class Framework[QX, RX, E, C, P]:
     '''
-    BaseFramework chooses not to make assumptions about how you implement:
+    Framework chooses not to make assumptions about how you implement:
       - reducers can be written in python, if you want.
       - you can use a javascript query context with python query functions.  Weird, but ok.
       - all this at the cost of way too many type parameters.
 
     More likely, you should use a generated subclass that guides you through these choices.  But the
-    BaseFramework is availalble if you wanna do something crazy.
+    Framework is availalble if you wanna do something crazy.
     '''
     def __init__(
         self,
@@ -178,18 +187,18 @@ class BaseFramework[QX, RX, E, C, P]:
             sourcemap = json.loads(base64.b64decode(b64))
 
         flags = 1 | (1<<5) # JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
-        m = self._js.eval(text, file=bundle, sourcemap=sourcemap, flags=flags)
+        self.module = self._js.eval(text, file=bundle, sourcemap=sourcemap, flags=flags)
 
         if isinstance(decoder, str):
-            decoder = m[decoder]
+            decoder = self.module[decoder]
         # wrap decoder function, probably from javascript, in a closure that maps it against an
         # entire list of events before returning, to prevent bouncing between python and js too much
         self._decoder = self._js.eval("(decoder) => ((events) => events.map(decoder))")(decoder)
 
         if isinstance(storage, str):
             # storage is from javascript, maybe InMemTxn
-            if hasattr(m, storage):
-                storage = self._js.eval("(cls) => new cls()")(m[storage])
+            if hasattr(self.module, storage):
+                storage = self._js.eval("(cls) => new cls()")(self.module[storage])
             else:
                 raise ValueError("unsure how to instantiate storage")
         else:
@@ -197,22 +206,22 @@ class BaseFramework[QX, RX, E, C, P]:
             storage = _quickjs.make_storage(self._js, storage)
 
         if isinstance(qx, str):
-            qx = m[qx]
+            qx = self.module[qx]
             qxjs = qx
         else:
             qxjs = _quickjs.Opaque(qx)
 
         if isinstance(rx, str):
-            rx = m[rx]
+            rx = self.module[rx]
             rxjs = rx
         else:
             rxjs = _quickjs.Opaque(rx)
 
         if isinstance(migrate, str):
-            migrate = m[migrate]
+            migrate = self.module[migrate]
 
         if isinstance(reducer, str):
-            reducer = m[reducer]
+            reducer = self.module[reducer]
 
         callbacks = { "reducer": reducer }
         if migrate is not None:
@@ -220,7 +229,7 @@ class BaseFramework[QX, RX, E, C, P]:
 
         self._framework: _quickjs.Value = self._js.eval(
             "(cls, qx, rx, storage, callbacks) => new cls(qx, rx, storage, callbacks)",
-        )(m["Framework"], qxjs, rxjs, storage, callbacks)
+        )(self.module["Framework"], qxjs, rxjs, storage, callbacks)
 
     def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:
         # queryfunc will wrap the python generator in a javascript iterator
@@ -243,15 +252,13 @@ class BaseFramework[QX, RX, E, C, P]:
 
             return {"next": nextfunc}
 
-        # call javascript framework.newQuery() to get javascript _Query
-        _query = self._framework.newQuery(queryfunc)
+        # call javascript framework.newQuery() with manualStart=true to get javascript _Query
+        _query = self._framework.newQuery(queryfunc, True)
 
         # wrap _Query in a suitable python interface
-        return Query(_query)
+        return Query(_query, lambda: self._run())
 
     def recv_events(self, raw_events: List[Any], checkpoint: P) -> None:
         events = self._decoder(raw_events)
         self._framework.recvEvents(events, checkpoint)
-
-    def run(self) -> None:
         self._run()

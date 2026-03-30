@@ -1069,10 +1069,6 @@ func (f *Framework[QX, RX, E, C, P]) VM() *goja.Runtime {
 	return f.vm
 }
 
-func (f *Framework[QX, RX, E, C, P]) Run() error {
-	return f.run()
-}
-
 func (f *Framework[QX, RX, E, C, P]) RecvEvents(rawEvents []goja.Value, checkpoint P) error {
 	decoded := make([]goja.Value, len(rawEvents))
 	for i, raw := range rawEvents {
@@ -1083,15 +1079,18 @@ func (f *Framework[QX, RX, E, C, P]) RecvEvents(rawEvents []goja.Value, checkpoi
 		decoded[i] = dec
 	}
 	_, err := f.recvEvents(f.fw, f.vm.ToValue(decoded), f.vm.ToValue(checkpoint))
-	return err
+	if err != nil {
+		return err
+	}
+	return f.run()
 }
 
-func (f *Framework[QX, RX, E, C, P]) Reconnect(fn func(*P)) error {
+func (f *Framework[QX, RX, E, C, P]) Reconnect() (*P, error) {
+	var out *P
 	jsfn := WrapPanics(f.vm, func(call goja.FunctionCall) (goja.Value, error) {
 		var value goja.Value = call.Arguments[0]
 		// did we get a checkpoint value?
 		if goja.IsUndefined(value) {
-			fn(nil)
 			return nil, nil
 		}
 		// export received checkpoint value
@@ -1102,16 +1101,52 @@ func (f *Framework[QX, RX, E, C, P]) Reconnect(fn func(*P)) error {
 				"exporting checkpoint value (%v) to target type (%T): %w", value, checkpoint, err,
 			)
 		}
-		fn(&checkpoint)
+		out = &checkpoint
 		return nil, nil
 	})
 	_, err := f.reconnect(f.fw, jsfn)
-	return err
+	return out, err
 }
 
 type Query[T any] struct {
 	vm    *goja.Runtime
 	query *goja.Object
+}
+
+func (q *Query[T]) Start() (T, error) {
+	var zero T
+	startFn, ok := goja.AssertFunction(q.query.Get("start"))
+	if !ok {
+		panic("Query.start is not callable??")
+	}
+	_, err := startFn(q.query)
+	if err != nil {
+		return zero, fmt.Errorf("query.start failed: %w", err)
+	}
+	err = f.run()
+	if err != nil {
+		return zero, fmt.Errorf("query.start failed: %w", err)
+	}
+	return q.Latest(), nil
+}
+
+func (q *Query[T]) Close() {
+	closeFn, ok := goja.AssertFunction(q.query.Get("close"))
+	if !ok {
+		panic("Query.close is not callable??")
+	}
+	err := closeFn(q.query)
+	if err != nil {
+		panic(fmt.Sprintf("Query.close failed?? (%v)", err))
+	}
+}
+
+func (q *Query[T]) Latest() *T {
+	latest := q.query.Get("latest")
+	if latest == nil || goja.IsUndefined(latest) {
+		return nil
+	}
+	return latest.Export().(T)
 }
 
 // from within another query function, ask for the result of this query
@@ -1200,7 +1235,7 @@ func (q *Query[T]) Subscribe(fn func(T)) func() {
 	return func(){
 		_, err := unsubFn(goja.Undefined())
 		if err != nil {
-			panic("Query unsubscribe failed??")
+			panic(fmt.Sprintf("Query unsubscribe failed?? (%v)", err))
 		}
 	}
 }
@@ -1242,8 +1277,8 @@ func NewQuery[QX QueryContext, RX any, E any, C any, P any, T any](
 		return it
 	}
 
-	// call javascript method: Framework.newQuery(), which does not throw
-	query, err := fw.newQuery(fw.fw, fw.vm.ToValue(queryfunc))
+	// call javascript method: Framework.newQuery() with manualStart=true, which does not throw
+	query, err := fw.newQuery(fw.fw, fw.vm.ToValue(queryfunc), fw.vm.ToValue(true))
 	if err != nil {
 		panic("framework.newQuery failed??")
 	}

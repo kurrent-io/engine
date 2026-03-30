@@ -1782,10 +1782,17 @@ export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
 
 // user-facing query api
 export interface Query<T> {
+  // latest holds the most recent value passed to subscribe callback.  It is updated immediately
+  // after subscribe callbacks are made, on a per-Query basis.
+  latest: T | undefined;
   // awaitResult has no effect when executed outside of a query function
   awaitResult(): QueryGenerator<T>
   // subscribe returns an unsubscribe function
   subscribe(callback: (val: T) => void): () => void;
+  // start will start the query, if it wasn't created with start=true.  This is mostly for wrappers
+  // written in other languages, where the event-loop will be managed automatically, and the caller
+  // needs a way to create the query and subscribe to it before letting it run the first time.
+  start(): void;
   // close will stop the query from running again.
   // Dependent queries which are not also closed will start crashing.
   close(): void;
@@ -1822,6 +1829,7 @@ interface QueryWrapper<QX> {
 
 class _Query<QX, T> {
   id: string;
+  latest: T | undefined = undefined;
   closed: boolean = false;
 
   #subs: ((val: T) => void)[] = [];
@@ -1833,14 +1841,19 @@ class _Query<QX, T> {
   #runs: number = 0;
   #result: T | undefined = undefined;
   #fn: (qx: QX, prev: T | undefined, prevIsValid: boolean) => QueryGenerator<T>;
+  #onStart: (() => void) | undefined;
 
-  constructor(id: string, fn: QueryFunction<QX, T>) {
+  constructor(id: string, fn: QueryFunction<QX, T>, onStart: () => void) {
     this.id = id;
     this.#fn = fn;
+    this.#onStart = onStart;
   }
 
   // part of public api
   *awaitResult(): QueryGenerator<T> {
+    if (this.#onStart) {
+      throw new Error("cannot await result of unstarted Query");
+    }
     // don't try to coordinate our own #result vaule with the graph being executed; just use this as
     // an idiomatic way to ask the graph run for the result from our .id.
     const ans = yield {query: {[this.id]: true}};
@@ -1854,6 +1867,16 @@ class _Query<QX, T> {
     return () => {
       this.#subs = this.#subs.filter((x) => x !== callback);
     };
+  }
+
+  start(): void {
+    if (this.closed) {
+      throw new Error("call to Query.start() on closed query");
+    }
+    if (this.#onStart) {
+      this.#onStart();
+      this.#onStart = undefined
+    }
   }
 
   // part of public api
@@ -1926,6 +1949,7 @@ class _Query<QX, T> {
     for (const sub of this.#subs) {
       sub(this.#result!);
     }
+    this.latest = this.#result;
   }
 }
 
@@ -2069,11 +2093,14 @@ export class QueryGraph<QX> {
     this.#run = new GraphRun(this.#qx, {});
   }
 
-  newQuery<T>(fn: QueryFunction<QX, T>): Query<T> {
+  newQuery<T>(fn: QueryFunction<QX, T>, manualStart: boolean, onStart: () => void): Query<T> {
     const id = `${this.#id++}`;
-    const q = new _Query(id, fn);
-    this.#queries[id] = q;
-    this.#newQueries.push(q);
+    const q = new _Query(id, fn, () => {
+      onStart();
+      this.#queries[id] = q;
+      this.#newQueries.push(q);
+    });
+    if (!manualStart) q.start();
     return q;
   }
 
@@ -2221,10 +2248,11 @@ export class Framework<QX, RX, E, C, P> {
   }
 
   // add a new Query to the graph
-  newQuery<T>(fn: QueryFunction<QX, T>): Query<T> {
-    this.#newQueries = true;
-    this.#schedule();
-    return this.#graph.newQuery(fn);
+  newQuery<T>(fn: QueryFunction<QX, T>, manualStart?: boolean): Query<T> {
+    return this.#graph.newQuery(fn, manualStart ?? false, () => {
+      this.#newQueries = true;
+      this.#schedule();
+    });
   }
 
   //// end of public api ////

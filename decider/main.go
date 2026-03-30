@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"math"
 	"os"
 	"slices"
 	"sync"
@@ -60,22 +59,26 @@ func setupFramework(
 	}
 
 	// DEBUG //
-	model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext, prev *string) string {
+	q := model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext, prev *string) string {
 		out := fmt.Sprintf("have books:\n")
 		for isbn := range qx.Editions() {
 			edition := qx.Edition(isbn)
 			out += fmt.Sprintf("  - %v (x%v)\n", edition.Title(vm), len(edition.Books(vm)))
 		}
 		return out
-	}).Subscribe(func(out string) { print(out) })
-	model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext, prev *string) string {
+	})
+	q.Subscribe(func(out string) { print(out) })
+	q.Start()
+	q = model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext, prev *string) string {
 		out := fmt.Sprintf("have patrons:\n")
 		for id := range qx.Patrons() {
 			patron := qx.Patron(id)
 			out += fmt.Sprintf("  - %v, researcher=%v\n", patron.Name(vm), patron.Researcher(vm))
 		}
 		return out
-	}).Subscribe(func(out string) { print(out) })
+	})
+	q.Subscribe(func(out string) { print(out) })
+	q.Start()
 	// END OF DEBUG //
 
 	// query for the decider events emitted by our reducer
@@ -93,24 +96,20 @@ func setupFramework(
 		*deciderEvents = result
 	})
 
+	query.Start()
+
 	// also request the current checkpoint status
-	var checkpoint Checkpoint
-	err = fw.Reconnect(func(ckpt *Checkpoint) {
-		if ckpt != nil {
-			checkpoint = *ckpt
-		}
-	})
+	checkpoint, err := fw.Reconnect()
 	if err != nil {
 		return nil, 0, fmt.Errorf("requesting reconnect info: %w", err)
 	}
 
-	// do initial work
-	err = fw.Run()
-	if err != nil {
-		return nil, 0, fmt.Errorf("initial query run: %w", err)
+	var checkpointOut Checkpoint
+	if checkpoint != nil {
+		checkpointOut = *checkpoint
 	}
 
-	return fw, checkpoint, nil
+	return fw, checkpointOut, nil
 }
 
 func setupKurrent(
@@ -453,10 +452,6 @@ func run(ctx context.Context) error {
 
 		// push a batch into the framework
 		err = fw.RecvEvents(batch.Events, batch.Checkpoint)
-		if err != nil {
-			return err
-		}
-		err = fw.Run()
 		if err != nil {
 			return err
 		}
