@@ -26,7 +26,7 @@ import kurrentdbclient as kdbc
 import model
 
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger("relay")
 
 # a sentinel to be used in place of patron_id for administrators
@@ -70,9 +70,10 @@ class Sync:
             while self.value < position:
                 await self.cond.wait()
 
-    def update(self, value: int) -> None:
+    async def update(self, value: int) -> None:
         self.value = value
-        self.cond.notify_all()
+        async with self.cond:
+            self.cond.notify_all()
 
 
 def assert_never(arg: Never) -> Never:
@@ -157,6 +158,10 @@ class Appender:
         await self.sync.wait_for(position)
 
 
+def wrap_event(event: str, position: int) -> str:
+    return '{"position": %d, "event": %s}'%(position, event)
+
+
 class Subscriber:
     """Subscriber subscribes to the database."""
     def __init__(
@@ -165,7 +170,7 @@ class Subscriber:
         self.sync = sync
         self.fw = fw
         self.client = client
-        self.watches: Dict[PatronID, List[Callable[[bytes, int], None]]] = {}
+        self.watches: Dict[PatronID, List[Callable[[str], None]]] = {}
         self.q: asyncio.Queue[kdbc.RecordedEvent] = asyncio.Queue(100)
 
     async def start(self) -> None:
@@ -174,6 +179,7 @@ class Subscriber:
         async with await self.client.read_all(
             commit_position=since,
             resolve_links=True,
+            filter_by_stream_name=True,
             filter_by_prefix=True,
             filter_include=(
                 "books",
@@ -190,7 +196,11 @@ class Subscriber:
                     self.update_read_model(batch)
                     batch = []
         if batch:
-            self.update_read_model(batch)
+            print("got batch", batch);
+            await self.update_read_model(batch)
+
+        print("caught up");
+        self.fw.caught_up()
 
     async def run(self) -> None:
         await waitgroup(self.collect(), self.process())
@@ -208,6 +218,7 @@ class Subscriber:
         async with await self.client.subscribe_to_all(
             commit_position=since,
             resolve_links=True,
+            filter_by_stream_name=True,
             filter_by_prefix=True,
             filter_include=(
                 "books",
@@ -227,10 +238,10 @@ class Subscriber:
         while not self.q.empty():
             batch.append(self.q.get_nowait())
 
-        self.update_read_model(batch)
+        await self.update_read_model(batch)
         self.dispatch(batch)
 
-    def update_read_model(self, batch: List[kdbc.RecordedEvent]) -> None:
+    async def update_read_model(self, batch: List[kdbc.RecordedEvent]) -> None:
         # first read all the json
         events = []
         for event in batch:
@@ -242,11 +253,12 @@ class Subscriber:
         self.fw.recv_events(events, position)
 
         # notify anybody who was waiting for a round-trip
-        self.sync.update(position)
+        await self.sync.update(position)
 
     def dispatch(self, batch: List[kdbc.RecordedEvent]) -> None:
         # also dispatch the events to the various watches
         for event in batch:
+            wrapped = wrap_event(event.data.decode('utf8'), event.stream_position)
             match event.stream_name.split(".", maxsplit=1):
                 # events not relayed to end users:
                 case ("status", _):
@@ -255,15 +267,15 @@ class Subscriber:
                 # events with global distribution
                 case ("books", _):
                     for put in (put for w in self.watches.values() for put in w):
-                        put(event.data, event.stream_position)
+                        put(wrapped)
 
                 # events with limited distribution
                 case ("patron", patron_id):
                     for put in self.watches.get(patron_id, []):
-                        put(event.data, event.stream_position)
+                        put(wrapped)
                     # always include admins
                     for put in self.watches.get(ADMIN, []):
-                        put(event.data, event.stream_position)
+                        put(wrapped)
 
                 # events needing sanitization
                 case ("vstatus", _):
@@ -276,7 +288,7 @@ class Subscriber:
                     if typ in ("new-vhold", "new-vcheckout"):
                         temp = dict(j)
                         del temp["patron_id"]
-                        sanitized = json.dumps(temp).encode('utf8')
+                        sanitized = wrap_event(json.dumps(temp), event.stream_position)
 
                     # actually distribute the events
                     for put, w_patron_id in (
@@ -287,18 +299,19 @@ class Subscriber:
                             continue
                         elif sanitized and patron_id not in (ADMIN, j["patron_id"]):
                             # emit sanitized message
-                            put(sanitized, event.stream_position)
+                            put(sanitized)
                         else:
                             # emit full message
-                            put(event.data, event.stream_position)
+                            put(wrapped)
 
     async def catchup(
         self, patron_id: PatronID, since: int,
-    ) -> AsyncGenerator[Tuple[bytes, int]]:
+    ) -> AsyncGenerator[Tuple[str, int]]:
         patron_stream_prefix = "patron." + ("" if patron_id == ADMIN else str(patron_id))
         async with await self.client.read_all(
             commit_position=since,
             resolve_links=True,
+            filter_by_stream_name=True,
             filter_by_prefix=True,
             filter_include=(
                 "books",
@@ -308,7 +321,7 @@ class Subscriber:
         ) as stream:
             async for event in stream:
                 if patron_id == ADMIN or event.stream_name != "vstatus":
-                    yield event.data, event.stream_position
+                    yield event.data.decode("utf8"), event.stream_position
                     continue
                 # sanitize the vstatus stream
                 j = json.loads(event.data)
@@ -319,7 +332,7 @@ class Subscriber:
                 if typ in ("new-vhold", "new-vcheckout"):
                     # sanitize
                     del j["patron_id"]
-                yield json.dumps(j).encode('utf8'), event.stream_position
+                yield json.dumps(j), event.stream_position
 
 
     async def stream(self, patron_id: PatronID, since: int, w: Writer) -> None:
@@ -327,7 +340,7 @@ class Subscriber:
 
         # first do a cold catchup, which may take a while (we don't want to collect live events yet)
         async for event, position in self.catchup(patron_id, since):
-            await w.put_start(event, position)
+            await w.put_start(wrap_event(event, position))
             since = position
 
         # now subscribe to live events
@@ -335,7 +348,7 @@ class Subscriber:
         try:
             # do a hot catchup to make sure we don't miss any events
             async for event, position in self.catchup(patron_id, since):
-                await w.put_start(event, position)
+                await w.put_start(wrap_event(event, position))
                 since = position
 
             # transition to the liveq, discarding duplicate events
@@ -363,36 +376,35 @@ class Writer:
     def __init__(self, patron_id: PatronID, ws: web.WebSocketResponse) -> None:
         self.patron_id = patron_id
         self.ws = ws
-        self.startq: asyncio.Queue[None | Tuple[bytes, int]] = asyncio.Queue(10)
-        self.liveq: asyncio.Queue[Tuple[bytes, int]] = asyncio.Queue(100)
+        self.startq: asyncio.Queue[None | str] = asyncio.Queue(10)
+        self.liveq: asyncio.Queue[str] = asyncio.Queue(100)
         # call _run() now so we have a handle for canceling it
         self.coro = self._run()
 
     async def run(self) -> None:
         await self.coro
 
-    @staticmethod
-    def _wrap(event_bytes: bytes, position: int) -> bytes:
-        return b'{"position":%d,"event":%s}' % (position, event_bytes)
-
     async def _run(self) -> None:
         # drain the startq until we see the None sentinel, ending that stream
         while True:
             msg = await self.startq.get()
             if msg is None: break
-            await self.ws.send_bytes(Writer._wrap(*msg))
+            await self.ws.send_str(msg)
+
+        # send a caughtup message
+        await self.ws.send_str("caughtup")
 
         # then drain the liveq forever
         while True:
             msg = await self.liveq.get()
-            await self.ws.send_bytes(Writer._wrap(*msg))
+            await self.ws.send_str(msg)
 
-    async def put_start(self, event_bytes: bytes, position: int) -> None:
-        await self.startq.put((event_bytes, position))
+    async def put_start(self, msg: str) -> None:
+        await self.startq.put(msg)
 
-    def put_live(self, msg: bytes, position: int) -> None:
+    def put_live(self, msg: str) -> None:
         try:
-            self.liveq.put_nowait((msg, position))
+            self.liveq.put_nowait(msg)
         except asyncio.QueueFull:
             self.fell_behind()
 
@@ -411,13 +423,14 @@ class Writer:
         while True:
             try:
                 # pop duplicates from the queue
-                event, position = self.liveq.get_nowait()
+                event = self.liveq.get_nowait()
             except asyncio.QueueEmpty:
                 # liveq is empty
                 break
+            position = json.loads(event)["position"]
             if position <= since: continue
             # oops this isn't a duplicate; make it the last event on the startq
-            await self.startq.put((event, position))
+            await self.startq.put(event)
             break
         # push a sentinel to the startq, so self._run() will switch
         await self.startq.put(None)
@@ -620,9 +633,10 @@ async def amain(connstr: str) -> None:
 
         # set up the webserver
         async with setupWebserver("localhost:3003", {
+            "framework": fw,
             "client": client,
-            "appender": Appender,
-            "subscriber": Subscriber,
+            "appender": appender,
+            "subscriber": subscriber,
         }):
 
             print("ready")

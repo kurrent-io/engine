@@ -115,6 +115,7 @@ export default function PatronWindow({
 
     let cancelled = false;
     let reconnectTimer: ReturnType<typeof setTimeout>;
+    let backoff = 1000;
 
     function connect() {
       if (cancelled) return;
@@ -130,6 +131,7 @@ export default function PatronWindow({
 
         ws.onopen = () => {
           if (cancelled) { ws.close(); return; }
+          backoff = 1000;
           // send handshake
           ws.send(JSON.stringify({
             patron_id: patronId,
@@ -139,16 +141,21 @@ export default function PatronWindow({
         };
 
         ws.onmessage = (msg) => {
-          const wrapped = JSON.parse(msg.data);
-          const event = DecodeLibraryEvents(wrapped.event);
-          fw.recvEvents([event], wrapped.position);
+          if (msg.data === "caughtup") {
+            fw.caughtUp();
+          } else {
+            const parsed = JSON.parse(msg.data);
+            const event = DecodeLibraryEvents(parsed.event);
+            fw.recvEvents([event], parsed.position);
+          }
         };
 
         ws.onclose = () => {
           if (cancelled) return;
           setConnState('disconnected');
           wsRef.current = null;
-          reconnectTimer = setTimeout(connect, 2000);
+          reconnectTimer = setTimeout(connect, backoff);
+          backoff = Math.min(backoff * 2, 60000);
         };
 
         ws.onerror = () => {

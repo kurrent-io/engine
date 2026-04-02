@@ -58,6 +58,14 @@ func setupFramework(
 		return nil, 0, fmt.Errorf("creating framework: %w", err)
 	}
 
+	// Enable queries immediately.  We manually control when we want to ignore the decider events
+	// emitted by the query graph, based on where we are in the stream vs the last committed decider
+	// events in the database; this Framework.caughtUp() mechanism is irrelevant to us.
+	err = fw.CaughtUp()
+	if err != nil {
+		return nil, 0, err
+	}
+
 	// DEBUG //
 	q := model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext, prev *string) string {
 		out := fmt.Sprintf("have books:\n")

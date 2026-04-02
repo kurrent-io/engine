@@ -2169,6 +2169,8 @@ export class Framework<QX, RX, E, C, P> {
   #forecastKey: null | ((event: E) => string);
   #onCommands: null | ((commands: C[], onSent: ()=> void) => void);
 
+  #live: boolean = false;
+  #setLive: boolean = false;
   #overlay: OverlayStorage;
   #graph: QueryGraph<QX>;
   #coro: Generator<void, void, void>;
@@ -2239,6 +2241,16 @@ export class Framework<QX, RX, E, C, P> {
   recvEvents(events: E[], checkpoint: P): void {
     this.#recvdEvents.push.apply(this.#recvdEvents, events);
     this.#checkpoint = checkpoint;
+    this.#schedule();
+  }
+
+  fellBehind(): void {
+    this.#setLive = false;
+    this.#schedule();
+  }
+
+  caughtUp(): void {
+    this.#setLive = true;
     this.#schedule();
   }
 
@@ -2348,8 +2360,21 @@ export class Framework<QX, RX, E, C, P> {
     // - recieve a reconnect request
     //     - then return the checkpoint in storage
     while(true){
+      if (this.#live && !this.#setLive) {
+        // we fell behind; freeze graph and overlay, and when caughtUp() is called, we'll process
+        // all changes from now until then with a single run of the graph
+        this.#live = false;
+      }
+
       if (this.#recvdEvents.length > 0) {
         yield* this.#onRecvEvents();
+        continue;
+      }
+
+      if (!this.#live && this.#setLive) {
+        // we caught up, and processed all recvdEvents(); time to restart the query graphs
+        this.#live = true;
+        yield* this.#rebuildOverlay();
         continue;
       }
 
@@ -2363,7 +2388,7 @@ export class Framework<QX, RX, E, C, P> {
         continue;
       }
 
-      if (this.#newQueries) {
+      if (this.#newQueries && this.#live) {
         yield* this.#onNewQueries();
         continue;
       }
@@ -2378,7 +2403,7 @@ export class Framework<QX, RX, E, C, P> {
         continue;
       }
 
-      // if we got here we probably had a spurious wakeup
+      // if we got here we probably had a spurious wakeup, or perhaps a newQuery() while not #live
       yield
     }
   }
@@ -2403,11 +2428,7 @@ export class Framework<QX, RX, E, C, P> {
     })
     this.#graph.dirty(updates);
 
-    // our old overlay is now invalid; start a new one
-    this.#graph.dirty(this.#overlay.keys());
-    this.#overlay = new OverlayStorage(this.#storage);
-
-    // clean up now-irrelevant forecasts
+    // discard now-irrelevant forecasts
     if (this.#forecasts.size > 0) {
       for (const event of events) {
         const key = this.#forecastKey!(event);
@@ -2415,12 +2436,24 @@ export class Framework<QX, RX, E, C, P> {
       }
     }
 
-    // rebuild overlay using all remaining forecasts
+    if (this.#live) {
+      yield* this.#rebuildOverlay();
+    }
+  }
+
+  *#rebuildOverlay(): Generator<void, void, void> {
+    const self = this;
+
+    // discard old overlay, start a new one
+    this.#graph.dirty(this.#overlay.keys());
+    this.#overlay = new OverlayStorage(this.#storage);
+
+    // rebuild overlay using all forecasts
     if (this.#forecasts.size > 0) {
-      yield* withWTxn(this.#fx, this.#overlay, function*(){
-        const updates = yield* runReducer(self.#reducer(self.#rx, [...self.#forecasts.values()]));
-        self.#graph.dirty(updates);
+      const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
+        return yield* runReducer(self.#reducer(self.#rx, [...self.#forecasts.values()]));
       });
+      self.#graph.dirty(updates);
     }
 
     const cbs = yield* withRTxn(this.#fx, this.#overlay, function*(){
@@ -2464,18 +2497,20 @@ export class Framework<QX, RX, E, C, P> {
           this.#forecasts.set(key, forecast);
         }
 
-        // open a write txn against the existing overlay
-        const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
-          return yield* runReducer(self.#reducer(self.#rx, forecasts));
-        });
-        this.#graph.dirty(updates);
+        if (this.#live) {
+          // open a write txn against the existing overlay
+          const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
+            return yield* runReducer(self.#reducer(self.#rx, forecasts));
+          });
+          this.#graph.dirty(updates);
 
-        const cbs = yield* withRTxn(this.#fx, this.#overlay, function*(){
-          // this will run all queries, even new ones
-          self.#newQueries = false;
-          return yield* self.#graph.run();
-        });
-        cbs();
+          const cbs = yield* withRTxn(this.#fx, this.#overlay, function*(){
+            // this will run all queries, even new ones
+            self.#newQueries = false;
+            return yield* self.#graph.run();
+          });
+          cbs();
+        }
       }
     }
 

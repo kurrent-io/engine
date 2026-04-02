@@ -958,6 +958,8 @@ type Framework[QX QueryContext, RX any, E any, C any, P any] struct {
 	newQuery goja.Callable
 	recvEvents goja.Callable
 	reconnect goja.Callable
+	fellBehind goja.Callable
+	caughtUp goja.Callable
 	qxFactory func(*goja.Runtime, Ask) QX
 }
 
@@ -1052,6 +1054,14 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 	if !ok {
 		return nil, errors.New(".reconnect() method not callable")
 	}
+	fellBehind, ok := goja.AssertFunction(fw.Get("fellBehind"))
+	if !ok {
+		return nil, errors.New(".fellBehind() method not callable")
+	}
+	caughtUp, ok := goja.AssertFunction(fw.Get("caughtUp"))
+	if !ok {
+		return nil, errors.New(".caughtUp() method not callable")
+	}
 
 	return &Framework[QX, RX, E, C, P]{
 		vm,
@@ -1061,6 +1071,8 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 		newQuery,
 		recvEvents,
 		reconnect,
+		fellBehind,
+		caughtUp,
 		qxFactory,
 	}, nil
 }
@@ -1083,6 +1095,16 @@ func (f *Framework[QX, RX, E, C, P]) RecvEvents(rawEvents []goja.Value, checkpoi
 		return err
 	}
 	return f.run()
+}
+
+func (f *Framework[QX, RX, E, C, P]) FellBehind() error {
+	_, err := f.fellBehind(f.fw)
+	return err
+}
+
+func (f *Framework[QX, RX, E, C, P]) CaughtUp() error {
+	_, err := f.caughtUp(f.fw)
+	return err
 }
 
 func (f *Framework[QX, RX, E, C, P]) Reconnect() (*P, error) {

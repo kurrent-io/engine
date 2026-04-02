@@ -269,6 +269,14 @@ class Framework[QX, RX, E, C, P]:
         self._framework.recvEvents(events, checkpoint)
         self._run()
 
+    def fell_behind(self) -> None:
+        self._framework.fellBehind()
+        self._run()
+
+    def caught_up(self) -> None:
+        self._framework.caughtUp()
+        self._run()
+
     def reconnect(self) -> P | None:
         info: ReconnectInfo[P, C] | None = None
 

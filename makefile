@@ -75,6 +75,10 @@ ui/check: ui
 .PHONY: check
 check: model/check relay/check ui/check
 
+.PHONY: serve
+serve: ui
+	cd ui && pnpm serve
+
 clean:
 	@rm -f model/library.gen.ts \
 		relay/relay.js relay/_quickjs.so \

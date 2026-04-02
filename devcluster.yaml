@@ -18,6 +18,13 @@ stages:
       - conncheck:
           port: 2113
 - custom:
+    name: setup
+    pre:
+      - sh: python populate.py
+    cmd:
+      - sleep
+      - "1000000"
+- custom:
     name: relay
     pre:
       - sh: make relay
