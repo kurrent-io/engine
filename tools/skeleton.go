@@ -1110,6 +1110,7 @@ func (f *Framework[QX, RX, E, C, P]) Reconnect() (*P, error) {
 
 type Query[T any] struct {
 	vm    *goja.Runtime
+	run   func() error
 	query *goja.Object
 }
 
@@ -1123,11 +1124,11 @@ func (q *Query[T]) Start() (T, error) {
 	if err != nil {
 		return zero, fmt.Errorf("query.start failed: %w", err)
 	}
-	err = f.run()
+	err = q.run()
 	if err != nil {
 		return zero, fmt.Errorf("query.start failed: %w", err)
 	}
-	return q.Latest(), nil
+	return *q.Latest(), nil
 }
 
 func (q *Query[T]) Close() {
@@ -1135,7 +1136,7 @@ func (q *Query[T]) Close() {
 	if !ok {
 		panic("Query.close is not callable??")
 	}
-	err := closeFn(q.query)
+	_, err := closeFn(goja.Undefined(), q.query)
 	if err != nil {
 		panic(fmt.Sprintf("Query.close failed?? (%v)", err))
 	}
@@ -1146,7 +1147,8 @@ func (q *Query[T]) Latest() *T {
 	if latest == nil || goja.IsUndefined(latest) {
 		return nil
 	}
-	return latest.Export().(T)
+	t := latest.Export().(T)
+	return &t
 }
 
 // from within another query function, ask for the result of this query
@@ -1285,6 +1287,7 @@ func NewQuery[QX QueryContext, RX any, E any, C any, P any, T any](
 
 	return &Query[T]{
 		vm:    fw.vm,
+		run:   fw.run,
 		query: query.(*goja.Object),
 	}
 }

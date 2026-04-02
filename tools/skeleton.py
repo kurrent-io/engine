@@ -79,11 +79,12 @@ class Query[T]:
 
     @property
     def latest(self) -> T | None:
-        return self._query.latest
+        return cast(T | None, self._query.latest)
 
     def start(self) -> T:
         self._query.start()
         self._on_start()
+        return cast(T, self._query.latest)
 
     def subscribe(self, cb: Callable[[T], None]) -> Callable[[], None]:
         return cast(Callable[[], None], self._query.subscribe(cb))
@@ -119,6 +120,11 @@ class Txn(Protocol):
     def get(self, key: str) -> memoryview: ...
     def set(self, key: str, value: memoryview) -> None: ...
     def delete(self, key: str) -> None: ...
+
+
+class ReconnectInfo[P, C](Protocol):
+    checkpoint: P | None
+    commands: List[C]
 
 
 class Framework[QX, RX, E, C, P]:
@@ -223,7 +229,7 @@ class Framework[QX, RX, E, C, P]:
         if isinstance(reducer, str):
             reducer = self.module[reducer]
 
-        callbacks = { "reducer": reducer }
+        callbacks: Dict[str, Any] = { "reducer": reducer }
         if migrate is not None:
             callbacks["migrate"] = migrate
 
@@ -262,3 +268,33 @@ class Framework[QX, RX, E, C, P]:
         events = self._decoder(raw_events)
         self._framework.recvEvents(events, checkpoint)
         self._run()
+
+    def reconnect(self) -> P | None:
+        info: ReconnectInfo[P, C] | None = None
+
+        def on_result(x: ReconnectInfo | None) -> None:
+            nonlocal info
+            info = x
+
+        self._framework.reconnect(on_result)
+        self._run()
+
+        return info.checkpoint if info else None
+
+    def simulate[T](self, fn: str | Callable[[RX], T]) -> T:
+        if isinstance(fn, str):
+            fn = self.module[fn]
+
+        sentinel = object()
+        result: Any = sentinel
+
+        def on_result(t: T | None) -> None:
+            nonlocal result
+            result = t
+
+
+        self._framework.simulate(fn, on_result)
+        self._run()
+
+        assert result is not sentinel
+        return cast(T, result)

@@ -1629,7 +1629,7 @@ export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
 // yield* rx.old.project(key): explicitly get the old value for key
 
 // wrap a Reducer so it acts like a WStorageGenerator, returning a set of updated keys
-export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
+export function *runReducer(g: Reducer<void>, simulate?: boolean): WStorageGenerator<string[]> {
   // our cache of get's we've already completed
   const old: Record<string, unknown> = Object.create(null);
   // our planned sets and dels that we submit at the end
@@ -1654,15 +1654,20 @@ export function *runReducer(g: Reducer<void>): WStorageGenerator<string[]> {
       }
     }
     // is there any storage updates to make?
-    if (updates.length === 0) return updates;
-    // actually yield the write request to storage
-    const ans = yield question;
-    // check every result
-    for (const [k, v] of Object.entries(ans.set ?? {})) {
-      if ("err" in v) throw new Error(`setting "${k}" after reducer: ${v.err}`)
-    }
-    for (const [k, v] of Object.entries(ans.del ?? {})) {
-      if ("err" in v) throw new Error(`deleting "${k}" after reducer: ${v.err}`)
+    if (updates.length === 0 || simulate) return updates;
+    let nupdated = 0;
+    while (nupdated < updates.length) {
+      // actually yield the write request to storage
+      const ans = yield question;
+      // check every result
+      for (const [k, v] of Object.entries(ans.set ?? {})) {
+        if ("err" in v) throw new Error(`setting "${k}" after reducer: ${v.err}`)
+        nupdated++;
+      }
+      for (const [k, v] of Object.entries(ans.del ?? {})) {
+        if ("err" in v) throw new Error(`deleting "${k}" after reducer: ${v.err}`)
+        nupdated++;
+      }
     }
     return updates;
   }
@@ -2181,6 +2186,7 @@ export class Framework<QX, RX, E, C, P> {
   #forecasts: Map<string, E> = new Map();
   // just a flag if new queries exist to be run; we don't store them here for typing purposes.
   #newQueries: boolean = false;
+  #simulates: (() => Reducer<void>)[] = [];
 
   constructor(
     qx: QX,
@@ -2224,11 +2230,9 @@ export class Framework<QX, RX, E, C, P> {
   //// public api ////
 
   // request info needed to resume a connection: last committed checkpoint and unsent commands
-  reconnect(): Promise<{checkpoint: P | undefined, commands: C[]}> {
-    return new Promise((resolve) => {
-      this.#reconnects.push(resolve);
-      this.#schedule();
-    });
+  reconnect(cb: (result: {checkpoint: P | undefined, commands: C[]}) => void): void {
+    this.#reconnects.push(cb);
+    this.#schedule();
   }
 
   // new events from the wire come here
@@ -2253,6 +2257,14 @@ export class Framework<QX, RX, E, C, P> {
       this.#newQueries = true;
       this.#schedule();
     });
+  }
+
+  simulate<T>(fn: (rx: RX) => Reducer<T>, cb: (result: T) => void): void {
+    const self = this;
+    this.#simulates.push(function*() {
+      cb(yield* fn(self.#rx));
+    });
+    this.#schedule();
   }
 
   //// end of public api ////
@@ -2358,6 +2370,11 @@ export class Framework<QX, RX, E, C, P> {
 
       if (this.#reconnects.length > 0) {
         yield* this.#onReconnects();
+        continue;
+      }
+
+      if (this.#simulates.length > 0) {
+        yield* this.#onSimulates();
         continue;
       }
 
@@ -2507,6 +2524,17 @@ export class Framework<QX, RX, E, C, P> {
       resolve({checkpoint, commands});
     }
     this.#reconnects = [];
+  }
+
+  *#onSimulates(): Generator<void, void, void> {
+    const simulates = this.#simulates;
+    this.#simulates = [];
+    // use a single read txn for all simulations, since runReducer() with simulate=true doesn't write
+    yield* withRTxn(this.#fx, this.#storage, function*() {
+      for (const fn of simulates) {
+        yield* runReducer(fn(), true);
+      }
+    });
   }
 }
 

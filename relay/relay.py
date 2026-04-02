@@ -1,141 +1,422 @@
 import asyncio
+import contextlib
+import collections.abc
 import dataclasses
+import json
+import logging
 import os
-from typing import Any, List
-
-import model as model
-
-
-async def waitgroup(*coros):
-    """
-    Return a coroutine that propagates the first non-CancelledError from coros,
-    or else waits for all to finish.
-
-    If a failure is to be raised, either due to one of coros crashing or due
-    to the waitgroup coroutine itself being canceled, any remaining coros are
-    canceled and awaited first, so none of coros will ever outlive the
-    waitgroup coroutine.
-    """
-
-    tasks = [
-        asyncio.create_task(c) if asyncio.iscoroutine(c) else c for c in coros
-    ]
-    exc = None
-    while tasks and exc is None:
-        try:
-            done, pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_EXCEPTION
-            )
-        except asyncio.CancelledError as e:
-            # the waitgroup itself was canceled
-            exc = e
-            break
-
-        # grab the first exception
-        # (but visit every task to avoid "exception was never retrieved" errors)
-        for task in done:
-            try:
-                if task.exception() is None:
-                    continue
-            except asyncio.CancelledError:
-                # ignore Cancelled errors.
-                continue
-            if exc is None:
-                # found the first exception
-                exc = task.exception()
-
-        tasks = pending
-
-    if tasks:
-        # absolutely refuse to not wait on all our children
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
-            try:
-                # wait on this task
-                await task
-                # discard exception
-                _ = task.exception()
-            except asyncio.CancelledError:
-                pass
-
-    if exc:
-        raise exc
-
-
-
-fw = model.DeciderFramework[Any](
-    os.path.join(os.path.dirname(__file__), "relay.js"),
-    "InMemStorage",
-    "deciderMigrate",
-    "deciderReducer",
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Dict,
+    Generator,
+    Iterable,
+    List,
+    Never,
+    Set,
+    Tuple,
 )
+
+from aiohttp import web
+import kurrentdbclient as kdbc
+
+import model
+
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("relay")
+
+# a sentinel to be used in place of patron_id for administrators
+class Admin(object):
+    pass
+
+ADMIN = Admin()
+
+PatronID = str | Admin
+
+# note: RelayCommands is an alias in model/library.py, and model.AdminCommands is equivalent
+RelayCommands = model.AdminCommands
+
+EventQ = asyncio.Queue[kdbc.RecordedEvent]
+
+
+async def waitgroup(*coros: Coroutine) -> None:
+    """Run multiple coroutines to completion, or cancel the rest after one crashes."""
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for coro in coros:
+                tg.create_task(coro)
+    except BaseExceptionGroup as e:
+        # preserve first exception... why would I ever want anything else
+        raise e.exceptions[0]
+
+
+class Sync:
+    """
+    A small utility for tracking round trips through the database.
+
+    With each batch of writes we submit, we record the resulting stream position, then wait
+    for the $all stream subscription to reach that position.
+    """
+    def __init__(self) -> None:
+        self.cond = asyncio.Condition()
+        self.value = 0
+
+    async def wait_for(self, position: int) -> None:
+        async with self.cond:
+            while self.value < position:
+                await self.cond.wait()
+
+    def update(self, value: int) -> None:
+        self.value = value
+        self.cond.notify_all()
+
+
+def assert_never(arg: Never) -> Never:
+    raise AssertionError("Expected code to be unreachable")
+
+
+def stream_for(event: RelayCommands) -> str:
+    match event.type:
+        case "add-edition":            return "books"
+        case "update-edition-title":   return "books"
+        case "add-book":               return "books"
+        case "update-book-restricted": return "books"
+        case "remove-book":            return "books"
+
+        case "add-patron":    return f"patron.{event.id}"
+        case "rename-patron": return f"patron.{event.id}"
+        case "assign-patron": return f"patron.{event.id}"
+
+        case "try-hold":     return "status"
+        case "cancel-hold":  return "status"
+        case "try-checkout": return "status"
+        case "end-checkout": return "status"
+        case _: assert_never(event)
+
+
+class Appender:
+    """Appender appends events to the database."""
+    def __init__(self, sync: Sync, client: kdbc.AsyncKurrentDBClient) -> None:
+        self.sync = sync
+        self.client = client
+
+    async def append(self, new_uuids: List[str], batch: List[RelayCommands]) -> None:
+        # the plural of NewEvents is "new_eventses", which you have to say with a Gollum voice.
+        new_eventses = []
+
+        # First add any newly-created uuids.
+        #
+        # We use kurrent's optimistic concurrency locks to ensure that each client-generated uuid is
+        # unique.  This comes at the cost of one tiny stream per uuid in the system, which is not
+        # unbearable.  But we could reduce to something like 65K streams of one event each, by:
+        #
+        #   - tracking all known uuids in the read model
+        #   - grouping uuids into buckets by, say, the first 4 hex chars
+        #   - writing an event to the bucket of each new uuid with each batch of submissions.  If
+        #     the write fails, you need to wait for the new revision for that bucket stream to
+        #     arrive, then retry.
+        #
+        # Without some sort of real-life limitation, that complexity is not justified.
+        for u in new_uuids:
+            new_eventses.append(
+                kdbc.NewEvents(
+                    stream_name=f"uuid.{u}",
+                    events=[kdbc.NewEvent(type='UuidExists', data=b'{}')],
+                    current_version=kdbc.StreamState.NO_STREAM,
+                ),
+            )
+
+        # then add the events
+        last_stream = None
+        events: List[kdbc.NewEvent] = []
+        for event in batch:
+            stream = stream_for(event)
+            if not last_stream != stream:
+                # start a new NewEvents object, with a new events list that we'll grow
+                last_stream = stream
+                events = []
+                new_eventses.append(
+                    kdbc.NewEvents(
+                        stream_name=stream,
+                        events=events,
+                        current_version=kdbc.StreamState.ANY,
+                    )
+                )
+            events.append(
+                kdbc.NewEvent(type="LibraryEvents", data=json.dumps(event).encode('utf8')),
+            )
+
+        position = await self.client.multi_append_to_stream(new_eventses)
+
+        # wait for the round trip to complete, so the Reader's next call to fw.simulate can rely
+        # on these events we've just written.
+        await self.sync.wait_for(position)
+
+
+class Subscriber:
+    """Subscriber subscribes to the database."""
+    def __init__(
+        self, sync: Sync, fw: model.RelayFramework, client: kdbc.AsyncKurrentDBClient,
+    ) -> None:
+        self.sync = sync
+        self.fw = fw
+        self.client = client
+        self.watches: Dict[PatronID, List[Callable[[bytes, int], None]]] = {}
+        self.q: asyncio.Queue[kdbc.RecordedEvent] = asyncio.Queue(100)
+
+    async def start(self) -> None:
+        # catch up to current state once before turning on the webserver
+        since = self.fw.reconnect()
+        async with await self.client.read_all(
+            commit_position=since,
+            resolve_links=True,
+            filter_by_prefix=True,
+            filter_include=(
+                "books",
+                "patron.",
+                "status",
+                "vstatus",
+                "sync",
+            ),
+        ) as stream:
+            batch = []
+            async for event in stream:
+                batch.append(event)
+                if len(batch) == 1000:
+                    self.update_read_model(batch)
+                    batch = []
+        if batch:
+            self.update_read_model(batch)
+
+    async def run(self) -> None:
+        await waitgroup(self.collect(), self.process())
+
+    async def collect(self) -> None:
+        """
+        XXX: this may not be doing what I want it to; what I want is to only apply backpressure to
+        the network when there are 1000 unprocessed events in the queue... but what I think is
+        happening is that the collector is always stopped while processing occurs.  This is unlike
+        the go version, where different goroutines can actually run on different hardware threads.
+
+        This needs testing.
+        """
+        since = self.fw.reconnect()
+        async with await self.client.subscribe_to_all(
+            commit_position=since,
+            resolve_links=True,
+            filter_by_prefix=True,
+            filter_include=(
+                "books",
+                "patron.",
+                "status",
+                "vstatus",
+                "sync",
+            ),
+        ) as stream:
+            async for event in stream:
+                await self.q.put(event)
+
+    async def process(self) -> None:
+        # get one or more events from collector
+        batch = []
+        batch.append(await self.q.get())
+        while not self.q.empty():
+            batch.append(self.q.get_nowait())
+
+        self.update_read_model(batch)
+        self.dispatch(batch)
+
+    def update_read_model(self, batch: List[kdbc.RecordedEvent]) -> None:
+        # first read all the json
+        events = []
+        for event in batch:
+            events.append(json.loads(event.data))
+
+        position = batch[-1].stream_position
+
+        # apply updates to the read model
+        self.fw.recv_events(events, position)
+
+        # notify anybody who was waiting for a round-trip
+        self.sync.update(position)
+
+    def dispatch(self, batch: List[kdbc.RecordedEvent]) -> None:
+        # also dispatch the events to the various watches
+        for event in batch:
+            match event.stream_name.split(".", maxsplit=1):
+                # events not relayed to end users:
+                case ("status", _):
+                    pass
+
+                # events with global distribution
+                case ("books", _):
+                    for put in (put for w in self.watches.values() for put in w):
+                        put(event.data, event.stream_position)
+
+                # events with limited distribution
+                case ("patron", patron_id):
+                    for put in self.watches.get(patron_id, []):
+                        put(event.data, event.stream_position)
+                    # always include admins
+                    for put in self.watches.get(ADMIN, []):
+                        put(event.data, event.stream_position)
+
+                # events needing sanitization
+                case ("vstatus", _):
+                    # we'll need to examine the contents of this message type
+                    j = json.loads(event.data)
+                    typ = j["type"]
+
+                    # calculate sanitized versions for specific events
+                    sanitized = None
+                    if typ in ("new-vhold", "new-vcheckout"):
+                        temp = dict(j)
+                        del temp["patron_id"]
+                        sanitized = json.dumps(temp).encode('utf8')
+
+                    # actually distribute the events
+                    for put, w_patron_id in (
+                        (put, w_patron_id) for w_patron_id, w in self.watches.items() for put in w
+                    ):
+                        if typ == "vhold-rejected" and w_patron_id != j["patron_id"]:
+                            # this event is only for the patron whose hold was rejected
+                            continue
+                        elif sanitized and patron_id not in (ADMIN, j["patron_id"]):
+                            # emit sanitized message
+                            put(sanitized, event.stream_position)
+                        else:
+                            # emit full message
+                            put(event.data, event.stream_position)
+
+    async def catchup(
+        self, patron_id: PatronID, since: int,
+    ) -> AsyncGenerator[Tuple[bytes, int]]:
+        patron_stream_prefix = "patron." + ("" if patron_id == ADMIN else str(patron_id))
+        async with await self.client.read_all(
+            commit_position=since,
+            resolve_links=True,
+            filter_by_prefix=True,
+            filter_include=(
+                "books",
+                patron_stream_prefix,
+                "vstatus",
+            ),
+        ) as stream:
+            async for event in stream:
+                if patron_id == ADMIN or event.stream_name != "vstatus":
+                    yield event.data, event.stream_position
+                    continue
+                # sanitize the vstatus stream
+                j = json.loads(event.data)
+                typ = j.type
+                if typ == "vhold-rejected" and patron_id != j.patron_id:
+                    # skip
+                    continue
+                if typ in ("new-vhold", "new-vcheckout"):
+                    # sanitize
+                    del j["patron_id"]
+                yield json.dumps(j).encode('utf8'), event.stream_position
+
+
+    async def stream(self, patron_id: PatronID, since: int, w: Writer) -> None:
+        """Start with a catchup subscription, then move to a live subscription."""
+
+        # first do a cold catchup, which may take a while (we don't want to collect live events yet)
+        async for event, position in self.catchup(patron_id, since):
+            await w.put_start(event)
+            since = position
+
+        # now subscribe to live events
+        self.watches.setdefault(patron_id, []).append(w.put_live)
+        try:
+            # do a hot catchup to make sure we don't miss any events
+            async for event, position in self.catchup(patron_id, since):
+                await w.put_start(event)
+                since = position
+
+            # transition to the liveq, discarding duplicate events
+            await w.go_live(since)
+
+            # now just wait to be canceled
+            await asyncio.Future()
+
+        finally:
+            filtered = [p for p in self.watches[patron_id] if p is not w.put_live]
+            if filtered:
+                self.watches[patron_id] = filtered
+            else:
+                del self.watches[patron_id]
 
 
 class Writer:
-    def __init__(self, ws):
-        self.ws = ws
-        self.q = asyncio.Queue(100)
+    """
+    Writer is responsibe for sending events on the websocket.
 
-    async def put(self, obj):
-        await self.q.put(obj)
-
-    async def run(self):
-        try:
-            while True:
-                obj = await self.q.get()
-                msgstr = app.tojson(obj)
-                log.debug(f"send: {msgstr}")
-                await self.ws.send_str(msgstr)
-        finally:
-            await self.ws.close()
-
-
-class Streamer:
-    def __init__(self, relay, patron_id, since, w):
-        self.relay = relay
+    It also provides tools for the Subscriber to transition from catchup subscriptions (based on
+    reading from the database) to live subscriptions (based on in-memory dispatch of a shared $all
+    stream subscription).
+    """
+    def __init__(self, patron_id: PatronID, ws: web.WebSocketResponse) -> None:
         self.patron_id = patron_id
-        self.w = w
+        self.ws = ws
+        self.startq: asyncio.Queue[None | bytes] = asyncio.Queue(10)
+        self.liveq: asyncio.Queue[Tuple[bytes, int]] = asyncio.Queue(100)
+        # call _run() now so we have a handle for canceling it
+        self.coro = self._run()
 
-    async def run(self):
-        # first do a cold catchup, which may take a while (we don't want to collect live events yet)
-        with relay.catchup(patron_id, since) as events:
-            for event in events:
-                await self.send(event)
-                since = event.position
+    async def run(self) -> None:
+        await self.coro
 
-        # now collect live events, and do a hot catchup, to make sure we didn't miss any events
-        q = asyncio.Queue()
-        self.relay.watch(patron_id, q)
+    async def _run(self) -> None:
+        # drain the startq until we see the None sentinel, ending that stream
+        while True:
+            msg = await self.startq.get()
+            if msg is None: break
+            await self.ws.send_bytes(msg)
+
+        # then drain the liveq forever
+        while True:
+            msg, _ = await self.liveq.get()
+            await self.ws.send_bytes(msg)
+
+    async def put_start(self, obj: Any) -> None:
+        await self.startq.put(obj)
+
+    def put_live(self, msg: bytes, position: int) -> None:
         try:
-            with relay.catchup(patron_id, since) as events:
-                for event in events:
-                    await self.send(event)
-                    since = event.position
+            self.liveq.put_nowait((msg, position))
+        except asyncio.QueueFull:
+            self.fell_behind()
 
-            # now stream live events
-            while True:
-                event = await q.get()
-                if event.position <= since: continue
-                await self.send(event)
+    def fell_behind(self) -> None:
+        try:
+            self.coro.throw(UserError("fell behind"))
+        except StopIteration:
+            pass
 
-        finally:
-            # disconnect from live updates
-            self.relay.unwatch(patron_id)
-
-    async def send(self, event):
-        # scrub vstatus events
-        typ = event["type"]
-        if typ in ("new-vhold", "new-vcheckout"):
-            # scrub patron_id which is not this client's
-            if event["patron_id"] != self.patron_id:
-                event = dict(event)
-                del event["patron_id"]
-        elif typ == "vhold-rejected":
-            # a client can only see their own rejections
-            if event["patron_id"] != self.patron_id:
-                return
-        await self.w.put(event)
+    async def go_live(self, since: int) -> None:
+        """
+        Transition from reading startq to reading liveq, making sure to discard any duplicate
+        events on liveq that we may have noticed during the hot catchup step.
+        """
+        # discard any duplicate events from liveq
+        while True:
+            try:
+                # pop duplicates from the queue
+                event, position = self.liveq.get_nowait()
+            except asyncio.QueueEmpty:
+                # liveq is empty
+                break
+            if position <= since: continue
+            # oops this isn't a duplicate; make it the last event on the startq
+            await self.startq.put(event)
+            break
+        # push a sentinel to the startq, so self._run() will switch
+        await self.startq.put(None)
 
 
 class UserError(Exception):
@@ -143,18 +424,33 @@ class UserError(Exception):
 
 
 class Reader:
-    def __init__(self, fw, relay, ws, patron_id, w):
+    """
+    Reader reads incoming commands from the
+    """
+    def __init__(
+        self,
+        fw: model.RelayFramework,
+        appender: Appender,
+        patron_id: PatronID,
+        ws: web.WebSocketResponse,
+    ) -> None:
         self.fw = fw
-        self.relay = relay
-        self.ws = ws
+        self.appender = appender
         self.patron_id = patron_id
+        self.ws = ws
         # size of the queue is the maximum batch size we can process
-        self.q = asyncio.Queue(100)
+        self.q: asyncio.Queue[Any] = asyncio.Queue(100)
 
-        self.validate = fw.module["validate"]
+        if patron_id == ADMIN:
+            self.validate = fw.module["validateAdminCommands"]
+        else:
+            self.validate = fw.module["validatePatronCommands"]
 
-    async def collect(self):
-        """Collect events as they arrive, to be processed in batches."""
+    async def run(self) -> None:
+        await waitgroup(self.collect(), self.process())
+
+    async def collect(self) -> None:
+        """Collect websocket messages as they arrive, to be processed in batches."""
         async for msg in self.ws:
             log.debug(f"recv: {msg}")
             if msg.type == web.WSMsgType.ERROR:
@@ -171,16 +467,18 @@ class Reader:
                 )
 
             # make sure each event is structurally valid
-            event, errors = model.checkLibraryEvents(msg.json())
+            obj = msg.json()
+            errors = model.checkAdminCommands(obj)
             if errors:
                 raise UserError(errors)
 
-            await self.q.put(event)
+            await self.q.put(obj)
 
         # we are out of messages; cancel the remaining concurrent tasks by raising an exception
         raise ConnectionError("Reader() is out of messages")
 
-    async def process(self):
+    async def process(self) -> None:
+        """Process events in batches, provided by collect()."""
         while True:
             # get one or more events from collector
             batch = []
@@ -188,168 +486,22 @@ class Reader:
             while not self.q.empty():
                 batch.append(self.q.get_nowait())
 
-            with contextlib.ExitStack() as es:
-                process_one(es, batch)
+            # make sure each event is semantically valid
+            new_uuids, errors = self.fw.simulate(lambda rx: self.validate(rx, batch))
+            if errors:
+                raise UserError(errors)
 
-    async def process_one(self, es, batch):
-        # make sure each event is semantically valid
-        new_uuids, errors = self.fw.simulate(lambda rx: self.validate(rx, events))
-        if errors:
-            raise UserError(errors)
-
-        # add events in-order
-        new_events = []
-        for event in events:
-            stream = stream_for(event)
-            if not new_events or new_events[-1].stream != stream:
-                new_events.append(NewEvents(stream, expected_state=ANY))
-                new_events[-1].data.append(data_for(event))
-
-        prefix_revisions = {}
-        ready = asyncio.Event()
-        if new_uuids:
-            # query for prefixes
-            for prefix in sorted(new_uuids):
-
-                @self.fw.new_query
-                async def query(qx, *_):
-                    prefix_revisions[prefix] = await qx.prefix_revision(prefix)
-                    ready.set()
-
-                defer(es, lambda q: q.close(), query)
-
-            # XXX: also need to query for existence of individual new_uuids, so we can detect
-            #      conflicts
-
-            # run initial query for current prefix revisions
-            self.fw.run()
-            assert ready.is_set()
-            ready.clear()
-
-            # add new_uuids at the end
-            for prefix, uuids in new_uuids.items():
-                rev = prefix_revisions[prefix]
-                expected_state = rev if rev is not None else DOES_NOT_EXIST
-                new_events.append(NewEvents(f"prefix.{prefix}", expected_state=expected_state))
-                for u in uuids:
-                    new_events[-1].data.append(data_for(u))
-
-        # submit our batch of events
-        while True:
-            try:
-                result = await client.multi_append_to_stream(events=[NewEvents(), NewEvents()])
-                break
-            except StreamRevisionError:
-                pass
-            # wait to receive an update to our relevant prefix revisions
-            await ready.wait()
-            ready.clear()
-            # update the request with new revision data
-            for prefix, ne in zip(sorted(new_uuids), new_events[-len(new_uuids):]):
-                rev = prefix_revisions[prefix]
-                expected_state = rev if rev is not None else DOES_NOT_EXIST
-            # resubmit
-            continue
-
-        # now wait for that data to appear in our round trip
-        if new_uuids:
-            # Since the submission succeeded, we are guaranteed to be the next update to our
-            # prefix revision data.  Since the prefix revisions come after all regular data,
-            # any update to any of our prefix revision queries means all regular data has
-            # already arrived.
-            await ready.wait()
-            return
-
-        # wait for the stream revision of our final piece of data to reflect the appended result
-        stream = new_events[-1 - len(new_uuids)].stream
-        target = [r.revision for r in result if r.stream == stream][0]
-        round_trip = asyncio.Event()
-
-        @self.fw.new_query
-        async def query(qx, *_):
-            if await qx.revision(stream) >= target:
-                round_trip.set()
-
-        defer(es, lambda q: q.close(), query)
-        await round_trip.wait()
-
-        # TODO: that was hard!  Maybe we should just support one-length streams on the db and call
-        #       it a day.  That would be super easy!
+            await self.appender.append(new_uuids, batch)
 
 
-    async def submit(self, event):
-        # first validate against read model
-        validator = fw.module[""]
-
-        # validate
-        fw.simulate(fw.module["validate"])
-
-        # validate against read model
-        new_uuids = []
-
-        # TODO: validate incoming user data against read model
-        # - make sure all modification operations modify a real, existing object
-        # - collect all new uuids as well
-
-        # user event is essentially valid, but we do need to ensure global uniqueness of
-        # newly-created uuids.  This is a defense against malicious clients who would seek to
-        # corrupt the database; well-behaved clients should never have this problem
-
-        # TODO: actually write events to the database
-
-        # send new uuids as multi-stream appends with a new uuid event
-        # if we fail, query for:
-        # - that uuid's existence
-        # - the prefix of that uuid's value
-
-        # check for existence of uuid
-        # - query for it in lmdb
-        # - if exists, reject event now
-        # - if at any point it starts to exist, break connection; this is an attack
-        # - query for prefix stream revision
-        # - wait for both results
-        # - while query not exists:
-        #    - submit multi-stream-append
-        #    - if it fails, wait for either query to be updated
-
-        # storage:
-        # - uuid.{theuuid}: Literal(True),
-        # - prefix.{prefix}: String,
-
-        # kurrentdb streams:
-        # - prefix.{prefix}: [uuids in this msa]
-
-        """
-        THOUGHTS:
-          - we could reuse the forecasters to build a per-client overlay, so that we could continue
-            to validate incoming events against the global state plus expected per-client state
-          - we would need to somehow efficiently check all incoming events against each per-client
-            state to know when it was safe to discard an event
-          - this is too hard.
-
-          - we could batch incoming events from the client, and process them in batches
-          - each batch, we could wait for the round-trip before proceeding
-          - the round trip could include waiting for the events to appear in the read model
-          - there is no overlay, no forecasting, and no invalidation needed.
-        """
-        # THOUGHTS:
-        # -
+WsHandler = Callable[[web.Request], Coroutine[Any, Any, web.WebSocketResponse]]
 
 
-# cancel_event is an application-wide signal to close all open websockets
-cancel_event = asyncio.Event()
-
-
-async def close_all_websockets(app):
-    cancel_event.set()
-
-
-def cancelable_request(fn):
+def cancelable_request(fn: WsHandler) -> WsHandler:
     """Cancel any connected sockets if the app-wide cancel event is set."""
-    async def _fn(request):
+    async def _fn(request: web.Request) -> web.WebSocketResponse:
         cancel_event = request.app["cancel_event"]
-
-        cancel = asyncio.create_task(request.app["cancel_event"].wait())
+        cancel = asyncio.create_task(cancel_event.wait())
         handler = asyncio.create_task(fn(request))
 
         _ = await asyncio.wait([cancel, handler], return_when=asyncio.FIRST_COMPLETED)
@@ -366,30 +518,28 @@ route = web.RouteTableDef()
 
 @route.get("/ws")
 @cancelable_request
-async def ws_handler(request):
+async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     fw = request.app["framework"]
-    relay = request.app["relay"]
+    client = request.app["client"]
+    subscriber = request.app["subscriber"]
+    appender = request.app["appender"]
 
-    # TODO: get patron id from header
-    patron_id = request.headers["patron-id"]
+    # TODO: have some real authentication
+    patron_id: PatronID = request.headers["patron-id"] or ADMIN
+    since = int(request.headers["since"])
 
-    # stream shall how we get all events for this patron
-    stream = None
+    # enable heartbeat every 55 seconds, to keep nginx or any NAT layers from timing out in 60
     ws = web.WebSocketResponse(autoping=True, heartbeat=55)
     try:
-        # enable heartbeat every 55 seconds, to keep nginx or any NAT layers from timing out in 60
         await ws.prepare(request)
 
-        # Writer to serialize writing messages to the websocket
-        w = Writer(ws)
-        # Streamer to pull stream data from database
-        s = Streamer(relay, patron_id, since, w)
-        # Reader to read and process messages from the client
-        r = Reader(fw, relay, ws, patron_id, w)
+        w = Writer(patron_id, ws)
+        r = Reader(fw, appender, patron_id, ws)
 
-        await waitgroup(w.run(), s.run(), r.collect(), r.submit())
+        await waitgroup(w.run(), r.run(), subscriber.stream(patron_id, since, w))
 
         return ws
+
     except ConnectionError as e:
         log.debug(f"broken connection: {e}")
         # Return the ws response or otherwise aiohttp gets confused.  If we raise an exception here
@@ -398,12 +548,32 @@ async def ws_handler(request):
     except Exception as e:
         log.error(e)
         raise
+    finally:
+        await ws.close()
 
 
-async def setupWebserver(listen_spec):
+@contextlib.asynccontextmanager
+async def setupKurrent(
+    fw: model.RelayFramework, connstr: str,
+) -> AsyncGenerator[kdbc.AsyncKurrentDBClient, Subscriber]:
+    async with kdbc.AsyncKurrentDBClient(connstr) as client:
+        yield client
 
+
+@contextlib.asynccontextmanager
+async def setupWebserver(listen_spec: str, app_data: Dict[str, Any]) -> AsyncGenerator[None]:
     App = web.Application()
-    App.on_shutdown.append(close_all_websockets)
+    for k, v in app_data.items():
+        App[k] = v
+
+    # close websockets when we get a close signal (see @cancelable_request)
+    cancel_event = asyncio.Event()
+    App["cancel_event"] = cancel_event
+
+    async def on_shutdown(app: web.Application) -> None:
+        cancel_event.set()
+
+    App.on_shutdown.append(on_shutdown)
 
     App.add_routes(route)
     runner = web.AppRunner(App)
@@ -415,67 +585,49 @@ async def setupWebserver(listen_spec):
 
     await site.start()
 
-    async def run():
-        try:
-            await waitgroup(l.run(), raft.run())
-        finally:
-            await site.stop()
-            await runner.cleanup()
-    return run
-
-async def amain():
-    fw = setupFramework()
-    client, runKurrent = setupKurrent()
-    runServer = await setupWebserver("localhost:3003")
-
-    print("ready")
-
-    await waitgroup(runServer(), runKurrent())
-    awaiwaitgroup
+    try:
+        yield
+    finally:
+        await site.stop()
+        await runner.cleanup()
 
 
+async def amain(connstr: str) -> None:
+    # set up the sync engine framework
+    fw = model.RelayFramework[int](
+        os.path.join(os.path.dirname(__file__), "relay.js"),
+        "InMemStorage",
+        "relayMigrate",
+        "relayReducer",
+    )
 
+    # set up our kurrentdb client
+    async with setupKurrent(fw, connstr) as client:
+
+        # create the appender and subscriber
+        sync = Sync()
+        appender = Appender(sync, client)
+        subscriber = Subscriber(sync, fw, client)
+
+        # let the subscriber catch up to current state before accepting websocket connections
+        await subscriber.start()
+
+        # set up the webserver
+        async with setupWebserver("localhost:3003", {
+            "client": client,
+            "appender": Appender,
+            "subscriber": Subscriber,
+        }):
+
+            print("ready")
+
+            # run until we are canceled
+            await subscriber.run()
 
 
 if __name__ == "__main__":
-    asyncio.run(amain())
-
-
-# event = {
-#     "type": "add-edition",
-#     "isbn": "my-isbn",
-#     "title": "cheech-and-chong-learn-event-sourcing",
-#     "timestamp": "2025-01-24T15:54:32Z",
-# }
-# assert not (errors := model.checkLibraryEvents(event)), "errors:\n  - " + "\n  - ".join(errors)
-#
-# @dataclasses.dataclass
-# class Book:
-#     title: str
-#     copies: int
-#
-# @fw.new_query
-# async def book_list(qx: model.DeciderQueryContext, *_: Any) -> List[Book]:
-#     return [
-#         Book(
-#             title=(edition := await qx.edition(isbn)).title,
-#             copies=len(edition.books),
-#         )
-#         for isbn in await qx.editions()
-#     ]
-#
-# @book_list.subscribe
-# def book_list_sub(bl: List[Book]) -> None:
-#     print("book list is:")
-#     print("  - " + "\n  - ".join(f"{b.title} (x{b.copies})" for b in bl))
-#
-# fw.recv_events([event], None)
-# fw.run()
-#
-# fw.recv_events([{
-#     "type": "add-edition",
-#     "isbn": "my-isbn-2",
-#     "title": "everyone-else-learns-event-sourcing",
-#     "timestamp": "2025-01-24T15:54:32Z",
-# }], None)
-# fw.run()
+    connstr = "kurrentdb://admin:changeit@localhost:2113?tls=false"
+    try:
+        asyncio.run(amain(connstr))
+    except KeyboardInterrupt:
+        pass

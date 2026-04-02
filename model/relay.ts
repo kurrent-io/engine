@@ -1,2 +1,12 @@
-export { Framework, InMemStorage, DeciderReducerContext, DecodeLibraryEvents } from "./library.gen";
-export { deciderMigrate, deciderReducer } from "./reducers";
+export {
+  Framework,
+  InMemStorage,
+  RelayReducerContext,
+  DecodeLibraryEvents,
+} from "./library.gen";
+export {
+  relayMigrate,
+  relayReducer,
+  validateAdminCommands,
+  validatePatronCommands,
+} from "./reducers";

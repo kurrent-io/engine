@@ -331,13 +331,14 @@ TryHold = StatusEvents.add(Struct(
 # stream: "status"
 CancelHold = StatusEvents.add(Struct(
     type=Literal("cancel-hold"),
-    hold=Uuid,
+    id=Uuid,
 ))
 
+# system-generated event
 # stream: "status"
 ExpireHold = StatusEvents.add(Struct(
     type=Literal("expire-hold"),
-    hold=Uuid,
+    id=Uuid,
     timestamp=Timestamp,
 ))
 
@@ -416,13 +417,58 @@ NewVCheckout = DeciderEvents.add(Struct(
 # admin privileges, can create checkouts in the first place.
 
 # VStatusEvents are the StatusEvents which need no sanitation plus DeciderEvents
+# XXX: why are OverdueCheckout and ExpireHold here too?
 VStatusEvents = (
     CancelHold | ExpireHold | EndCheckout | OverdueCheckout | DeciderEvents
 )
 
-# utility of all possible events
+# union of all state-related events
 LibraryEvents = BookEvents | PatronEvents | StatusEvents | DeciderEvents
 
 # predefine some frameworks
 UserFramework = Framework(LibraryEvents, LibraryEvents, UserStore)
 DeciderFramework = Framework(LibraryEvents, LibraryEvents, DeciderStore)
+
+################
+
+# A user has very limited write capabilities.  Each of these events may be written but only to their
+# own patron_uuid.
+PatronCommands = (
+    RenamePatron
+    | TryHold
+    | CancelHold
+)
+
+# An admin (the librarian at the front desk) has most of the write capabilities in the system,
+# except they cannot create decider-specific events.
+AdminCommands = (
+    # admin can create PatronCommands with whatever patron_uuid they want
+    PatronCommands
+    | AddEdition
+    | UpdateEditionTitle
+    | AddBook
+    | UpdateBookRestricted
+    | RemoveBook
+    | AddPatron
+    | AssignPatron
+    | TryCheckout
+    | EndCheckout
+)
+
+# ok, technically PatronCommands is a subset of AdminCommands, but this expresses that the relay is
+# going to relay commands from both types of clients.
+RelayCommands = Alias(PatronCommands | AdminCommands)
+
+RelayHold = Struct(patron=Uuid)
+
+# The relay is mostly concerned with checking that all uuid references are valid, so it doesn't
+# have a lot of overlap with the storage layout of the decider or the ui
+RelayStore = Store({
+    "edition.{isbn}": Literal(True),
+    "book.{book_uuid}": Literal(True),
+    "patron.{hold_uuid}": Literal(True),
+    "checkout.{checkout_uuid}": Literal(True),
+    "hold.{hold_uuid}": RelayHold,
+})
+
+RelayFramework = Framework(LibraryEvents, RelayCommands, RelayStore)

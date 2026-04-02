@@ -23,6 +23,10 @@ model: model/library.gen.ts
 model/library.gen.ts: model/library.py tools/gen_ts.py model/reducers.ts model/tsconfig.json
 	python tools/protos.py -i tools -i model gen_ts library > $@
 
+.PHONY: model/check
+model/check: model
+	cd model && tsc
+
 .PHONY: relay
 relay: relay/relay.js relay/model.py relay/_quickjs.so
 
@@ -37,6 +41,10 @@ relay/quickjs/.obj/%.pic.o:
 
 relay/_quickjs.so: relay/_quickjs.c $(foreach lib,$(QUICKJS_LIBS),relay/quickjs/.obj/$(lib).pic.o)
 	$(CC) $(CFLAGS) -shared -o $@ $^ $(LDFLAGS)
+
+.PHONY: relay/check
+relay/check: relay
+	cd relay && mypy .
 
 .PHONY: decider
 decider: decider/decider
@@ -60,11 +68,12 @@ ui/src/model.js:
 ui/src/model.d.ts: model/library.gen.ts model/ui.ts
 	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
 
-.PHONY: check
-check: model ui
-	cd model && tsc
+.PHONY: ui/check
+ui/check: ui
 	cd ui && tsc
-	cd relay && mypy .
+
+.PHONY: check
+check: model/check relay/check ui/check
 
 clean:
 	@rm -f model/library.gen.ts \
