@@ -15,7 +15,6 @@
         "@types/jest": "^30.0.0",
         "@types/react": "^19.2.9",
         "@types/react-dom": "^19.2.3",
-        "grpc-tools": "^1.13.1",
         "jest": "^30.2.0",
         "rollup": "^4.53.3",
         "rollup-plugin-livereload": "^2.0.5",
@@ -27,7 +26,6 @@
         "typescript": "^5.9.3"
     },
     "dependencies": {
-        "@grpc/grpc-js": "^1.14.3",
         "antd": "^6.2.1",
         "react": "^19.2.3",
         "react-dom": "^19.2.3",

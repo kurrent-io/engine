@@ -62,7 +62,7 @@ decider/decider: decider/decider.js decider/main.go decider/model/model.go
 .PHONY: ui
 ui: ui/src/model.js ui/src/model.d.ts
 
-ui/src/model.js:
+ui/src/model.js:  model/library.gen.ts model/ui.ts
 	cd model && pnpm rollup -m inline --format=esm -p typescript ui.ts -o ../$@
 
 ui/src/model.d.ts: model/library.gen.ts model/ui.ts

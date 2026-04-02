@@ -17,3 +17,11 @@ stages:
     post:
       - conncheck:
           port: 2113
+- custom:
+    name: relay
+    pre:
+      - sh: make relay
+    cmd:
+      - python
+      - -u
+      - relay/relay.py

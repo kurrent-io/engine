@@ -4,3 +4,4 @@ build/
 dist/
 quickjs/
 *.so
+.claude

@@ -327,7 +327,7 @@ class Subscriber:
 
         # first do a cold catchup, which may take a while (we don't want to collect live events yet)
         async for event, position in self.catchup(patron_id, since):
-            await w.put_start(event)
+            await w.put_start(event, position)
             since = position
 
         # now subscribe to live events
@@ -335,7 +335,7 @@ class Subscriber:
         try:
             # do a hot catchup to make sure we don't miss any events
             async for event, position in self.catchup(patron_id, since):
-                await w.put_start(event)
+                await w.put_start(event, position)
                 since = position
 
             # transition to the liveq, discarding duplicate events
@@ -363,7 +363,7 @@ class Writer:
     def __init__(self, patron_id: PatronID, ws: web.WebSocketResponse) -> None:
         self.patron_id = patron_id
         self.ws = ws
-        self.startq: asyncio.Queue[None | bytes] = asyncio.Queue(10)
+        self.startq: asyncio.Queue[None | Tuple[bytes, int]] = asyncio.Queue(10)
         self.liveq: asyncio.Queue[Tuple[bytes, int]] = asyncio.Queue(100)
         # call _run() now so we have a handle for canceling it
         self.coro = self._run()
@@ -371,20 +371,24 @@ class Writer:
     async def run(self) -> None:
         await self.coro
 
+    @staticmethod
+    def _wrap(event_bytes: bytes, position: int) -> bytes:
+        return b'{"position":%d,"event":%s}' % (position, event_bytes)
+
     async def _run(self) -> None:
         # drain the startq until we see the None sentinel, ending that stream
         while True:
             msg = await self.startq.get()
             if msg is None: break
-            await self.ws.send_bytes(msg)
+            await self.ws.send_bytes(Writer._wrap(*msg))
 
         # then drain the liveq forever
         while True:
-            msg, _ = await self.liveq.get()
-            await self.ws.send_bytes(msg)
+            msg = await self.liveq.get()
+            await self.ws.send_bytes(Writer._wrap(*msg))
 
-    async def put_start(self, obj: Any) -> None:
-        await self.startq.put(obj)
+    async def put_start(self, event_bytes: bytes, position: int) -> None:
+        await self.startq.put((event_bytes, position))
 
     def put_live(self, msg: bytes, position: int) -> None:
         try:
@@ -413,7 +417,7 @@ class Writer:
                 break
             if position <= since: continue
             # oops this isn't a duplicate; make it the last event on the startq
-            await self.startq.put(event)
+            await self.startq.put((event, position))
             break
         # push a sentinel to the startq, so self._run() will switch
         await self.startq.put(None)
@@ -524,14 +528,16 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     subscriber = request.app["subscriber"]
     appender = request.app["appender"]
 
-    # TODO: have some real authentication
-    patron_id: PatronID = request.headers["patron-id"] or ADMIN
-    since = int(request.headers["since"])
-
     # enable heartbeat every 55 seconds, to keep nginx or any NAT layers from timing out in 60
     ws = web.WebSocketResponse(autoping=True, heartbeat=55)
     try:
         await ws.prepare(request)
+
+        # first message is a handshake: {"patron_id": "...", "since": 123}
+        handshake_msg = await ws.receive_json()
+        # TODO: have some real authentication
+        patron_id: PatronID = handshake_msg.get("patron_id") or ADMIN
+        since: int | None = handshake_msg.get("since")
 
         w = Writer(patron_id, ws)
         r = Reader(fw, appender, patron_id, ws)
