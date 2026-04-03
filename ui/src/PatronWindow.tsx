@@ -1,35 +1,150 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Flex, List, Switch, Spin, Tag } from 'antd';
+import { useCallback, useState } from 'react';
+import { Button, Card, Flex, Input, List, Switch, Spin, Tag, Typography } from 'antd';
+import { EditOutlined } from '@ant-design/icons';
 
 import {
-  InMemStorage,
-  UserFramework,
   UserQX,
   QueryGenerator,
-  DecodeLibraryEvents,
-  userMigrate,
-  userReducer,
 } from './model';
 import { useQuery } from './useQuery';
+import { useFramework } from './useFramework';
+import { FW } from './types';
 
-type FW = UserFramework<number>;
+const { Text } = Typography;
 
-
-type Book = { title: string; copies: number };
-
-type Account = {
+function PatronName({
+  name,
+  onRename,
+}: {
   name: string;
-  checkouts: string[];
-  holds: string[];
+  onRename: (newName: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+
+  function startEditing() {
+    setDraft(name);
+    setEditing(true);
+  }
+
+  function confirm() {
+    if (draft && draft !== name) {
+      onRename(draft);
+    }
+    setEditing(false);
+  }
+
+  function cancel() {
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <Flex gap="small" align="center">
+        <Input
+          size="small"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onPressEnter={confirm}
+          autoFocus
+        />
+        <Button size="small" type="primary" onClick={confirm}>OK</Button>
+        <Button size="small" onClick={cancel}>Cancel</Button>
+      </Flex>
+    );
+  }
+
+  return (
+    <Flex gap="small" align="center">
+      <Text strong>{name}</Text>
+      <EditOutlined onClick={startEditing} style={{ cursor: 'pointer' }} />
+    </Flex>
+  );
+}
+
+type BookInfo = {
+  isbn: string;
+  title: string;
+  availableNormal: number;
+  availableRestricted: number;
 };
 
-function Books({ fw }: { fw: FW }) {
-  const booksLookup = useCallback(function*(qx: UserQX): QueryGenerator<Book[]> {
+type PatronInfo = {
+  name: string;
+  researcher: boolean;
+};
+
+type Account = {
+  holds: string[];
+  checkouts: string[];
+};
+
+function BookItem({
+  book,
+  researcher,
+  onHold,
+  onHoldRestricted,
+}: {
+  book: BookInfo;
+  researcher: boolean;
+  onHold: (isbn: string) => void;
+  onHoldRestricted: (isbn: string) => void;
+}) {
+  return (
+    <List.Item>
+      <div style={{ width: '100%' }}>
+        <div>{book.title}</div>
+        <Flex gap="small" style={{ marginTop: 4 }}>
+          <Button
+            size="small"
+            disabled={book.availableNormal <= 0}
+            onClick={() => onHold(book.isbn)}
+          >
+            Hold
+          </Button>
+          <Button
+            size="small"
+            disabled={!researcher || book.availableRestricted <= 0}
+            onClick={() => onHoldRestricted(book.isbn)}
+          >
+            Hold Restricted
+          </Button>
+        </Flex>
+      </div>
+    </List.Item>
+  );
+}
+
+function Books({
+  fw,
+  researcher,
+  onHold,
+  onHoldRestricted,
+}: {
+  fw: FW;
+  researcher: boolean;
+  onHold: (isbn: string) => void;
+  onHoldRestricted: (isbn: string) => void;
+}) {
+  const booksLookup = useCallback(function*(qx: UserQX): QueryGenerator<BookInfo[]> {
     const editions = (yield* qx.get.editions()) ?? {};
-    const out: Book[] = [];
+    const out: BookInfo[] = [];
     for (const isbn of Object.keys(editions)) {
       const edition = yield* qx.get.edition(isbn);
-      out.push({ title: edition.title, copies: Object.keys(edition.books).length });
+      let availableNormal = 0;
+      let availableRestricted = 0;
+      for (const bookId of Object.keys(edition.books)) {
+        const book = yield* qx.get.book(bookId);
+        if (book.status) continue; // held or checked out
+        if (book.restricted) {
+          availableRestricted++;
+        } else {
+          availableNormal++;
+        }
+      }
+      // edition-level holds consume normal copies
+      availableNormal -= Object.keys(edition.holds).length;
+      out.push({ isbn, title: edition.title, availableNormal, availableRestricted });
     }
     return out;
   }, []);
@@ -40,7 +155,14 @@ function Books({ fw }: { fw: FW }) {
   return (
     <List
       dataSource={books}
-      renderItem={(book) => <List.Item>{`${book.title} (x${book.copies})`}</List.Item>}
+      renderItem={(book) => (
+        <BookItem
+          book={book}
+          researcher={researcher}
+          onHold={onHold}
+          onHoldRestricted={onHoldRestricted}
+        />
+      )}
     />
   );
 }
@@ -67,22 +189,19 @@ function MyAccount({ fw, patronId }: { fw: FW; patronId: string }) {
       const edition = yield* qx.get.edition(book.isbn);
       checkouts.push(edition.title);
     }
-    return { name: patron.name, holds, checkouts };
+    return { holds, checkouts };
   }, [patronId]);
 
   const account = useQuery(fw, myAccountLookup);
   if (!account) return <Spin />;
 
   return (<>
-    <h3>Name: {account.name}</h3>
     <h3>Holds:</h3>
     <List dataSource={account.holds} renderItem={(item) => <List.Item>{item}</List.Item>} />
     <h3>Checkouts:</h3>
     <List dataSource={account.checkouts} renderItem={(item) => <List.Item>{item}</List.Item>} />
   </>);
 }
-
-type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
 export default function PatronWindow({
   patronId,
@@ -92,89 +211,13 @@ export default function PatronWindow({
   relayUrl: string;
 }) {
   const [enabled, setEnabled] = useState(true);
-  const [connState, setConnState] = useState<ConnectionState>('disconnected');
-  const wsRef = useRef<WebSocket | null>(null);
+  const [fw, connState] = useFramework(relayUrl, patronId, enabled);
 
-  const fw = useMemo(() => {
-    const storage = new InMemStorage();
-    return new UserFramework<number>(storage, {
-      migrate: userMigrate,
-      reducer: userReducer,
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!enabled) {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      setConnState('disconnected');
-      return;
-    }
-
-    let cancelled = false;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
-    let backoff = 1000;
-
-    function connect() {
-      if (cancelled) return;
-
-      setConnState('connecting');
-
-      // get checkpoint from framework storage
-      fw.reconnect((result) => {
-        if (cancelled) return;
-
-        const ws = new WebSocket(relayUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          if (cancelled) { ws.close(); return; }
-          backoff = 1000;
-          // send handshake
-          ws.send(JSON.stringify({
-            patron_id: patronId,
-            since: result.checkpoint ?? null,
-          }));
-          setConnState('connected');
-        };
-
-        ws.onmessage = (msg) => {
-          if (msg.data === "caughtup") {
-            fw.caughtUp();
-          } else {
-            const parsed = JSON.parse(msg.data);
-            const event = DecodeLibraryEvents(parsed.event);
-            fw.recvEvents([event], parsed.position);
-          }
-        };
-
-        ws.onclose = () => {
-          if (cancelled) return;
-          setConnState('disconnected');
-          wsRef.current = null;
-          reconnectTimer = setTimeout(connect, backoff);
-          backoff = Math.min(backoff * 2, 60000);
-        };
-
-        ws.onerror = () => {
-          // onclose will fire after onerror
-        };
-      });
-    }
-
-    connect();
-
-    return () => {
-      cancelled = true;
-      clearTimeout(reconnectTimer);
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
-  }, [enabled, fw, patronId, relayUrl]);
+  const patronLookup = useCallback(function*(qx: UserQX): QueryGenerator<PatronInfo> {
+    const patron = yield* qx.get.patron(patronId);
+    return { name: patron.name, researcher: patron.researcher };
+  }, [patronId]);
+  const patron = useQuery(fw, patronLookup);
 
   const stateColor = {
     connecting: 'orange',
@@ -186,7 +229,12 @@ export default function PatronWindow({
     <Card
       title={
         <Flex align="center" gap="small">
-          <span>Patron: {patronId}</span>
+          {patron
+            ? <PatronName name={patron.name} onRename={(_newName) => { /* TODO: wire sendCommands */ }} />
+            : <Spin size="small" />
+          }
+          {patron?.researcher && <Tag color="green">researcher</Tag>}
+          <span style={{ flex: 1 }} />
           <Tag color={stateColor}>{connState}</Tag>
           <Switch
             size="small"
@@ -201,7 +249,12 @@ export default function PatronWindow({
     >
       <Card type="inner" title="Books" style={{ marginBottom: '1em' }}>
         <div style={{ maxHeight: '20em', overflowY: 'auto' }}>
-          <Books fw={fw} />
+          <Books
+            fw={fw}
+            researcher={patron?.researcher ?? false}
+            onHold={(_isbn) => { /* TODO: wire sendCommands */ }}
+            onHoldRestricted={(_isbn) => { /* TODO: wire sendCommands */ }}
+          />
         </div>
       </Card>
       <Card type="inner" title="My Account">
