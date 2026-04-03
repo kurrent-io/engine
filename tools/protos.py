@@ -197,6 +197,14 @@ class Struct(Resolvable):
     def resolve(self):
         return ConcreteStruct(**{k: v.resolve() for k, v in self.fields.items()})
 
+    # implement unpacking behaviors, so composing like Struct(**other_struct) works
+
+    def __getitem__(self, key):
+        return self.fields[key]
+
+    def keys(self):
+        return self.fields.keys()
+
 class ConcreteStruct(Concrete):
     json_type = "object"
     def __init__(self, **fields):

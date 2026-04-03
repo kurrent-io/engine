@@ -65,7 +65,10 @@ def generate_annotations(d, annos, t):
             d.print(f"class {class_name}(Protocol):\n")
             d.indent("    ")
             for k, v in t.fields.items():
-                d.print(f"{k}: {annos[v]}\n")
+                if k in t.always:
+                    d.print(f"{k}: {annos[v]}\n")
+                else:
+                    d.print(f"{k}: Optional[{annos[v]}]\n")
             d.dedent()
             d.print("\n")
         elif t.name:

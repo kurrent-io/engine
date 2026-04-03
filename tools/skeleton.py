@@ -11,6 +11,7 @@ from typing import (
     List,
     Literal,
     NotRequired,
+    Optional,
     Protocol,
     Tuple,
     TypedDict,

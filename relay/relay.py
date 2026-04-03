@@ -193,13 +193,11 @@ class Subscriber:
             async for event in stream:
                 batch.append(event)
                 if len(batch) == 1000:
-                    self.update_read_model(batch)
+                    await self.update_read_model(batch)
                     batch = []
         if batch:
-            print("got batch", batch);
             await self.update_read_model(batch)
 
-        print("caught up");
         self.fw.caught_up()
 
     async def run(self) -> None:
