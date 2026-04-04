@@ -10,8 +10,8 @@ This is a demo project.  The library domain (books, patrons, holds, checkouts) i
 framework; the real product is the reusable tooling in `tools/` and `relay/_quickjs.c`.  Demo code
 should be high-quality and readable but may take shortcuts (e.g. no authentication).
 
-The immediate priority is connecting the UI to the relay and debugging the relay, which has not been
-tested yet.
+The UI is connected to the relay (read path works).  Next steps: wire up command sending (holds,
+renames, etc.) and continue debugging the relay.
 
 ## Architecture
 
@@ -50,13 +50,16 @@ decider/            Go decider service
   main.go           Entry point
   model/model.go    GENERATED from library.py
 
-ui/                 Frontend (React + Ant Design)
-  src/model.{js,d.ts}  GENERATED bundles from model/ui.ts
-  src/PatronWindow.tsx  Self-contained component: framework instance + WebSocket + UI per patron
+ui/                 Frontend (React 19 + Ant Design 6 + @ant-design/icons)
+  src/App.tsx           Top-level layout; renders multiple PatronWindows side by side
+  src/PatronWindow.tsx  Per-patron UI: books list, holds, checkouts, name editing
+  src/useFramework.ts   Hook combining framework creation + websocket lifecycle
   src/useQuery.ts       Generic React hook for framework queries (library-quality, framework-agnostic)
-  src/App.tsx           Top-level layout; will eventually tile multiple PatronWindows
+  src/types.ts          Shared type aliases (FW = UserFramework<number>)
+  src/model.{js,d.ts}   GENERATED bundles from model/ui.ts
 
 populate.py         Utility script to seed KurrentDB with test data (run with relay/.venv/bin/python)
+devcluster.yaml     Config for running KurrentDB locally via devcluster
 ```
 
 ## Build System
@@ -68,10 +71,18 @@ Run `make` to build everything.  Key targets:
 - `make decider` - Bundle decider JS + generate Go model + build Go binary
 - `make ui` - Bundle UI JS + generate .d.ts
 - `make check` - Type checking (tsc for model/UI, mypy for relay)
+- `make ui/check` - Type check UI only
 
 Prerequisites: `cd model && pnpm i` and `cd ui && pnpm i` for dependencies.
 
 When changing `library.py` or codegen in `tools/`, run `make` to regenerate all outputs.
+
+## Running the Demo
+
+1. `devcluster --config devcluster.yaml` - start KurrentDB on port 2113
+2. `relay/.venv/bin/python populate.py` - seed test data (4 editions, 8 books, 3 patrons)
+3. `cd relay && .venv/bin/python relay.py` - start relay on port 3003
+4. `cd ui && pnpm serve` - start UI on http://localhost:3000
 
 ## Key Patterns
 
@@ -90,8 +101,20 @@ events flow back through the relay to clients as virtualized status updates.
 
 **WebSocket protocol:** Clients connect to `ws://localhost:3003/ws`.  First message is a JSON
 handshake: `{"patron_id": "...", "since": <number|null>}`.  Server sends wrapped messages:
-`{"position": <N>, "event": <LibraryEvent>}`.  Clients send PatronCommands (patrons) or
-AdminCommands (admins) as JSON.
+`{"position": <N>, "event": <LibraryEvent>}`, plus a bare `"caughtup"` string when the catchup
+phase is complete.  Clients send PatronCommands (patrons) or AdminCommands (admins) as JSON.
+
+**Framework lifecycle:** The framework has `caughtUp()` and `fellBehind()` methods to control when
+queries execute.  During catchup, events are buffered and the query graph is frozen.  When
+`caughtUp()` is called, the overlay is rebuilt and all queries run at once.
+
+**useQuery hook:** Generic over any Framework subclass.  Uses structural typing with a generic
+method signature (`{ newQuery<X>(fn: QueryFunction<QX, X>): Query<X> }`) to infer the query
+context type from the framework instance.
+
+**useFramework hook:** App-specific hook that creates a `UserFramework<number>` instance and
+manages the websocket connection lifecycle (handshake, message decoding, exponential backoff
+reconnect capping at 60s, enable/disable toggle).
 
 ## Working Conventions
 
@@ -100,3 +123,5 @@ AdminCommands (admins) as JSON.
   hand-edited except for throwaway experiments.  Change `library.py` and regenerate instead.
 - Prefer larger changes; the user will ask to slow down if needed.
 - No test suite is in place right now; `test.py` is throwaway, jest config is leftover.
+- `useQuery.ts` should be treated as library-quality code (generic, reusable).
+- `useFramework.ts` is app-specific (hardcodes relay protocol); prioritize clarity over generality.
