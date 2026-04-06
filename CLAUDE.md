@@ -55,7 +55,6 @@ ui/                 Frontend (React 19 + Ant Design 6 + @ant-design/icons)
   src/PatronWindow.tsx  Per-patron UI: books list, holds, checkouts, name editing
   src/useFramework.ts   Hook combining framework creation + websocket lifecycle
   src/useQuery.ts       Generic React hook for framework queries (library-quality, framework-agnostic)
-  src/types.ts          Shared type aliases (FW = UserFramework<number>)
   src/model.{js,d.ts}   GENERATED bundles from model/ui.ts
 
 populate.py         Utility script to seed KurrentDB with test data (run with relay/.venv/bin/python)
@@ -95,26 +94,41 @@ transparent interception of all storage calls (useful for caching, overlay stora
 operations generated from the Store definitions in `library.py`.  Query functions receive a `qx`
 parameter with read-only access.
 
+**Event metadata:** All events are wrapped in metadata.  `Event<T> = {id, data}` is the base
+wrapper (used for commands and forecasts).  `RealEvent<T> = Event<T> & {position}` adds the
+KurrentDB commit position (used for events from the wire).  The framework handles decoding
+internally via `decodeEvent`/`decodeCommand` callbacks passed to the constructor.
+
 **Event flow:** Commands arrive at the relay, get validated, are written to KurrentDB.  The decider
 reads events, applies reducers (which may accept or reject), and emits decision events.  Decision
 events flow back through the relay to clients as virtualized status updates.
 
 **WebSocket protocol:** Clients connect to `ws://localhost:3003/ws`.  First message is a JSON
-handshake: `{"patron_id": "...", "since": <number|null>}`.  Server sends wrapped messages:
-`{"position": <N>, "event": <LibraryEvent>}`, plus a bare `"caughtup"` string when the catchup
-phase is complete.  Clients send PatronCommands (patrons) or AdminCommands (admins) as JSON.
+handshake: `{"patron_id": "...", "since": <number|null>}`.  Server sends `RealEvent`-shaped
+messages: `{"position": <N>, "id": "<uuid>", "data": <LibraryEvent>}`, plus a bare `"caughtup"`
+string when the catchup phase is complete.  Clients send commands as `Event`-shaped messages:
+`{"id": "<uuid>", "data": <command>}`.
 
 **Framework lifecycle:** The framework has `caughtUp()` and `fellBehind()` methods to control when
 queries execute.  During catchup, events are buffered and the query graph is frozen.  When
 `caughtUp()` is called, the overlay is rebuilt and all queries run at once.
 
+**Forecasting:** When `sendCommands()` is called, commands are assigned UUIDs, persisted to storage,
+and passed to the optional `forecaster` callback to predict server responses.  Forecasts are keyed
+by command ID and discarded when matching event IDs appear in `recvEvents()`.  If a command is
+rejected, call `roundTripped(id)` to explicitly discard its forecasts.
+
+**UUID generation:** `generateUuid()` is available in all runtimes.  In browsers it uses
+`crypto.getRandomValues()`.  In QuickJS it's injected from Python's `uuid.uuid4()`.  In goja it's
+implemented in Go using `crypto/rand`.
+
 **useQuery hook:** Generic over any Framework subclass.  Uses structural typing with a generic
 method signature (`{ newQuery<X>(fn: QueryFunction<QX, X>): Query<X> }`) to infer the query
 context type from the framework instance.
 
-**useFramework hook:** App-specific hook that creates a `UserFramework<number>` instance and
-manages the websocket connection lifecycle (handshake, message decoding, exponential backoff
-reconnect capping at 60s, enable/disable toggle).
+**useFramework hook:** App-specific hook that creates a `UserFramework` instance and manages the
+websocket connection lifecycle (handshake, message decoding, exponential backoff reconnect capping
+at 60s, enable/disable toggle).
 
 ## Working Conventions
 
