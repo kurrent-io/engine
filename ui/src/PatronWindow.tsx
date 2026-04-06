@@ -3,12 +3,12 @@ import { Button, Card, Flex, Input, List, Switch, Spin, Tag, Typography } from '
 import { EditOutlined } from '@ant-design/icons';
 
 import {
+  UserFramework,
   UserQX,
   QueryGenerator,
 } from './model';
 import { useQuery } from './useQuery';
 import { useFramework } from './useFramework';
-import { FW } from './types';
 
 const { Text } = Typography;
 
@@ -121,7 +121,7 @@ function Books({
   onHold,
   onHoldRestricted,
 }: {
-  fw: FW;
+  fw: UserFramework;
   researcher: boolean;
   onHold: (isbn: string) => void;
   onHoldRestricted: (isbn: string) => void;
@@ -167,7 +167,7 @@ function Books({
   );
 }
 
-function MyAccount({ fw, patronId }: { fw: FW; patronId: string }) {
+function MyAccount({ fw, patronId }: { fw: UserFramework; patronId: string }) {
   const myAccountLookup = useCallback(function*(qx: UserQX): QueryGenerator<Account> {
     const patron = yield* qx.get.patron(patronId);
     const holds = [];

@@ -105,6 +105,14 @@ static PyObject *copy_copy(PyObject *obj) {
     return PyObject_CallOneArg(copy_func, obj);
 }
 
+// weakref to uuid.uuid4
+static PyObject *uuid_uuid4_weakref;
+
+static PyObject *uuid_uuid4() {
+    PyObject *uuid4_func = PyWeakref_GetObject(uuid_uuid4_weakref);
+    return PyObject_CallNoArgs(uuid4_func);
+}
+
 // sets a python exception and returns NULL
 static PyObject *js_exception(JSContext *ctx) {
     PyObject *pywrapper = NULL;
@@ -614,6 +622,41 @@ static JSValue js_console_log(
     return JS_UNDEFINED;
 }
 
+static JSValue js_generate_uuid(
+    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv
+) {
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    PyObject *uuid = NULL;
+    PyObject *pystr = NULL;
+    JSValue out = JS_UNINITIALIZED;
+
+    // generate a uuid
+    uuid = uuid_uuid4();
+    if(!uuid) {
+        py_exception(ctx);
+        goto done;
+    }
+
+    // call str() on it
+    pystr = PyObject_Str(uuid);
+    if(!pystr) {
+        py_exception(ctx);
+        goto done;
+    }
+
+    // convert to js string
+    Py_ssize_t len;
+    const char *cstr = PyUnicode_AsUTF8AndSize(pystr, &len);
+    out = JS_NewStringLen(ctx, cstr, (size_t)len);
+
+done:
+    Py_XDECREF(uuid);
+    Py_XDECREF(pystr);
+    return out;
+}
+
 static int prep_env(JSContext *ctx){
     JSValue global = JS_UNINITIALIZED;
     JSValue console = JS_UNINITIALIZED;
@@ -637,9 +680,20 @@ static int prep_env(JSContext *ctx){
         goto done;
     }
 
+    // inject console.log
     JS_SetPropertyStr(ctx, console, "log", log);
+    log = JS_UNINITIALIZED;
     JS_SetPropertyStr(ctx, global, "console", console);
     console = JS_UNINITIALIZED;
+
+    // inject generateUuid
+    JSValue generateUuid = JS_NewCFunction(ctx, js_generate_uuid, "generateUuid", 0);
+    if (JS_IsException(generateUuid)) {
+        js_exception(ctx);
+        goto done;
+    }
+    JS_SetPropertyStr(ctx, global, "generateUuid", generateUuid);
+    generateUuid = JS_UNINITIALIZED;
 
     retval = 0;
 
@@ -2237,6 +2291,8 @@ PyObject* PyInit__quickjs(void){
     PyObject *dict = NULL;
     PyObject *copymodule = NULL;
     PyObject *copyfunc = NULL;
+    PyObject *uuidmodule = NULL;
+    PyObject *uuid4func = NULL;
 
     PyObject *module = PyModule_Create(&_quickjs_module);
     if (module == NULL){
@@ -2282,9 +2338,19 @@ PyObject* PyInit__quickjs(void){
     copy_copy_weakref = PyWeakref_NewRef(copyfunc, NULL);
     if(!copy_copy_weakref) goto fail;
 
+    // and import a the uuid module and grab its .uuid4 function
+    uuidmodule = PyImport_ImportModule("uuid");
+    if(!uuidmodule) goto fail;
+    uuid4func = PyObject_GetAttrString(uuidmodule, "uuid4");
+    if(!uuid4func) goto fail;
+    uuid_uuid4_weakref = PyWeakref_NewRef(uuid4func, NULL);
+    if(!uuid_uuid4_weakref) goto fail;
+
     return module;
 
 fail:
+    Py_XDECREF(uuid4func);
+    Py_XDECREF(uuidmodule);
     Py_XDECREF(copyfunc);
     Py_XDECREF(copymodule);
     Py_XDECREF(dict);

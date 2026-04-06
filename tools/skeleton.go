@@ -680,35 +680,20 @@ func (s StringSource) ToSource() (string, string, error) {
 	return s.name, s.script, nil
 }
 
-//
-
-type Decoder[E any] interface {
-	// note: events is goja Array of undecoded events, and it returns an Array of decoded events
-	ToDecoder(vm *goja.Runtime) (func (events goja.Value) (goja.Value, error), error)
+type FileSource struct {
+	path   string
 }
 
-type JSDecoder struct {
-	name string
+func NewFileSource(path string) Source {
+	return FileSource{path}
 }
 
-func NewJSDecoder[E any](name string) Decoder[E] {
-	return JSDecoder{name}
-}
-
-func (d JSDecoder) ToDecoder(vm *goja.Runtime) (func(goja.Value) (goja.Value, error), error) {
-	jsfn := vm.GlobalObject().Get(d.name)
-	if jsfn == nil {
-		return nil, fmt.Errorf("unable to create decoder: no such symbol: %v", d.name)
+func (s FileSource) ToSource() (string, string, error) {
+	byts, err := os.ReadFile(s.path)
+	if err != nil {
+		return "", "", nil
 	}
-	fn, ok := goja.AssertFunction(jsfn)
-	if !ok {
-		return nil, fmt.Errorf("unable to create decoder: symbol is not a function: %v", d.name)
-	}
-
-	return func(events goja.Value) (goja.Value, error) {
-		// just provide an empty `this`
-		return fn(goja.Undefined(), events)
-	}, nil
+	return s.path, string(byts), nil
 }
 
 //
@@ -836,69 +821,6 @@ func (s GoStorage) ToStorage(vm *goja.Runtime) (goja.Value, error) {
 
 //
 
-type Migrate[RX any] interface {
-	// returns a migrateFunc; the rx is borrowed from Reducer
-	ToMigrate(vm *goja.Runtime) (goja.Value, error)
-}
-
-type JSMigrate struct {
-	migrate string
-}
-
-func NewJSMigrate[RX any](migrate string) Migrate[RX] {
-	if migrate == "" { return nil }
-	return JSMigrate{migrate}
-}
-
-func (s JSMigrate) ToMigrate(vm *goja.Runtime) (goja.Value, error) {
-	migrate := vm.GlobalObject().Get(s.migrate)
-	if migrate == nil {
-		return nil, fmt.Errorf("unable to create migrate: no such symbol: %v", s.migrate)
-	}
-	_, ok := goja.AssertFunction(migrate)
-	if !ok {
-		return nil, fmt.Errorf("unable to create migrate: symbol is not a function: %v", s.migrate)
-	}
-	return migrate, nil
-}
-
-//
-
-type Reducer[RX any, E any] interface {
-	// returns a [RX, reducerFunc]
-	ToReducer(vm *goja.Runtime) (goja.Value, goja.Value, error)
-}
-
-type JSReducer struct {
-	rx string
-	reducer string
-}
-
-func NewJSReducer[RX any, E any](rx, reducer string) Reducer[RX, E] {
-	return JSReducer{rx, reducer}
-}
-
-func (s JSReducer) ToReducer(vm *goja.Runtime) (goja.Value, goja.Value, error) {
-	rx := vm.GlobalObject().Get(s.rx)
-	if rx == nil {
-		return nil, nil, fmt.Errorf("unable to create rx: no such symbol: %v", s.rx)
-	}
-
-	reducer := vm.GlobalObject().Get(s.reducer)
-	if reducer == nil {
-		return nil, nil, fmt.Errorf("unable to create reducer: no such symbol: %v", s.reducer)
-	}
-	_, ok := goja.AssertFunction(reducer)
-	if !ok {
-		return nil, nil, fmt.Errorf(
-			"unable to create reducer: symbol is not a function: %v", s.reducer,
-		)
-	}
-	return rx, reducer, nil
-}
-
-//
-
 func consoleLog(call goja.FunctionCall) goja.Value {
 	var out []string
 	for _, arg := range call.Arguments {
@@ -906,6 +828,69 @@ func consoleLog(call goja.FunctionCall) goja.Value {
 	}
 	println(strings.Join(out, " "))
 	return nil
+}
+
+// const NIBBLE = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
+//
+// // generateUuid is either injected into the environment or we expect to use crypto.getRandomValues()
+// if (!globalThis.generateUuid) {
+//   function generateUuid(): string {
+//     let out = '';
+//
+//     // Get 128 bits of randomness.
+//     const values = new Uint8Array(16);
+//     crypto.getRandomValues(values);
+//
+//     // rfc4122 compliance: type 4 uuid
+//     values[6] = 0x40 | (values[6] & 0x0f);
+//     values[8] = 0x80 | (values[8] & 0x3f);
+//
+//     values.forEach((x) => {
+//       out += NIBBLE[x >>> 4] + NIBBLE[x & 0x0f];
+//     });
+//
+//     return [
+//       out.substring(0, 8),
+//       out.substring(8, 12),
+//       out.substring(12, 16),
+//       out.substring(16, 20),
+//       out.substring(20, 32),
+//     ].join('-');
+//   }
+// }
+
+var hexifyNibbles = []byte{
+	'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+}
+
+func hexify(src []uint8, dst []byte) {
+	for i, s := range src {
+		dst[2*i] = hexifyNibbles[s >> 4];
+		dst[2*i + 1] = hexifyNibbles[s & 0x0f];
+	}
+}
+
+func generateUuid(call goja.FunctionCall, vm *goja.Runtime) goja.Value {
+	// get 128 bits of randomness
+	var values [16]uint8
+	_, _ = rand.Read(values[:])
+
+	// rf4122 compliance: type 4 uuid
+	values[6] = 0x40 | (values[6] & 0x0f)
+	values[8] = 0x80 | (values[8] & 0x3f)
+
+	// hexify with appropriate dashes
+	var out [36]byte
+	hexify(values[0:4], out[0:8])
+	out[8] = '-'
+	hexify(values[4:6], out[9:13])
+	out[13] = '-'
+	hexify(values[6:8], out[14:18])
+	out[18] = '-'
+	hexify(values[8:10], out[19:23])
+	out[23] = '-'
+	hexify(values[10:16], out[24:36])
+	return vm.ToValue(string(out[:]))
 }
 
 func makeSetTimeout() (func (goja.FunctionCall) goja.Value, func() error) {
@@ -950,10 +935,9 @@ func makeSetTimeout() (func (goja.FunctionCall) goja.Value, func() error) {
 	return setTimeout, run
 }
 
-type Framework[QX QueryContext, RX any, E any, C any, P any] struct {
+type Framework[QX QueryContext, E any, C any] struct {
 	vm *goja.Runtime
 	fw *goja.Object
-	decoder func (events goja.Value) (goja.Value, error)
 	run func() error
 	newQuery goja.Callable
 	recvEvents goja.Callable
@@ -963,20 +947,23 @@ type Framework[QX QueryContext, RX any, E any, C any, P any] struct {
 	qxFactory func(*goja.Runtime, Ask) QX
 }
 
-func NewFramework[QX QueryContext, RX any, E any, C any, P any](
+func NewFramework[QX QueryContext, E any, C any](
 	source Source,
+	className string,
 	storage Storage,
-	decoder Decoder[E],
-	migrate Migrate[RX],
-	reducer Reducer[RX, E],
+	migrate string,
+	reducer string,
 	qxFactory func(*goja.Runtime, Ask) QX,
-) (*Framework[QX, RX, E, C, P], error) {
+) (*Framework[QX, E, C], error) {
 	vm := goja.New()
 
 	// configure a console.log()
 	console := vm.NewObject()
 	console.Set("log", consoleLog)
 	vm.GlobalObject().Set("console", console)
+
+	// configure a generateUuid()
+	vm.GlobalObject().Set("generateUuid", generateUuid)
 
 	// configure a setTimeout()
 	setTimeout, run := makeSetTimeout()
@@ -999,44 +986,38 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 		return nil, fmt.Errorf("storage: %w", err)
 	}
 
-	decoderFn, err := decoder.ToDecoder(vm)
-	if err != nil {
-		return nil, fmt.Errorf("decoder: %w", err)
-	}
-
 	var migrateFn goja.Value
-	if migrate != nil {
-		migrateFn, err = migrate.ToMigrate(vm)
-		if err != nil {
-			return nil, fmt.Errorf("migrate: %w", err)
+	if migrate != "" {
+		migrateFn = vm.GlobalObject().Get(migrate)
+		if migrateFn == nil {
+			return nil, fmt.Errorf("unable to find migrate: no such symbol: %q", migrate)
 		}
 	}
 
-	rx, reducerFn, err := reducer.ToReducer(vm)
-	if err != nil {
-		return nil, fmt.Errorf("reducer: %w", err)
+	var reducerFn goja.Value
+	reducerFn = vm.GlobalObject().Get(reducer)
+	if reducerFn == nil {
+		return nil, fmt.Errorf("unable to find reducer: no such symbol: %q", reducer)
 	}
 
 	// build callbacks
 	callbacks := vm.NewObject()
 	callbacks.Set("reducer", reducerFn)
-	if migrateFn != nil {
-		callbacks.Set("migrate", migrateFn)
-	}
+	callbacks.Set("migrate", migrateFn)
 
 	// we handle QX entirely in go
 	jsqx := goja.Undefined()
 
 	// call `new Framework()`
-	fwClass := vm.GlobalObject().Get("Framework")
+	fwClass := vm.GlobalObject().Get(className)
 	if fwClass == nil {
-		return nil, errors.New("unable to locate Framework symbol")
+		return nil, fmt.Errorf("unable to locate Framework subclass: no such symbol: %q", className)
 	}
 	fwConstructor, ok := goja.AssertConstructor(fwClass)
 	if !ok {
-		return nil, errors.New("Framework symbol is not a constructor")
+		return nil, fmt.Errorf("symbol %q is not a constructor", className)
 	}
-	fw, err := fwConstructor(nil, jsqx, rx, storageVal, callbacks)
+	fw, err := fwConstructor(nil, storageVal, callbacks, jsqx)
 	if err != nil {
 		return nil, fmt.Errorf("new Framework(): %w", err)
 	}
@@ -1063,10 +1044,9 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 		return nil, errors.New(".caughtUp() method not callable")
 	}
 
-	return &Framework[QX, RX, E, C, P]{
+	return &Framework[QX, E, C]{
 		vm,
 		fw,
-		decoderFn,
 		run,
 		newQuery,
 		recvEvents,
@@ -1077,38 +1057,30 @@ func NewFramework[QX QueryContext, RX any, E any, C any, P any](
 	}, nil
 }
 
-func (f *Framework[QX, RX, E, C, P]) VM() *goja.Runtime {
+func (f *Framework[QX, E, C]) VM() *goja.Runtime {
 	return f.vm
 }
 
-func (f *Framework[QX, RX, E, C, P]) RecvEvents(rawEvents []goja.Value, checkpoint P) error {
-	decoded := make([]goja.Value, len(rawEvents))
-	for i, raw := range rawEvents {
-		dec, err := f.decoder(raw)
-		if err != nil {
-			return err
-		}
-		decoded[i] = dec
-	}
-	_, err := f.recvEvents(f.fw, f.vm.ToValue(decoded), f.vm.ToValue(checkpoint))
+func (f *Framework[QX, E, C]) RecvEvents(rawEvents []goja.Value) error {
+	_, err := f.recvEvents(f.fw, f.vm.ToValue(rawEvents))
 	if err != nil {
 		return err
 	}
 	return f.run()
 }
 
-func (f *Framework[QX, RX, E, C, P]) FellBehind() error {
+func (f *Framework[QX, E, C]) FellBehind() error {
 	_, err := f.fellBehind(f.fw)
 	return err
 }
 
-func (f *Framework[QX, RX, E, C, P]) CaughtUp() error {
+func (f *Framework[QX, E, C]) CaughtUp() error {
 	_, err := f.caughtUp(f.fw)
 	return err
 }
 
-func (f *Framework[QX, RX, E, C, P]) Reconnect() (*P, error) {
-	var out *P
+func (f *Framework[QX, E, C]) Reconnect() (*uint64, error) {
+	var out *uint64
 	jsfn := WrapPanics(f.vm, func(call goja.FunctionCall) (goja.Value, error) {
 		var value goja.Value = call.Arguments[0]
 		// did we get a checkpoint value?
@@ -1116,7 +1088,7 @@ func (f *Framework[QX, RX, E, C, P]) Reconnect() (*P, error) {
 			return nil, nil
 		}
 		// export received checkpoint value
-		var checkpoint P
+		var checkpoint uint64
 		err := f.vm.ExportTo(value, &checkpoint)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -1264,8 +1236,8 @@ func (q *Query[T]) Subscribe(fn func(T)) func() {
 	}
 }
 
-func NewQuery[QX QueryContext, RX any, E any, C any, P any, T any](
-	fw *Framework[QX, RX, E, C, P],
+func NewQuery[QX QueryContext, E any, C any, T any](
+	fw *Framework[QX, E, C],
 	fn func(vm *goja.Runtime, qx QX, prev *T) T,
 ) *Query[T] {
 	// each time a query is run, we create a new javascript iterator around a new coroutine

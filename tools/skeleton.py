@@ -1,6 +1,7 @@
 import base64
 import datetime
 import json
+import uuid
 from typing import (
     Any,
     Awaitable,
@@ -27,7 +28,6 @@ JSON = Dict[str, 'JSON'] | List['JSON'] | str | int | bool | None
 T = TypeVar('T')
 E = TypeVar('E')
 C = TypeVar('C')
-P = TypeVar('P')
 QX = TypeVar('QX')
 
 
@@ -123,31 +123,21 @@ class Txn(Protocol):
     def delete(self, key: str) -> None: ...
 
 
-class ReconnectInfo[P, C](Protocol):
-    checkpoint: P | None
+class ReconnectInfo[C](Protocol):
+    checkpoint: int | None
     commands: List[C]
 
 
-class Framework[QX, RX, E, C, P]:
-    '''
-    Framework chooses not to make assumptions about how you implement:
-      - reducers can be written in python, if you want.
-      - you can use a javascript query context with python query functions.  Weird, but ok.
-      - all this at the cost of way too many type parameters.
-
-    More likely, you should use a generated subclass that guides you through these choices.  But the
-    Framework is availalble if you wanna do something crazy.
-    '''
+class Framework[QX, E, C]:
     def __init__(
         self,
         bundle: str,
-        *,
-        decoder: Callable[[Any], E] | str,
-        storage: Callable[[bool], Txn] | str,
-        qx: QX | str,
-        rx: RX | str,
-        migrate: Callable[[RX], None] | str | None,
-        reducer: Callable[[RX, List[E]], None] | str,
+        framework_cls: str,
+        # if storage is None, InMemStorage (from typescript) is used
+        storage: Callable[[bool], Txn] | None,
+        qx: QX,
+        migrate: str | None,
+        reducer: str,
     ) -> None:
         self._js = _quickjs.QuickJS()
 
@@ -196,47 +186,16 @@ class Framework[QX, RX, E, C, P]:
         flags = 1 | (1<<5) # JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
         self.module = self._js.eval(text, file=bundle, sourcemap=sourcemap, flags=flags)
 
-        if isinstance(decoder, str):
-            decoder = self.module[decoder]
-        # wrap decoder function, probably from javascript, in a closure that maps it against an
-        # entire list of events before returning, to prevent bouncing between python and js too much
-        self._decoder = self._js.eval("(decoder) => ((events) => events.map(decoder))")(decoder)
+        storagejs = storage and _quickjs.make_storage(self._js, storage)
 
-        if isinstance(storage, str):
-            # storage is from javascript, maybe InMemTxn
-            if hasattr(self.module, storage):
-                storage = self._js.eval("(cls) => new cls()")(self.module[storage])
-            else:
-                raise ValueError("unsure how to instantiate storage")
-        else:
-            # storage is a callable that produces a Txn
-            storage = _quickjs.make_storage(self._js, storage)
-
-        if isinstance(qx, str):
-            qx = self.module[qx]
-            qxjs = qx
-        else:
-            qxjs = _quickjs.Opaque(qx)
-
-        if isinstance(rx, str):
-            rx = self.module[rx]
-            rxjs = rx
-        else:
-            rxjs = _quickjs.Opaque(rx)
-
-        if isinstance(migrate, str):
-            migrate = self.module[migrate]
-
-        if isinstance(reducer, str):
-            reducer = self.module[reducer]
-
-        callbacks: Dict[str, Any] = { "reducer": reducer }
-        if migrate is not None:
-            callbacks["migrate"] = migrate
+        callbacks: Dict[str, Any] = {
+            "migrate": migrate and self.module[migrate],
+            "reducer": self.module[reducer],
+        }
 
         self._framework: _quickjs.Value = self._js.eval(
-            "(cls, qx, rx, storage, callbacks) => new cls(qx, rx, storage, callbacks)",
-        )(self.module["Framework"], qxjs, rxjs, storage, callbacks)
+            "(cls, storage, callbacks, qx) => new cls(storage, callbacks, qx)",
+        )(self.module[framework_cls], storagejs, callbacks, _quickjs.Opaque(qx))
 
     def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:
         # queryfunc will wrap the python generator in a javascript iterator
@@ -265,9 +224,8 @@ class Framework[QX, RX, E, C, P]:
         # wrap _Query in a suitable python interface
         return Query(_query, lambda: self._run())
 
-    def recv_events(self, raw_events: List[Any], checkpoint: P) -> None:
-        events = self._decoder(raw_events)
-        self._framework.recvEvents(events, checkpoint)
+    def recv_events(self, events: List[Any]) -> None:
+        self._framework.recvEvents(events)
         self._run()
 
     def fell_behind(self) -> None:
@@ -278,8 +236,8 @@ class Framework[QX, RX, E, C, P]:
         self._framework.caughtUp()
         self._run()
 
-    def reconnect(self) -> P | None:
-        info: ReconnectInfo[P, C] | None = None
+    def reconnect(self) -> int | None:
+        info: ReconnectInfo[C] | None = None
 
         def on_result(x: ReconnectInfo | None) -> None:
             nonlocal info
@@ -290,20 +248,48 @@ class Framework[QX, RX, E, C, P]:
 
         return info.checkpoint if info else None
 
-    def simulate[T](self, fn: str | Callable[[RX], T]) -> T:
-        if isinstance(fn, str):
-            fn = self.module[fn]
-
+    def simulate[T](
+        self,
+        fn: Callable[[Any, List[E]], T],
+        undecoded_events: List[Event[Any]] | None = None,
+    ) -> T:
         sentinel = object()
         result: Any = sentinel
 
-        def on_result(t: T | None) -> None:
+        def on_result(r: Any | None) -> None:
             nonlocal result
-            result = t
+            result = r
 
-
-        self._framework.simulate(fn, on_result)
+        self._framework.simulate(fn, on_result, undecoded_events)
         self._run()
 
         assert result is not sentinel
         return cast(T, result)
+
+# helpers for dealing with metadata-wrapped event types
+
+class Event[T](TypedDict):
+    id: str
+    data: T
+
+def checkEvent(
+    val: Any, subchecker: Callable[[Any, str], List[str]], path: str = "<root>",
+) -> List[str]:
+    if not isinstance(val, dict):
+        return [path + f': is a {type(val).__name__}, not json object']
+    problems = []
+    if 'id' not in val:
+        problems += [path + ': missing required key id']
+    elif not isinstance((id := val['id']), str):
+        problems += [path + f'.id: is a {type(id).__name__}, not a str']
+    else:
+        try:
+            _ = uuid.UUID(id)
+        except ValueError:
+            problems += [path + '.id: invalid uuid']
+    if 'data' not in val:
+        problems += [path + ': missing required key data']
+    else:
+        problems += subchecker(val['data'], path + '.data')
+
+    return problems

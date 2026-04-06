@@ -2,11 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   InMemStorage,
   UserFramework,
-  DecodeLibraryEvents,
   userMigrate,
   userReducer,
 } from './model';
-import { FW } from './types';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
@@ -14,11 +12,11 @@ export function useFramework(
   relayUrl: string,
   patronId: string,
   enabled: boolean,
-): [FW, ConnectionState] {
+): [UserFramework, ConnectionState] {
   // create a framework instance once, for the lifetime of this hook
   const fw = useMemo(() => {
     const storage = new InMemStorage();
-    return new UserFramework<number>(storage, {
+    return new UserFramework(storage, {
       migrate: userMigrate,
       reducer: userReducer,
     });
@@ -67,9 +65,8 @@ export function useFramework(
           if (msg.data === "caughtup") {
             fw.caughtUp();
           } else {
-            const parsed = JSON.parse(msg.data);
-            const event = DecodeLibraryEvents(parsed.event);
-            fw.recvEvents([event], parsed.position);
+            const event = JSON.parse(msg.data);
+            fw.recvEvents([event]);
           }
         };
 

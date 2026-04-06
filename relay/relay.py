@@ -5,6 +5,7 @@ import dataclasses
 import json
 import logging
 import os
+import uuid
 from typing import (
     Any,
     AsyncGenerator,
@@ -18,6 +19,7 @@ from typing import (
     Never,
     Set,
     Tuple,
+    TypedDict,
 )
 
 from aiohttp import web
@@ -105,7 +107,7 @@ class Appender:
         self.sync = sync
         self.client = client
 
-    async def append(self, new_uuids: List[str], batch: List[RelayCommands]) -> None:
+    async def append(self, new_uuids: List[str], batch: List[model.Event[Any]]) -> None:
         # the plural of NewEvents is "new_eventses", which you have to say with a Gollum voice.
         new_eventses = []
 
@@ -135,8 +137,8 @@ class Appender:
         last_stream = None
         events: List[kdbc.NewEvent] = []
         for event in batch:
-            stream = stream_for(event)
-            if not last_stream != stream:
+            stream = stream_for(event["data"])
+            if last_stream != stream:
                 # start a new NewEvents object, with a new events list that we'll grow
                 last_stream = stream
                 events = []
@@ -148,7 +150,11 @@ class Appender:
                     )
                 )
             events.append(
-                kdbc.NewEvent(type="LibraryEvents", data=json.dumps(event).encode('utf8')),
+                kdbc.NewEvent(
+                    type="LibraryEvents",
+                    data=json.dumps(event).encode('utf8'),
+                    id=uuid.UUID(event["id"]),
+                ),
             )
 
         position = await self.client.multi_append_to_stream(new_eventses)
@@ -158,8 +164,13 @@ class Appender:
         await self.sync.wait_for(position)
 
 
-def wrap_event(event: str, position: int) -> str:
-    return '{"position": %d, "event": %s}'%(position, event)
+def wrap(event: kdbc.RecordedEvent, alt_data: str | None = None) -> str:
+    """Wrap an event in an envelope of metadata, to match typescript's RealEvent type."""
+    return '{"position": %d, "id": "%s", "data": %s}'%(
+        event.stream_position,
+        str(event.id),
+        alt_data or event.data.decode('utf8'),
+    )
 
 
 class Subscriber:
@@ -243,20 +254,22 @@ class Subscriber:
         # first read all the json
         events = []
         for event in batch:
-            events.append(json.loads(event.data))
-
-        position = batch[-1].stream_position
+            events.append({
+                "position": event.stream_position,
+                "id": str(event.id),
+                "data": json.loads(event.data),
+            })
 
         # apply updates to the read model
-        self.fw.recv_events(events, position)
+        self.fw.recv_events(events)
 
         # notify anybody who was waiting for a round-trip
-        await self.sync.update(position)
+        await self.sync.update(batch[-1].stream_position)
 
     def dispatch(self, batch: List[kdbc.RecordedEvent]) -> None:
         # also dispatch the events to the various watches
         for event in batch:
-            wrapped = wrap_event(event.data.decode('utf8'), event.stream_position)
+            wrapped = wrap(event)
             match event.stream_name.split(".", maxsplit=1):
                 # events not relayed to end users:
                 case ("status", _):
@@ -286,7 +299,7 @@ class Subscriber:
                     if typ in ("new-vhold", "new-vcheckout"):
                         temp = dict(j)
                         del temp["patron_id"]
-                        sanitized = wrap_event(json.dumps(temp), event.stream_position)
+                        sanitized = wrap(event, json.dumps(temp))
 
                     # actually distribute the events
                     for put, w_patron_id in (
@@ -319,18 +332,20 @@ class Subscriber:
         ) as stream:
             async for event in stream:
                 if patron_id == ADMIN or event.stream_name != "vstatus":
-                    yield event.data.decode("utf8"), event.stream_position
+                    yield wrap(event), event.stream_position
                     continue
                 # sanitize the vstatus stream
                 j = json.loads(event.data)
                 typ = j.type
-                if typ == "vhold-rejected" and patron_id != j.patron_id:
-                    # skip
+                if typ == "vhold-rejected":
+                    # only yield those which match our patron_id
+                    if patron_id == j.patron_id:
+                        yield wrap(event), event.stream_position
                     continue
                 if typ in ("new-vhold", "new-vcheckout"):
                     # sanitize
                     del j["patron_id"]
-                yield json.dumps(j), event.stream_position
+                yield wrap(event, json.dumps(j)), event.stream_position
 
 
     async def stream(self, patron_id: PatronID, since: int, w: Writer) -> None:
@@ -338,7 +353,7 @@ class Subscriber:
 
         # first do a cold catchup, which may take a while (we don't want to collect live events yet)
         async for event, position in self.catchup(patron_id, since):
-            await w.put_start(wrap_event(event, position))
+            await w.put_start(event)
             since = position
 
         # now subscribe to live events
@@ -346,7 +361,7 @@ class Subscriber:
         try:
             # do a hot catchup to make sure we don't miss any events
             async for event, position in self.catchup(patron_id, since):
-                await w.put_start(wrap_event(event, position))
+                await w.put_start(event)
                 since = position
 
             # transition to the liveq, discarding duplicate events
@@ -454,12 +469,12 @@ class Reader:
         self.patron_id = patron_id
         self.ws = ws
         # size of the queue is the maximum batch size we can process
-        self.q: asyncio.Queue[Any] = asyncio.Queue(100)
+        self.q: asyncio.Queue[model.Event[Any]] = asyncio.Queue(100)
 
         if patron_id == ADMIN:
-            self.validate = fw.module["validateAdminCommands"]
+            self.validator = fw.module["validateAdminCommands"]
         else:
-            self.validate = fw.module["validatePatronCommands"]
+            self.validator = fw.module["validatePatronCommands"]
 
     async def run(self) -> None:
         await waitgroup(self.collect(), self.process())
@@ -483,7 +498,7 @@ class Reader:
 
             # make sure each event is structurally valid
             obj = msg.json()
-            errors = model.checkAdminCommands(obj)
+            errors = model.checkEvent(obj, model.checkAdminCommands)
             if errors:
                 raise UserError(errors)
 
@@ -502,7 +517,7 @@ class Reader:
                 batch.append(self.q.get_nowait())
 
             # make sure each event is semantically valid
-            new_uuids, errors = self.fw.simulate(lambda rx: self.validate(rx, batch))
+            new_uuids, errors = self.fw.simulate(self.validator, batch)
             if errors:
                 raise UserError(errors)
 
@@ -611,9 +626,9 @@ async def setupWebserver(listen_spec: str, app_data: Dict[str, Any]) -> AsyncGen
 
 async def amain(connstr: str) -> None:
     # set up the sync engine framework
-    fw = model.RelayFramework[int](
+    fw = model.RelayFramework(
         os.path.join(os.path.dirname(__file__), "relay.js"),
-        "InMemStorage",
+        None,
         "relayMigrate",
         "relayReducer",
     )

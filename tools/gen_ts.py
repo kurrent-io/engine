@@ -95,7 +95,11 @@ def decode_solution(d, annos, decoders, solution):
         elif isinstance(solution, CheckJsonType):
             if len(solution.options) == 1:
                 return visit(next(iter(solution.options.values())))
-            d.print("switch(typeof(x)){\n")
+            # note that typeof() has some weird behaviors:
+            # - typeof([]) = "object"
+            # - typeof(null) = "object"
+            # so we use a custom helper function specific to handling decoded json
+            d.print("switch(json_typeof(x)){\n")
             d.indent("  ")
             for jtyp, subsln in solution.options.items():
                 d.print(f'case "{jtyp}":\n');
@@ -245,7 +249,7 @@ def generate_decoders(d, annos, decoders, t):
                 # non-identity values; inlining not possible
                 anon = _anon
                 _anon += 1
-                d.print(f"\nfunction decodeAnon{anon}(val) {{\n")
+                d.print(f"\nfunction decodeAnon{anon}(val: any): {annos[t]} {{\n")
                 d.indent("  ")
                 d.print("return Object.fromEntries(Object.entries(val).map(")
                 d.print(f'([k, v]) => [k, {decoders[t.value_type]("v")}]')
@@ -337,7 +341,7 @@ def is_updatable(t):
     if isinstance(t, (ConcreteArray, ConcreteTuple, ConcreteStruct, ConcreteObject)):
         return True
     if isinstance(t, ConcreteUnion):
-        return all(is_mutable(ut) for ut in t.types)
+        return all(is_updatable(ut) for ut in t.types)
     return False
 
 
@@ -481,9 +485,11 @@ def generate_framework(d, annos, f):
     qx = f"{ctx_name}QueryContext"
     RX = f"{ctx_name}RX"
     QX = f"{ctx_name}QX"
+    decode_event = f"Decode{f.event_type.name}"
+    decode_command = f"Decode{f.command_type.name}"
 
     d.print(f"""
-export class {f.name}<P> extends Framework<{QX}, {RX}, {event_type}, {command_type}, P> {{
+export class {f.name} extends Framework<{QX}, {RX}, {event_type}, {command_type}> {{
   constructor(
     storage: Storage,
     callbacks: {{
@@ -492,16 +498,18 @@ export class {f.name}<P> extends Framework<{QX}, {RX}, {event_type}, {command_ty
       // required: reduce a batch of events into the read model
       reducer: (rx: {RX}, events: {event_type}[]) => Reducer<void>,
       // optional: forecast the events a server will send for a command
-      forecaster?: (commands: {command_type}[]) => {event_type}[],
-      // required if using forecaster: create a unique forecast key for an event; used to create a
-      // map of forecast events and to invalidate the forecasted event when the real event arrives
-      forecastKey?: (event: {event_type}) => string,
-      // required if using sendCommands: receive events to send on the wire and a callback to signal
-      // when that succeeded
-      onCommands?: (commands: {command_type}[], onSent: ()=> void)=> void,
+      forecaster?: (commands: {command_type}) => {event_type}[],
+      // required if using sendCommands: receive events to send on the wire
+      onCommands?: (commands: Event<any>[])=> void,
     }},
+    // used in cross-language support: inject an arbitrary object as the QueryContext
+    qx?: any,
   ) {{
-    super({qx}, {rx}, storage, callbacks);
+    super(qx ?? {qx}, {rx}, storage, {{
+        ...callbacks,
+        decodeEvent: {decode_event},
+        decodeCommand: {decode_command},
+    }});
   }}
 }}
 """)

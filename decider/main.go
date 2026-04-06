@@ -30,27 +30,24 @@ const (
 	batchMax = 1000
 )
 
-type Checkpoint = uint64
-
 // PublishedCheckpoint is the type of event we put into decider state
 type PublishedCheckpoint struct {
-	PublishedUntil Checkpoint `json:"publishedUntil"`
+	PublishedUntil uint64 `json:"publishedUntil"`
 }
 
 // Batch contains one or more events received from a subscription
 type Batch struct {
 	Events []goja.Value
-	Checkpoint Checkpoint
+	Checkpoint uint64
 }
 
 func setupFramework(
 	deciderEvents *[]model.DeciderEvents,
-) (*model.DeciderFramework[Checkpoint], Checkpoint, error) {
+) (*model.DeciderFramework, uint64, error) {
 	// create a framework
-	fw, err := model.NewDeciderFramework[Checkpoint](
+	fw, err := model.NewDeciderFramework(
 		deciderScript,
 		model.NewInMemStorage(),
-		"DecodeLibraryEvents",
 		"deciderMigrate",
 		"deciderReducer",
 	)
@@ -112,7 +109,7 @@ func setupFramework(
 		return nil, 0, fmt.Errorf("requesting reconnect info: %w", err)
 	}
 
-	var checkpointOut Checkpoint
+	var checkpointOut uint64
 	if checkpoint != nil {
 		checkpointOut = *checkpoint
 	}
@@ -121,11 +118,11 @@ func setupFramework(
 }
 
 func setupKurrent(
-	base context.Context, storageCheckpoint Checkpoint,
+	base context.Context, storageCheckpoint uint64,
 ) (
 	*kurrentdb.Client,
 	*kurrentdb.Subscription,
-	Checkpoint,
+	uint64,
 	*kurrentdb.StreamRevision,
 	func(),
 	error,
@@ -167,7 +164,7 @@ func setupKurrent(
 		return nil, nil, 0, nil, nil, fmt.Errorf("reading decider-state: %w\n", err)
 	}
 	defer reader.Close()
-	var dbCheckpoint Checkpoint
+	var dbCheckpoint uint64
 	var revision *kurrentdb.StreamRevision
 	ev, err := reader.Recv()
 	if err != nil {
@@ -220,14 +217,14 @@ func setupKurrent(
 
 // receive batches of events on a background thread and yield them to the caller
 func recvBatches(
-	vm *goja.Runtime, sub *kurrentdb.Subscription, dbCheckpoint Checkpoint,
+	vm *goja.Runtime, sub *kurrentdb.Subscription, dbCheckpoint uint64,
 ) iter.Seq2[Batch, error] {
 	return func(yield func(Batch, error) bool) {
 		// receive events in a background thread
 		// use cond var because otherwise our catchup-vs-live logic requires copy-pasting a largeish
 		// select statement and adding a `default` to one of them, so this turns out simpler.
-		var recvd [][]byte
-		var ckpt Checkpoint
+		var recvd []kurrentdb.RecordedEvent
+		var ckpt uint64
 		var recvFail error
 		live := false
 		done := false
@@ -260,7 +257,7 @@ func recvBatches(
 			case r.CaughtUp != nil:
 				live = true
 			case r.EventAppeared != nil:
-				recvd = append(recvd, r.EventAppeared.Event.Data)
+				recvd = append(recvd, *r.EventAppeared.Event)
 				ckpt = r.EventAppeared.Event.Position.Commit
 			default:
 				panic("unexpected recv() result")
@@ -300,8 +297,8 @@ func recvBatches(
 
 		// gather up batches on this thread and yield them
 		for {
-			var recvd2 [][]byte
-			var ckpt2 Checkpoint
+			var recvd2 []kurrentdb.RecordedEvent
+			var ckpt2 uint64
 			func() {
 				mutex.Lock()
 				defer mutex.Unlock()
@@ -328,13 +325,18 @@ func recvBatches(
 
 			// build a batch of goja values from raw recvd bytes
 			batch := make([]goja.Value, len(recvd2))
-			for i := range len(recvd2) {
-				ev, err := model.JSONToGoja(vm, recvd2[i])
+			for i, r := range recvd2 {
+				ev, err := model.JSONToGoja(vm, r.Data)
 				if err != nil {
 					yield(Batch{}, fmt.Errorf("json error: %w", err))
 					return
 				}
-				batch[i] = ev
+				// wrap the event data in some metadata
+				obj := vm.NewObject()
+				obj.Set("position", r.Position.Commit)
+				obj.Set("id", r.EventID.String())
+				obj.Set("data", ev)
+				batch[i] = obj
 			}
 
 			if !yield(Batch{batch, ckpt2}, nil) { return }
@@ -346,7 +348,7 @@ func publishDecisions(
 	ctx context.Context,
 	client *kurrentdb.Client,
 	deciderEvents []model.DeciderEvents,
-	checkpoint Checkpoint,
+	checkpoint uint64,
 	revision *kurrentdb.StreamRevision,
 ) (*kurrentdb.StreamRevision, error) {
 	if len(deciderEvents) == 0 {
@@ -459,7 +461,7 @@ func run(ctx context.Context) error {
 		}
 
 		// push a batch into the framework
-		err = fw.RecvEvents(batch.Events, batch.Checkpoint)
+		err = fw.RecvEvents(batch.Events)
 		if err != nil {
 			return err
 		}

@@ -248,7 +248,7 @@ def generate_checkers(d, annos, checkers, t):
                 d = Denter()
                 d.print(
                     f"if not isinstance({val}, (list, tuple)):\n"
-                    f"    problems += [{path} + f': is a {{type({val}).__name}}, not json array']\n"
+                    f"    problems += [{path} + f': is a {{type({val}).__name__}}, not json array']\n"
                 )
                 if checkers[t.item_type] == noop_checker:
                     return d.getvalue()
@@ -281,7 +281,7 @@ def generate_checkers(d, annos, checkers, t):
             d.print(f"\ndef {func}(val: Any, path: str = '<root>') -> List[str]:\n")
             d.indent("    ")
             d.print("if not isinstance(val, dict):\n")
-            d.print("    return [path + f': is a {type(val).__name}, not json object']\n")
+            d.print("    return [path + f': is a {type(val).__name__}, not json object']\n")
             d.print("problems = []\n")
             # check every field
             for fn, ft in t.fields.items():
@@ -310,7 +310,7 @@ def generate_checkers(d, annos, checkers, t):
                 d = Denter()
                 d.print(
                     f"if not isinstance({val}, dict):\n"
-                    f"    problems += [{path} + f': is a {{type({val}).__name}}, not json object']\n"
+                    f"    problems += [{path} + f': is a {{type({val}).__name__}}, not json object']\n"
                 )
                 if checkers[t.value_type] == noop_checker:
                     return d.getvalue()
@@ -381,55 +381,51 @@ def framework_name(name):
 
 def generate_framework(d, annos, f):
     """
-    class DeciderFramework[P](Framework[
+    class DeciderFramework(Framework[
         DeciderStoreQueryContext,  # QX: a python object, enabling python queries
-        _quickjs.Value,  # RX: a javascript object, because reducers come from javascript
         LibraryEvents,  # E: events from the server
         LibraryEvents,  # C: commands to the server
-        P,  # P: checkpoint type, configured by user
     ]):
         def __init__(
             self,
             bundle: str,
-            storage: Callable[[bool], Txn] | str,
+            storage: Callable[[bool], Txn] | None,
+            migrate: str | None,
+            reducer: str,
         ) -> None:
             super().__init__(
-                bundle,
+                bundle=bundle,
+                framework_cls="DeciderFramework",
                 storage=storage,
-                decoder="DecodeLibraryEvents",
-                rx="DeciderStoreReducerContext",
                 qx=DeciderStoreQueryContext(),
-                reducer="deciderReducer",
+                migrate=migrate,
+                reducer=reducer,
             )
     """
     QX = f"{context_name(f.store.name)}QueryContext"
-    RX = f"{context_name(f.store.name)}ReducerContext"
     E = annos[f.event_type]
     C = annos[f.event_type]
     d.print("\n")
     d.print("\n")
-    d.print(f"class {framework_name(f.name)}[P](Framework[\n")
+    d.print(f"class {framework_name(f.name)}(Framework[\n")
     d.print(f"    {QX},  # python query context, enabling python queries\n")
-    d.print(f"    _quickjs.Value,  # reducer context assumes we're using javascript reducer\n")
     d.print(f"    {E},  # event type from server\n")
     d.print(f"    {C},  # command type to server\n")
-    d.print(f"    P,  # checkpoint type, configured by user\n")
     d.print(f"]):\n")
     d.print(f"    def __init__(\n")
     d.print(f"        self,\n")
     d.print(f"        bundle: str,\n")
-    d.print(f"        storage: Callable[[bool], Txn] | str,\n")
+    d.print(f"        storage: Callable[[bool], Txn] | None,\n")
     d.print(f"        migrate: str | None,\n")
     d.print(f"        reducer: str,\n")
     d.print(f"    ):\n")
     d.print(f"        super().__init__(\n")
-    d.print(f"            bundle,\n")
+    d.print(f"            bundle=bundle,\n")
+    d.print(f"            framework_cls='{framework_name(f.name)}',\n")
     d.print(f"            storage=storage,\n")
+    d.print(f"            qx={QX}(),\n")
     d.print(f"            migrate=migrate,\n")
     d.print(f"            reducer=reducer,\n")
-    d.print(f"            decoder='Decode{f.event_type.name}',\n")
-    d.print(f"            rx='{RX}',\n")
-    d.print(f"            qx={QX}(),\n")
     d.print(f"        )\n")
 
 

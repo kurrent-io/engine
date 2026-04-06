@@ -1,5 +1,16 @@
 // utils //////////////////////////////////////////////////////////////////////
 
+// json_typeof returns the json type of a value that came out of parsing json
+// (so 'undefined' is not handled, since it isn't allowed in json)
+export function json_typeof(val: any): string {
+  const t = typeof(val);
+  if (t === "object") {
+    if (val === null) return "null";
+    if (Array.isArray(val)) return "array";
+  }
+  return t;
+}
+
 export function setdefault<T>(obj: Record<string, T>, key: string, dfault: T): T {
   if (key in obj) {
     return obj[key];
@@ -7,6 +18,81 @@ export function setdefault<T>(obj: Record<string, T>, key: string, dfault: T): T
     obj[key] = dfault;
     return dfault;
   }
+}
+
+const NIBBLE = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
+
+// generateUuid is either injected into the environment or we expect to use crypto.getRandomValues()
+if (!(globalThis as any).generateUuid) {
+  var generateUuid = function(): string {
+    let out = '';
+
+    // Get 128 bits of randomness.
+    const values = new Uint8Array(16);
+    crypto.getRandomValues(values);
+
+    // rfc4122 compliance: type 4 uuid
+    values[6] = 0x40 | (values[6] & 0x0f);
+    values[8] = 0x80 | (values[8] & 0x3f);
+
+    values.forEach((x) => {
+      out += NIBBLE[x >>> 4] + NIBBLE[x & 0x0f];
+    });
+
+    return [
+      out.substring(0, 8),
+      out.substring(8, 12),
+      out.substring(12, 16),
+      out.substring(16, 20),
+      out.substring(20, 32),
+    ].join('-');
+  }
+}
+
+// protoJSONReplacer is a JSON.stringify() replacer; it is more efficient than EncodeProto because
+// JSON.stringify() doesn't have to recreate the whole tree of an object like EncodeProto does.
+// But EncodeProto is more like an inverse operation of the Decode* family of functions.
+export function protoJSONReplacer(_k: string, v: any): any {
+  if (v instanceof Map) return [...v.entries()];
+  if (v instanceof Set) return [...v.keys()];
+  // all other types naturally stringify correctly, e.g. Date
+  return v;
+}
+
+// protoStringify is like JSON.stringify(), but it handles Map and Set
+export function protoStringify(obj: any): any {
+  return JSON.stringify(obj, protoJSONReplacer);
+}
+
+export function EncodeProto(base: any): any {
+  switch (typeof base) {
+    case "boolean":
+    case "bigint":
+    case "number":
+    case "string":
+    case "undefined":
+      // these types are already immutable
+      return base;
+
+    case "object":
+      // null handled here
+      if (base === null) return base;
+      // general objects handled below
+      break;
+
+    case "symbol":
+    case "function":
+    default:
+      throw new Error(`base of type "${typeof base}" not handled by EncodeProto`);
+  }
+
+  // check if object has toJSON()
+  if (base.toJSON) return base.toJSON();
+
+  if (Array.isArray(base)) return base.map(EncodeProto);
+  if (base instanceof Map) return [...base.entries()].map(EncodeProto);
+  if (base instanceof Set) return [...base.keys()];  // object keys not supported
+  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, EncodeProto(v)]));
 }
 
 const copySym = Symbol();
@@ -30,7 +116,7 @@ export function deepCopy<T>(base: T): T {
     case "symbol":
     case "function":
     default:
-      throw new Error(`base of type "${typeof base}" not handled by readOnly`);
+      throw new Error(`base of type "${typeof base}" not handled by deepCopy`);
   }
 
   // handle read-only and proxy objects in an efficient way
@@ -347,7 +433,7 @@ export function copyOnWrite<T>(base: T, parent?: () => void): T {
     case "symbol":
     case "function":
     default:
-      throw new Error(`base of type "${typeof base}" not handled by readOnly`);
+      throw new Error(`base of type "${typeof base}" not handled by copyOnWrite`);
   }
 
   // object handling
@@ -383,7 +469,7 @@ export function recover<T>(base: T): T {
     case "symbol":
     case "function":
     default:
-      throw new Error(`base of type "${typeof base}" not handled by readOnly`);
+      throw new Error(`base of type "${typeof base}" not handled by recover`);
   }
 
   // check if object was returned by copyOnWrite; recover its inner value
@@ -2155,19 +2241,35 @@ export class QueryGraph<QX> {
 
 // frameworks /////////////////////////////////////////////////////////////////
 
-// check"p"oint
+// Event wraps a proto type T with a client id.  An Event may have originated from KurrentDB, or
+// it may have been emitted by a forecaster, or it may be a command we are about to send.
+export type Event<T> = {
+  id: string,
+  data: T,
+};
+
+// RealEvent extends Event with stream position data that originates from KurrentDB.
+export type RealEvent<T> = Event<T> & {
+  position: number,
+};
+
+export function DecodeRealEvent<T>(val: any, subdecoder: (val: any) => T): RealEvent<T> {
+  return { ...val, data: subdecoder(val.data) } as RealEvent<T>;
+}
+
 // "R"educerConte"x"t
 // "Q"ueryConte"x"t
 // "E"vents
 // "C"ommands
-export class Framework<QX, RX, E, C, P> {
+export class Framework<QX, RX, E, C> {
   #rx: RX;
   #storage: Storage;
+  #decodeEvent: (raw: any) => E;
   #migrate: null | ((rx: RX) => Reducer<void>);
   #reducer: (rx: RX, events: E[]) => Reducer<void>;
-  #forecaster: null | ((commands: C[]) => E[]);
-  #forecastKey: null | ((event: E) => string);
-  #onCommands: null | ((commands: C[], onSent: ()=> void) => void);
+  #forecaster: null | ((commands: C) => E[]);
+  #decodeCommand: null | ((raw: any) => C);
+  #onCommands: null | ((commands: Event<any>[]) => void);
 
   #live: boolean = false;
   #setLive: boolean = false;
@@ -2177,15 +2279,18 @@ export class Framework<QX, RX, E, C, P> {
   #fx: FutureContext;
 
   #scheduled: boolean = false;
-  #commandId: number = 0;
 
   // #reconnects is a list of promise resolve functions
-  #reconnects: ((value: {checkpoint: P | undefined, commands: C[]}) => void)[] = [];
-  #recvdEvents: E[] = [];
-  #checkpoint: P | undefined = undefined;
-  #recvdCommands: C[] = [];
-  #sentCommands: string[] = [];
-  #forecasts: Map<string, E> = new Map();
+  #reconnects: (
+    (value: {checkpoint: number | undefined, commands: Event<any>[]}) => void
+  )[] = [];
+  #recvdEvents: RealEvent<E>[] = [];
+  // commands that came to us from the client
+  #sendCommands: C[] = [];
+  // command ids the user explicitly marks as completed
+  #roundTripped: string[] = [];
+  // ordered map of command ids to the forecasted events from that command
+  #forecasts: Map<string, E[]> = new Map();
   // just a flag if new queries exist to be run; we don't store them here for typing purposes.
   #newQueries: boolean = false;
   #simulates: (() => Reducer<void>)[] = [];
@@ -2193,32 +2298,31 @@ export class Framework<QX, RX, E, C, P> {
   constructor(
     qx: QX,
     rx: RX,
-    storage: Storage,
+    // if storage is null, InMemStorage is used
+    storage: Storage | null,
     callbacks: {
+      // required: convert from json format to full type
+      decodeEvent: (raw: any) => E,
+      // required if using sendCommands: convert from storage/wire format
+      decodeCommand: (raw: any) => C,
       // optional: configure storage before any events arrive
       migrate?: (rx: RX) => Reducer<void>,
       // required: reduce a batch of events into the read model
       reducer: (rx: RX, events: E[]) => Reducer<void>,
-      // optional: forecast the events a server will send for a command
-      forecaster?: (commands: C[]) => E[],
-      // required if using forecaster: create a unique forecast key for an event; used to create a
-      // map of forecast events and to invalidate the forecasted event when the real event arrives
-      forecastKey?: (event: E) => string,
-      // required if using sendCommands: receive events to send on the wire and a callback to signal
-      // when that succeeded
-      onCommands?: (commands: C[], onSent: ()=> void)=> void,
+      // optional: forecast the events a server will send for a batch of commands
+      forecaster?: (commands: C) => E[],
+      // required if using sendCommands: receive events to send on the wire
+      onCommands?: (commands: any[])=> void,
     },
   ) {
     this.#rx = rx;
-    this.#storage = storage;
+    this.#storage = storage ?? new InMemStorage();
+    this.#decodeEvent = callbacks.decodeEvent;
+    this.#decodeCommand = callbacks.decodeCommand ?? null;
     this.#migrate = callbacks.migrate ?? null;
     this.#reducer = callbacks.reducer;
     this.#forecaster = callbacks.forecaster ?? null;
-    this.#forecastKey = callbacks.forecastKey ?? null;
     this.#onCommands = callbacks.onCommands ?? null;
-    if (this.#forecaster && !this.#forecastKey) {
-      throw new Error("forecastKey is required if forecast is set");
-    }
 
     this.#overlay = new OverlayStorage(this.#storage);
     this.#graph = new QueryGraph(qx);
@@ -2232,15 +2336,19 @@ export class Framework<QX, RX, E, C, P> {
   //// public api ////
 
   // request info needed to resume a connection: last committed checkpoint and unsent commands
-  reconnect(cb: (result: {checkpoint: P | undefined, commands: C[]}) => void): void {
+  reconnect(
+    cb: (result: {checkpoint: number | undefined, commands: Event<any>[]}) => void,
+  ): void {
     this.#reconnects.push(cb);
     this.#schedule();
   }
 
   // new events from the wire come here
-  recvEvents(events: E[], checkpoint: P): void {
-    this.#recvdEvents.push.apply(this.#recvdEvents, events);
-    this.#checkpoint = checkpoint;
+  recvEvents(raw: RealEvent<any>[]): void {
+    for (const r of raw) {
+      const event = DecodeRealEvent(r, this.#decodeEvent);
+      this.#recvdEvents.push(event);
+    }
     this.#schedule();
   }
 
@@ -2256,10 +2364,21 @@ export class Framework<QX, RX, E, C, P> {
 
   // after forecasting and saving to storage, these will appear in an onCommands() callback
   sendCommands(commands: C[]): void {
-    if (!this.#onCommands) {
-      throw new Error("sendCommands() used but onCommands callback was not set");
+    if (!this.#onCommands || !this.#decodeCommand) {
+      throw new Error(
+        "if sendCommands() is used, the following callbacks must be defined: "
+        + "onCommands and decodeCommand"
+      );
     }
-    this.#recvdCommands.push.apply(commands);
+    this.#sendCommands.push.apply(this.#sendCommands, commands);
+    this.#schedule();
+  }
+
+  // normally forecasted events are discarded when the event id that was submitted is observed in
+  // recvEvents().  But if the command was rejected, then it may be necessary to explicitly flag the
+  // command as rejected, so the forecasted events from that rejected command can be discarded.
+  roundTripped(...id: string[]): void {
+    this.#roundTripped.push(...id);
     this.#schedule();
   }
 
@@ -2271,10 +2390,19 @@ export class Framework<QX, RX, E, C, P> {
     });
   }
 
-  simulate<T>(fn: (rx: RX) => Reducer<T>, cb: (result: T) => void): void {
+  simulate<T>(
+    fn: (rx: RX, decodedEvents: E[]) => Reducer<T>,
+    cb: (result: T) => void,
+    undecodedEvents?: Event<any>[],
+  ): void {
     const self = this;
     this.#simulates.push(function*() {
-      cb(yield* fn(self.#rx));
+      // unwrap and decode events
+      const decoded = (undecodedEvents ?? []).map((u) => self.#decodeEvent(u.data));
+      // run provided function
+      const result = yield* fn(self.#rx, decoded);
+      // send result
+      cb(result);
     });
     this.#schedule();
   }
@@ -2304,31 +2432,27 @@ export class Framework<QX, RX, E, C, P> {
     // reload forecasted state
     if (!this.#forecaster) return;
 
-    // load unset commands from storage, along with the highest-yet command id
-    const commands: C[] = [];
-    this.#commandId = yield* withRTxn(this.#fx, this.#storage, function*() {
-      const index = (yield* txnGet(".commands")) as Record<string, true> ?? {};
-      let maxId = 0;
-      for (const idstr of Object.keys(index)) {
-        const id = Number(idstr);
-        if(id > maxId) maxId = id;
-        // TODO: convert from json for typed return value
-        const batch = yield* txnGet(`.command-${idstr}`)
-        commands.push.apply(batch);
+    // load unsent commands from storage
+    const commands: Event<any>[] = [];
+    yield* withRTxn(this.#fx, this.#storage, function*() {
+      const index = (yield* txnGet(".commands")) as string[] ?? [];
+      for (const id of index) {
+        const command = (yield* txnGet(`.command-${id}`)) as Event<any>;
+        commands.push(command);
       }
-      return maxId;
     });
     if (commands.length === 0) return;
 
     // forecast events
-    const forecasts = this.#forecaster(commands);
-    if (forecasts.length === 0) return;
-
-    // remember these forecasts for later
-    for (const forecast of forecasts) {
-      const key = this.#forecastKey!(forecast);
-      this.#forecasts.set(key, forecast);
+    const forecasts: E[] = [];
+    for (const command of commands) {
+      // note that since storage may be in-memory, we must take care to preserve command.data
+      const c = copyOnWrite(this.#decodeCommand!(command.data));
+      const fs = recover(this.#forecaster(c));
+      this.#forecasts.set(command.id, fs);
+      forecasts.push(...fs);
     }
+    if (forecasts.length === 0) return;
 
     // populate the initial overlay
     yield* withWTxn(this.#fx, this.#overlay, function*() {
@@ -2371,20 +2495,20 @@ export class Framework<QX, RX, E, C, P> {
         continue;
       }
 
+      if (this.#roundTripped.length > 0) {
+        yield* this.#onRoundTripped();
+        continue
+      }
+
       if (!this.#live && this.#setLive) {
-        // we caught up, and processed all recvdEvents(); time to restart the query graphs
+        // we caught up and processed all recvdEvents(); time to restart the query graphs
         this.#live = true;
         yield* this.#rebuildOverlay();
         continue;
       }
 
-      if (this.#recvdCommands.length > 0) {
+      if (this.#sendCommands.length > 0) {
         yield* this.#onSendCommands();
-        continue;
-      }
-
-      if (this.#sentCommands.length > 0) {
-        yield* this.#onSentCommands();
         continue;
       }
 
@@ -2412,27 +2536,31 @@ export class Framework<QX, RX, E, C, P> {
     const self = this;
     // take events and latest checkpoint
     const events = this.#recvdEvents;
-    const checkpoint = this.#checkpoint as P;
+    const checkpoint = events.at(-1)!.position;
     this.#recvdEvents = [];
-    this.#checkpoint = undefined;
 
     // open a write txn to real storage
-    // IDEA: what if we wrote a txn wrapper that could automatically allow high-value gets/sets to
-    // happen in between the normal gets/sets?
     const updates = yield* withWTxn(this.#fx, this.#storage, function*(){
       // update our checkpoint when this txn finishes
       yield* txnSet(".checkpoint", checkpoint);
 
       // run the reducer with our new events
-      return yield* runReducer(self.#reducer(self.#rx, events));
+      const eventsData = events.map((event) => event.data);
+      const updates = yield* runReducer(self.#reducer(self.#rx, eventsData));
+
+      // discard commands that we see have round-tripped.  It has to be in this txn, since we save
+      // a checkpoint here and we won't see these events again.
+      yield* self.#discardRoundTripped();
+
+      return updates;
     })
     this.#graph.dirty(updates);
+    self.#roundTripped = [];
 
-    // discard now-irrelevant forecasts
+    // discard sent commands which have now round-tripped
     if (this.#forecasts.size > 0) {
       for (const event of events) {
-        const key = this.#forecastKey!(event);
-        this.#forecasts.delete(key);
+        this.#forecasts.delete(event.id);
       }
     }
 
@@ -2448,10 +2576,11 @@ export class Framework<QX, RX, E, C, P> {
     this.#graph.dirty(this.#overlay.keys());
     this.#overlay = new OverlayStorage(this.#storage);
 
-    // rebuild overlay using all forecasts
-    if (this.#forecasts.size > 0) {
+    // rebuild overlay with current forecasts
+    const forecasts = [...this.#forecasts.values()].flat();
+    if (forecasts.length > 0) {
       const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
-        return yield* runReducer(self.#reducer(self.#rx, [...self.#forecasts.values()]));
+        return yield* runReducer(self.#reducer(self.#rx, forecasts));
       });
       self.#graph.dirty(updates);
     }
@@ -2466,72 +2595,88 @@ export class Framework<QX, RX, E, C, P> {
 
   *#onSendCommands(): Generator<void, void, void> {
     const self = this;
-    const commands = this.#recvdCommands;
-    this.#recvdCommands = [];
+    // generate a uuid now for each event
+    const commands: Event<C>[] = this.#sendCommands.map((c) => ({ id: generateUuid(), data: c }));
+    this.#sendCommands = [];
 
-    const id = `${++this.#commandId}`;
+    // encode once for both storage and sending over the wire
+    const encoded: Event<any>[] = commands.map((c) => ({ id: c.id, data: EncodeProto(c.data) }));
 
     // open a write txn to real storage
     yield* withWTxn(this.#fx, this.#storage, function*(){
-      // save a batch of commands
-      // TODO: convert to json for untyped access
-      yield* txnSet(`.command-${id}`, commands);
-      // extend the index of batches
-      const index = (yield* txnGet(".commands")) as Record<string, true> ?? {};
-      yield* txnSet(".commands", {...index, [id]: true});
-    });
-
-    // define a hook to trigger cleanup when those commands are actually sent
-    const onSent = () => {
-      this.#sentCommands.push(id);
-      this.#schedule();
-    };
-
-    // now forecast events based on those commands
-    if (this.#forecaster) {
-      const forecasts = this.#forecaster(commands);
-      if (forecasts.length > 0) {
-        // remember these forecasts for later
-        for (const forecast of forecasts) {
-          const key = this.#forecastKey!(forecast);
-          this.#forecasts.set(key, forecast);
-        }
-
-        if (this.#live) {
-          // open a write txn against the existing overlay
-          const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
-            return yield* runReducer(self.#reducer(self.#rx, forecasts));
-          });
-          this.#graph.dirty(updates);
-
-          const cbs = yield* withRTxn(this.#fx, this.#overlay, function*(){
-            // this will run all queries, even new ones
-            self.#newQueries = false;
-            return yield* self.#graph.run();
-          });
-          cbs();
-        }
-      }
-    }
-
-    // schedule a callback for the user to know it is time to send the commands
-    setTimeout(() => this.#onCommands!(commands, onSent));
-  }
-
-  *#onSentCommands(): Generator<void, void, void> {
-    const self = this;
-    yield* withWTxn(this.#fx, this.#storage, function*(){
-      // load the index of batches of commands
-      const index = (yield* txnGet(".commands")) as Record<string, true> ?? {};
-      // delete any batches we know to be sent
-      let id;
-      while ((id = self.#sentCommands.shift())) {
-        yield* txnDel(`.command-${id}`);
-        delete index[id];
+      const added = [];
+      // write each command to storage
+      for (const ec of encoded) {
+        yield* txnSet(`.command-${ec.id}`, ec);
+        added.push(ec.id);
       }
       // update the index
-      yield* txnSet(".commands", index);
+      const index = (yield* txnGet(".commands")) as string[] ?? [];
+      yield* txnSet(".commands", [...index, ...added]);
     });
+
+    // schedule a callback for the user to know it is time to send these commands
+    setTimeout(() => this.#onCommands!(commands));
+
+    // now forecast events based on those commands
+    if (!this.#forecaster) return;
+
+    const forecasts: E[] = [];
+    for (const command of commands) {
+      const c = copyOnWrite(command.data);
+      const fs = recover(this.#forecaster(c));
+      this.#forecasts.set(command.id, fs);
+      forecasts.push(...fs);
+    }
+
+    if (forecasts.length === 0 || !this.#live) return;
+
+    // open a write txn against the existing overlay
+    const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
+      return yield* runReducer(self.#reducer(self.#rx, forecasts));
+    });
+    this.#graph.dirty(updates);
+
+    const cbs = yield* withRTxn(this.#fx, this.#overlay, function*(){
+      // this will run all queries, even new ones
+      self.#newQueries = false;
+      return yield* self.#graph.run();
+    });
+    cbs();
+  }
+
+  // discard this.#roundTripped within some externally-provided WTxn
+  // (you'll have to erase this.#roundTripped after the txn commits)
+  // return true if something was deleted (but it always processes this.#roundTripped)
+  *#discardRoundTripped(): WStorageGenerator<boolean> {
+    if (this.#roundTripped.length === 0) return false;
+    const roundTripped: Record<string, true> = {};
+    for (const id of this.#roundTripped) {
+      roundTripped[id] = true;
+    }
+    // load the index of batches of commands
+    const index = (yield* txnGet(".commands")) as string[] ?? [];
+    // decide what to delete
+    const toDelete = index.filter((id) => roundTripped[id]);
+    if (toDelete.length === 0) return false;
+    for (const id of toDelete) {
+      yield *txnDel(`.command-${id}`);
+    }
+    // update the index
+    const toKeep = index.filter((id) => !roundTripped[id]);
+    yield* txnSet(".commands", toKeep);
+    return true;
+  }
+
+  *#onRoundTripped(): Generator<void, void, void> {
+    const self = this;
+    const changed = yield* withWTxn(this.#fx, this.#storage, function*(){
+      return yield* self.#discardRoundTripped();
+    });
+    this.#roundTripped = [];
+    if (changed && this.#live) {
+      yield* this.#rebuildOverlay()
+    }
   }
 
   *#onNewQueries(): Generator<void, void, void> {
@@ -2545,18 +2690,17 @@ export class Framework<QX, RX, E, C, P> {
 
   *#onReconnects(): Generator<void, void, void> {
     const {checkpoint, commands} = yield* withRTxn(this.#fx, this.#storage, function*(){
-      const checkpoint = (yield* txnGet(".checkpoint")) as (P | undefined);
-      const commands: C[] = [];
-      const index = (yield* txnGet(".commands")) as Record<string, true> ?? {};
-      for (const id of Object.keys(index)) {
-        // TODO: convert from json for typed return value
-        const batch = yield* txnGet(`.command-${id}`)
-        commands.push.apply(batch);
+      const checkpoint = (yield* txnGet(".checkpoint")) as (number | undefined);
+      const commands: Event<any>[] = [];
+      const index = (yield* txnGet(".commands")) as string[] ?? [];
+      for (const id of index) {
+        const command = (yield* txnGet(`.command-${id}`)) as Event<any>;
+        commands.push(command);
       }
       return {checkpoint, commands};
     });
     for (const resolve of this.#reconnects) {
-      resolve({checkpoint, commands});
+      resolve({ checkpoint, commands });
     }
     this.#reconnects = [];
   }

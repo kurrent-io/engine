@@ -295,7 +295,6 @@ class Tuple(Resolvable):
     def resolve(self):
         return ConcreteTuple(*(t.resolve() for t in self.item_types))
 
-
 class ConcreteTuple(Concrete):
     json_type = "array"
 
@@ -412,8 +411,8 @@ def solve_union(types):
             out[jt] = Match(matches[0])
         elif jt in ["string", "boolean", "integer"]:
             # union of multiple literals
-            # TODO: where is the check between a Literal string and plain String?
-            #       That case should be rejected as unsafe to distinguish.
+            if not all(isinstance(t, Literal) for t in types):
+                raise ValueError(f"unable to solve union between {types}")
             out[jt] = solve_union_literals(matches)
         elif jt == "object":
             # union of multiple structs
@@ -437,8 +436,7 @@ def solve_union(types):
 def solve_union_literals(types):
     out = {}
     for t in types:
-        if not isintance(t, Literal):
-            raise ValueError(f"unable to solve union between {types}")
+        assert isinstance(t, Literal)
         out[t.value] = Match(t)
     return CheckLiteral(out)
 

@@ -260,7 +260,7 @@ def generate_types(d, imports, annos, converters, t):
             name = Pascal(
                 t.name or (t.item_type.name and f"sliceOf{t.item_type.name}") or get_anon()
             )
-            d.print(f"\nfunc new{name}(vm *goja.Runtime, value goja.Value) {anno} {{\n")
+            d.print(f"\nfunc to{name}(vm *goja.Runtime, value goja.Value) {anno} {{\n")
             d.indent("\t")
             d.print("if value == nil || goja.IsUndefined(value) { return nil }\n")
             d.print(f"var out {anno}\n")
@@ -274,7 +274,7 @@ def generate_types(d, imports, annos, converters, t):
             d.print(f"return out\n")
             d.dedent()
             d.print(f"}}\n")
-            converter = lambda var: f"new{name}(vm, {var})"
+            converter = lambda var: f"to{name}(vm, {var})"
         elif isinstance(t, ConcreteObject):
             visit(t.value_type, path)
             anno = f"map[string]{annos[t.value_type]}"
@@ -282,7 +282,7 @@ def generate_types(d, imports, annos, converters, t):
             name = Pascal(
                 t.name or (t.value_type.name and f"recordOf{t.value_type.name}") or get_anon()
             )
-            d.print(f"\nfunc new{name}(vm *goja.Runtime, value goja.Value) {anno} {{\n")
+            d.print(f"\nfunc to{name}(vm *goja.Runtime, value goja.Value) {anno} {{\n")
             d.indent("\t")
             d.print("if value == nil || goja.IsUndefined(value) { return nil }\n")
             d.print(f"obj := value.(*goja.Object)\n")
@@ -297,7 +297,7 @@ def generate_types(d, imports, annos, converters, t):
             d.print(f"return out\n")
             d.dedent()
             d.print(f"}}\n")
-            converter = lambda var: f"new{name}(vm, {var})"
+            converter = lambda var: f"to{name}(vm, {var})"
         elif isinstance(t, ConcreteUnion):
             for i, ut in enumerate(t.types):
                 visit(ut, path + str(i))
@@ -891,7 +891,7 @@ def generate_store(d, annos, converters, store):
     d.print(f'}}\n')
 
     # define a New function
-    d.print(f'\nfunc New{iface}(vm *goja.Runtime, ask Ask) *{impl} {{\n')
+    d.print(f'\nfunc New{iface}(vm *goja.Runtime, ask Ask) {iface} {{\n')
     d.indent('\t')
     d.print(f'return &{impl}{{vm, ask}}\n')
     d.dedent()
@@ -927,54 +927,46 @@ def framework_name(name):
 
 def generate_framework(d, annos, f):
     """
-    type MyFramework[P any] = Framework[MyQX, goja.Value, MyE, MyC, P]
+    type MyFramework = Framework[MyQX, MyE, MyC]
 
-    func NewMyFramework[P any](
+    func NewMyFramework(
         source Source,
         storage Storage,
-        decoder Decoder[MyE],
         migrate string,
         reducer string,
-    ) (*MyFramework[P], error) {
-        return NewFramework[MyQX, goja.Value, MyE, MyC, P](
+    ) (*MyFramework, error) {
+        return NewFramework[MyQX, MyE, MyC](
             source,
+            "MyFramework",
             storage,
-            decoder,
-            NewJSReducer[goja.Value, MyE]("MyRX", reducer),
-            NewJSMigrate(migrate),
+            migrate,
+            reducer,
             NewMyQX,
         )
-    }
     """
     name = framework_name(f.name)
     QX = context_name(f.store.name) + 'QueryContext'
-    RX = "goja.Value"
-    rx_name = context_name(f.store.name) + 'ReducerContext'
     E = annos[f.event_type]
     C = annos[f.command_type]
 
-    # type Framework[QX QueryContext, RX any, E any, C any, P any] struct {
-    d.print(f'\ntype {name}[P any] = Framework[{QX}, {RX}, {E}, {C}, P]\n')
-    d.print(f'\nfunc New{name}[P any](\n')
+    d.print(f'\ntype {name} = Framework[{QX}, {E}, {C}]\n')
+    d.print(f'\nfunc New{name}(\n')
     d.indent('\t')
     d.print(f'script string,\n')
     d.print(f'storage Storage,\n')
-    d.print(f'decoder string,\n')
     d.print(f'migrate string,\n')
     d.print(f'reducer string,\n')
     d.dedent()
-    d.print(f') (*{name}[P], error) {{\n')
+    d.print(f') (*{name}, error) {{\n')
     d.indent('\t')
-    d.print(f'return NewFramework[{QX}, {RX}, {E}, {C}, P](\n')
+    d.print(f'return NewFramework[{QX}, {E}, {C}](\n')
     d.indent('\t')
     d.print(f'NewStringSource("bundle.js", script),\n')
+    d.print(f'"{name}",\n')
     d.print(f'storage,\n')
-    d.print(f'NewJSDecoder[{E}](decoder),\n')
-    d.print(f'NewJSMigrate[{RX}](migrate),\n')
-    d.print(f'NewJSReducer[{RX}, {E}]("{rx_name}", reducer),\n')
-    d.print(f'func(vm *goja.Runtime, ask Ask) {QX} {{\n')
-    d.print(f'\treturn New{QX}(vm, ask)\n')
-    d.print(f'}},\n')
+    d.print(f'migrate,\n')
+    d.print(f'reducer,\n')
+    d.print(f'New{QX},\n')
     d.dedent()
     d.print(f')\n')
     d.dedent()
@@ -988,10 +980,12 @@ def generate(d, concretes, roots, stores, frameworks, args):
 
     # we collect imports as we go, accumulating code in a sub-Denter
     imports = {
+        "crypto/rand": None,
         "encoding/json": None,
         "errors": None,
         "fmt": None,
         "iter": None,
+        "os": None,
         "reflect": None,
         "slices": None,
         "strconv": None,
