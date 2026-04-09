@@ -79,12 +79,10 @@ function BookItem({
   book,
   researcher,
   onHold,
-  onHoldRestricted,
 }: {
   book: BookInfo;
   researcher: boolean;
   onHold: (isbn: string) => void;
-  onHoldRestricted: (isbn: string) => void;
 }) {
   return (
     <List.Item>
@@ -101,7 +99,7 @@ function BookItem({
           <Button
             size="small"
             disabled={!researcher || book.availableRestricted <= 0}
-            onClick={() => onHoldRestricted(book.isbn)}
+            onClick={() => onHold(book.isbn)}
           >
             Hold Restricted
           </Button>
@@ -115,15 +113,13 @@ function Books({
   fw,
   researcher,
   onHold,
-  onHoldRestricted,
 }: {
   fw: UserFramework;
   researcher: boolean;
   onHold: (isbn: string) => void;
-  onHoldRestricted: (isbn: string) => void;
 }) {
   const booksLookup = useCallback(function*(qx: UserQX): QueryGenerator<BookInfo[]> {
-    const editions = (yield* qx.get.editions()) ?? {};
+    const editions = yield* qx.get.editions();
     const out: BookInfo[] = [];
     for (const isbn of Object.keys(editions)) {
       const edition = yield* qx.get.edition(isbn);
@@ -156,7 +152,6 @@ function Books({
           book={book}
           researcher={researcher}
           onHold={onHold}
-          onHoldRestricted={onHoldRestricted}
         />
       )}
     />
@@ -180,7 +175,7 @@ export default function PatronWindow({
   const patron = useQuery(fw, patronLookup);
 
   const messagesLookup = useCallback(function*(qx: UserQX): QueryGenerator<string[]> {
-    return (yield* qx.get.messages()) ?? [];
+    return yield* qx.get.messages();
   }, []);
   const messages = useQuery(fw, messagesLookup);
   const [dismissedCount, setDismissedCount] = useState(0);
@@ -197,9 +192,9 @@ export default function PatronWindow({
       title={
         <Flex align="center" gap="small">
           {patron
-            ? <PatronName name={patron.name} onRename={(newName) => {
-                fw.sendCommands([{ type: "rename-patron", id: patronId, name: newName, timestamp: new Date() }]);
-              }} />
+            ? <PatronName name={patron.name} onRename={(newName) => fw.sendCommands([
+                { type: "rename-patron", id: patronId, name: newName, timestamp: new Date() },
+              ])} />
             : <Spin size="small" />
           }
           {patron?.researcher && <Tag color="green">researcher</Tag>}
@@ -221,12 +216,14 @@ export default function PatronWindow({
           <Books
             fw={fw}
             researcher={patron?.researcher ?? false}
-            onHold={(isbn) => {
-              fw.sendCommands([{ type: "try-hold", id: generateUuid(), patron: patronId, target: { edition: isbn }, open: false, timestamp: new Date() }]);
-            }}
-            onHoldRestricted={(isbn) => {
-              fw.sendCommands([{ type: "try-hold", id: generateUuid(), patron: patronId, target: { edition: isbn }, open: patron?.researcher ?? false, timestamp: new Date() }]);
-            }}
+            onHold={(isbn) => fw.sendCommands([{
+              type: "try-hold",
+              id: generateUuid(),
+              patron: patronId,
+              target: { edition: isbn },
+              open: false,
+              timestamp: new Date(),
+            }])}
           />
         </div>
       </Card>

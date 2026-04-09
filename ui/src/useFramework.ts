@@ -73,6 +73,7 @@ export function useFramework(
         };
 
         ws.onmessage = (msg) => {
+          console.log("recv:", msg.data);
           if (msg.data === "caughtup") {
             fw.caughtUp();
           } else {

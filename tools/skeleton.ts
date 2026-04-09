@@ -402,7 +402,7 @@ function readOnlySet<K>(base: Set<K>): Readonly<Set<K>> {
       if (prop === copySym) return () => deepCopy(base);
 
       // just disallow mutations
-      if (prop === "add" || prop === "delete") return throwReadOnlyError;
+      if (prop === "add" || prop === "delete" || prop === "clear") return throwReadOnlyError;
 
       const value = (base as any)[prop];
       if (value instanceof Function) {
@@ -678,7 +678,7 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
   const cowArrayMethods: any = {
     // special
     at: (index: number) => dirty1(index > -1 ? index : base.length + index),
-    push: (...args: any[]) => cache.push(...args),
+    push: (...args: any[]) => (mark(), cache.push(...args)),
 
 
     // things which require dirtyAll(), then run against the full shallow copy
@@ -706,13 +706,14 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
     [Symbol.iterator]: (...args: any) => base[Symbol.iterator].apply(dirtyAll(), args),
 
     // mutators that require a dirtyAll() due to possible index changes
-    pop: (...args: any) => base.pop.apply(dirtyAll(), args),
-    reverse: (...args: any) => base.reverse.apply(dirtyAll(), args),
-    copyWithin: (...args: any) => base.copyWithin.apply(dirtyAll(), args),
-    fill: (...args: any) => base.fill.apply(dirtyAll(), args),
-    sort: (...args: any) => base.sort.apply(dirtyAll(), args),
-    splice: (...args: any) => base.splice.apply(dirtyAll(), args),
-    unshift: (...args: any) => base.unshift.apply(dirtyAll(), args),
+    pop: (...args: any) => (mark(), base.pop.apply(dirtyAll(), args)),
+    reverse: (...args: any) => (mark(), base.reverse.apply(dirtyAll(), args)),
+    copyWithin: (...args: any) => (mark(), base.copyWithin.apply(dirtyAll(), args)),
+    fill: (...args: any) => (mark(), base.fill.apply(dirtyAll(), args)),
+    sort: (...args: any) => (mark(), base.sort.apply(dirtyAll(), args)),
+    splice: (...args: any) => (mark(), base.splice.apply(dirtyAll(), args)),
+    shift: (...args: any) => (mark(), base.shift.apply(dirtyAll(), args)),
+    unshift: (...args: any) => (mark(), base.unshift.apply(dirtyAll(), args)),
 
     // getters which don't HAVE to cowify the whole array, but would need something about as expensive
     toLocaleString: (...args: any) => base.toLocaleString.apply(dirtyAll(), args),
@@ -793,6 +794,7 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
 
     deleteProperty(_, prop: any) {
       if (full) {
+        if (Object.hasOwn(base, prop)) mark();
         delete cache[prop];
         return true;
       }
@@ -981,6 +983,7 @@ function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
     },
 
     // requires dirtyAll
+    keys: (...args: any) => base.keys.apply(dirtyAll(), args),
     entries: (...args: any) => base.entries.apply(dirtyAll(), args),
     forEach: (...args: any) => base.forEach.apply(dirtyAll(), args),
     values: (...args: any) => base.values.apply(dirtyAll(), args),
@@ -988,6 +991,7 @@ function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
 
     // mutators
     delete: (key: K) =>{
+      mark();
       if (full) return cache.delete(key);
       const old = cache.get(key);
       if (old === DELETED) return false; // noop; already marked as deleted
@@ -1003,7 +1007,6 @@ function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
       ndeletions++;
       if (!incache) {
         noverlap++;
-        mark();
       }
       return true;
     },
@@ -1020,6 +1023,7 @@ function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
       old = base.get(key);
       if (old !== undefined || base.has(key)) return old;
       // not in base either; do an insert
+      mark();
       cache.set(key, defaultValue);
       return defaultValue;
     },
@@ -1037,6 +1041,7 @@ function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
       old = base.get(key);
       if (old !== undefined || base.has(key)) return old;
       // not in base either; do an insert
+      mark();
       const value = callback(key);
       cache.set(key, value);
       return value;
@@ -1127,7 +1132,7 @@ function copyOnWriteSet<K>(base: Set<K>, parent?: () => void) {
       if (prop === copySym) return () => deepCopy(cache ?? base);
       if (prop === recoverSym) return () => cache ?? base;
 
-      if (prop === "add" || prop === "delete") {
+      if (prop === "add" || prop === "delete" || prop === "clear") {
         if (cache === undefined) {
           // break the glass
           cache = new Set(base);
@@ -1144,7 +1149,7 @@ function copyOnWriteSet<K>(base: Set<K>, parent?: () => void) {
 
     has(_, prop: any) {
       // we don't support custom own properties or prototypes, so this is sufficient
-      return prop in (cache as any);
+      return prop in (base as any);
     },
 
     ownKeys(_) {
