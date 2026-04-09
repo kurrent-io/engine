@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Button, Card, Flex, Input, List, Switch, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Flex, Input, List, Space, Switch, Spin, Tag, Typography } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 
 import {
@@ -73,11 +73,6 @@ type BookInfo = {
 type PatronInfo = {
   name: string;
   researcher: boolean;
-};
-
-type Account = {
-  holds: string[];
-  checkouts: string[];
 };
 
 function BookItem({
@@ -168,42 +163,6 @@ function Books({
   );
 }
 
-function MyAccount({ fw, patronId }: { fw: UserFramework; patronId: string }) {
-  const myAccountLookup = useCallback(function*(qx: UserQX): QueryGenerator<Account> {
-    const patron = yield* qx.get.patron(patronId);
-    const holds = [];
-    for (const hold_uuid of Object.keys(patron.holds)) {
-      const hold = yield* qx.get.hold(hold_uuid);
-      if ("book" in hold.target) {
-        const book = yield* qx.get.book(hold.target.book);
-        const edition = yield* qx.get.edition(book.isbn);
-        holds.push(edition.title);
-      } else {
-        const edition = yield* qx.get.edition(hold.target.edition);
-        holds.push(edition.title);
-      }
-    }
-    const checkouts = [];
-    for (const checkout_uuid of Object.keys(patron.checkouts)) {
-      const checkout = yield* qx.get.checkout(checkout_uuid);
-      const book = yield* qx.get.book(checkout.book);
-      const edition = yield* qx.get.edition(book.isbn);
-      checkouts.push(edition.title);
-    }
-    return { holds, checkouts };
-  }, [patronId]);
-
-  const account = useQuery(fw, myAccountLookup);
-  if (!account) return <Spin />;
-
-  return (<>
-    <h3>Holds:</h3>
-    <List dataSource={account.holds} renderItem={(item) => <List.Item>{item}</List.Item>} />
-    <h3>Checkouts:</h3>
-    <List dataSource={account.checkouts} renderItem={(item) => <List.Item>{item}</List.Item>} />
-  </>);
-}
-
 export default function PatronWindow({
   patronId,
   relayUrl,
@@ -219,6 +178,13 @@ export default function PatronWindow({
     return { name: patron.name, researcher: patron.researcher };
   }, [patronId]);
   const patron = useQuery(fw, patronLookup);
+
+  const messagesLookup = useCallback(function*(qx: UserQX): QueryGenerator<string[]> {
+    return (yield* qx.get.messages()) ?? [];
+  }, []);
+  const messages = useQuery(fw, messagesLookup);
+  const [dismissedCount, setDismissedCount] = useState(0);
+  const visibleMessages = messages?.slice(dismissedCount) ?? [];
 
   const stateColor = {
     connecting: 'orange',
@@ -250,7 +216,7 @@ export default function PatronWindow({
       }
       style={{ width: '32em' }}
     >
-      <Card type="inner" title="Books" style={{ marginBottom: '1em' }}>
+      <Card type="inner" title="Books">
         <div style={{ maxHeight: '20em', overflowY: 'auto' }}>
           <Books
             fw={fw}
@@ -264,9 +230,18 @@ export default function PatronWindow({
           />
         </div>
       </Card>
-      <Card type="inner" title="My Account">
-        <MyAccount fw={fw} patronId={patronId} />
-      </Card>
+      {visibleMessages.length > 0 && (
+        <div style={{ marginTop: '0.5em' }}>
+          <Space direction="vertical" style={{ width: '100%' }} size="small">
+            {visibleMessages.map((msg, i) => (
+              <Alert key={dismissedCount + i} type="warning" showIcon message={msg} />
+            ))}
+            <Button size="small" onClick={() => setDismissedCount(messages?.length ?? 0)}>
+              Dismiss
+            </Button>
+          </Space>
+        </div>
+      )}
     </Card>
   );
 }
