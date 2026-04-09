@@ -266,8 +266,10 @@ function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
     yield* rx.update.edition(e.target.edition, (edition) => edition.holds[hold.id] = true);
   }
 
-  // TODO: update patron.holds
-  // TODO: update active_holds
+  // update patron.holds
+  yield* rx.update.patron(e.patron, (patron) => patron.holds[e.id] = true);
+  // update active_holds
+  yield* rx.update.active_holds((holds) => holds[e.id] = true);
 
   return "";
 }
@@ -391,7 +393,8 @@ function *reduceTryCheckout(rx: FullStatusRX, e: TryCheckout): Reducer<string> {
   patron.checkouts[checkout.id] = true;
   yield* rx.set.patron(e.patron, patron);
 
-  // TODO: update active_checkouts
+  // update active_checkouts
+  yield* rx.update.active_holds((holds) => delete holds[e.id]);
 
   return "";
 }
@@ -423,6 +426,10 @@ function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold): Reducer<void> {
     id: e.id,
     target: e.target,
   };
+  if (e.patron) {
+    hold.patron = e.patron;
+    yield* rx.update.patron(e.patron, (patron) => patron.holds[e.id] = true);
+  }
   if (e.patron) hold.patron = e.patron;
   yield* rx.set.hold(e.id, hold);
 }

@@ -275,12 +275,18 @@ class Subscriber:
         for event in batch:
             wrapped = wrap(event)
             match event.stream_name.split(".", maxsplit=1):
-                # events not relayed to end users:
-                case ("status",):
-                    pass
-
                 # events with global distribution
                 case ("books",):
+                    for put in (put for w in self.watches.values() for put in w):
+                        put(wrapped)
+
+                # a subset of status events also have global distribution
+                # (these are not re-written by the decider)
+                case ("status",):
+                    j = json.loads(event.data)
+                    typ = j["type"]
+                    if typ not in ("cancel-hold", "expire-hold", "end-checkout"):
+                        continue
                     for put in (put for w in self.watches.values() for put in w):
                         put(wrapped)
 

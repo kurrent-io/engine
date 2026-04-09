@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Alert, Button, Card, Flex, Input, List, Space, Switch, Spin, Tag, Typography } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 
@@ -68,6 +68,7 @@ type BookInfo = {
   title: string;
   availableNormal: number;
   availableRestricted: number;
+  heldHoldId: string | null;
 };
 
 type PatronInfo = {
@@ -79,11 +80,16 @@ function BookItem({
   book,
   researcher,
   onHold,
+  onHoldRestricted,
+  onCancelHold,
 }: {
   book: BookInfo;
   researcher: boolean;
   onHold: (isbn: string) => void;
+  onHoldRestricted: (isbn: string) => void;
+  onCancelHold: (holdId: string) => void;
 }) {
+  const held = !!book.heldHoldId;
   return (
     <List.Item>
       <div style={{ width: '100%' }}>
@@ -91,15 +97,17 @@ function BookItem({
         <Flex gap="small" style={{ marginTop: 4 }}>
           <Button
             size="small"
-            disabled={book.availableNormal <= 0}
-            onClick={() => onHold(book.isbn)}
+            disabled={!held && book.availableNormal <= 0}
+            onClick={() => held ? onCancelHold(book.heldHoldId!) : onHold(book.isbn)}
+            color={held ? "green" : "default"}
+            variant={held ? "solid" : "outlined"}
           >
-            Hold
+            {held ? "Cancel Hold" : "Hold"}
           </Button>
           <Button
             size="small"
-            disabled={!researcher || book.availableRestricted <= 0}
-            onClick={() => onHold(book.isbn)}
+            disabled={held || !researcher || book.availableRestricted <= 0}
+            onClick={() => onHoldRestricted(book.isbn)}
           >
             Hold Restricted
           </Button>
@@ -111,14 +119,32 @@ function BookItem({
 
 function Books({
   fw,
+  patronId,
   researcher,
   onHold,
+  onHoldRestricted,
+  onCancelHold,
 }: {
   fw: UserFramework;
+  patronId: string;
   researcher: boolean;
   onHold: (isbn: string) => void;
+  onHoldRestricted: (isbn: string) => void;
+  onCancelHold: (holdId: string) => void;
 }) {
   const booksLookup = useCallback(function*(qx: UserQX): QueryGenerator<BookInfo[]> {
+    const patron = yield* qx.get.patron(patronId);
+    // build maps of this patron's holds by target
+    const holdsByEdition: Record<string, string> = {};
+    const holdsByBook: Record<string, string> = {};
+    for (const holdId of Object.keys(patron.holds)) {
+      const hold = yield* qx.get.hold(holdId);
+      if ("edition" in hold.target) {
+        holdsByEdition[hold.target.edition] = holdId;
+      } else {
+        holdsByBook[hold.target.book] = holdId;
+      }
+    }
     const editions = yield* qx.get.editions();
     const out: BookInfo[] = [];
     for (const isbn of Object.keys(editions)) {
@@ -136,10 +162,17 @@ function Books({
       }
       // edition-level holds consume normal copies
       availableNormal -= Object.keys(edition.holds).length;
-      out.push({ isbn, title: edition.title, availableNormal, availableRestricted });
+      // check if patron holds this edition or any book in it
+      let heldHoldId: string | null = holdsByEdition[isbn] ?? null;
+      if (!heldHoldId) {
+        for (const bookId of Object.keys(edition.books)) {
+          if (holdsByBook[bookId]) { heldHoldId = holdsByBook[bookId]; break; }
+        }
+      }
+      out.push({ isbn, title: edition.title, availableNormal, availableRestricted, heldHoldId });
     }
     return out;
-  }, []);
+  }, [patronId]);
 
   const books = useQuery(fw, booksLookup);
   if (!books) return <Spin />;
@@ -152,6 +185,8 @@ function Books({
           book={book}
           researcher={researcher}
           onHold={onHold}
+          onHoldRestricted={onHoldRestricted}
+          onCancelHold={onCancelHold}
         />
       )}
     />
@@ -177,9 +212,21 @@ export default function PatronWindow({
   const messagesLookup = useCallback(function*(qx: UserQX): QueryGenerator<string[]> {
     return yield* qx.get.messages();
   }, []);
-  const messages = useQuery(fw, messagesLookup);
+
+  // start out dismissing any messages from an older session
+  const staleMessages = useRef<number | undefined>(undefined);
+  let messages = useQuery(fw, messagesLookup);
+  if (messages === undefined) {
+    messages = [];
+  } else {
+    if (staleMessages.current === undefined) {
+      staleMessages.current = messages.length;
+    }
+    messages = messages.slice(staleMessages.current);
+  }
+  // then dismiss additional messages from this session
   const [dismissedCount, setDismissedCount] = useState(0);
-  const visibleMessages = messages?.slice(dismissedCount) ?? [];
+  const visibleMessages = messages.slice(dismissedCount) ?? [];
 
   const stateColor = {
     connecting: 'orange',
@@ -215,6 +262,7 @@ export default function PatronWindow({
         <div style={{ maxHeight: '20em', overflowY: 'auto' }}>
           <Books
             fw={fw}
+            patronId={patronId}
             researcher={patron?.researcher ?? false}
             onHold={(isbn) => fw.sendCommands([{
               type: "try-hold",
@@ -224,6 +272,17 @@ export default function PatronWindow({
               open: false,
               timestamp: new Date(),
             }])}
+            onHoldRestricted={(isbn) => fw.sendCommands([{
+              type: "try-hold",
+              id: generateUuid(),
+              patron: patronId,
+              target: { edition: isbn },
+              open: false,
+              timestamp: new Date(),
+            }])}
+            onCancelHold={(holdId) => {
+              fw.sendCommands([{ type: "cancel-hold", id: holdId }]);
+            }}
           />
         </div>
       </Card>
