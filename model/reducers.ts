@@ -102,6 +102,7 @@ export function *deciderMigrate(rx: DeciderRX): Reducer<void> {
 export function *userMigrate(rx: UserRX): Reducer<void> {
   yield* migrateBooks(rx);
   yield* migratePatrons(rx);
+  yield* rx.set.messages([]);
 }
 
 export function *relayMigrate(_rx: RelayRX): Reducer<void> {
@@ -426,9 +427,8 @@ function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold): Reducer<void> {
   yield* rx.set.hold(e.id, hold);
 }
 
-function *reduceVHoldRejected(rx: FullVStatusRX, e: VHoldRejected): Reducer<void> {
-  // TODO: handle this
-  console.log(rx, e);
+function *reduceVHoldRejected(rx: UserRX, e: VHoldRejected): Reducer<void> {
+  yield *rx.update.messages((msgs) => msgs.push(e.reason));
 }
 
 function *reduceVEndHold(rx: FullVStatusRX, e: CancelHold|ExpireHold): Reducer<void> {
@@ -608,7 +608,7 @@ function *relayReduceOne(rx: RelayRX, e: LibraryEvents): Reducer<void> {
     // otheriwse, the read model in the relay is mostly concerned with the existence of objects...
     case "add-edition":  yield* rx.set.edition(e.isbn, true); break;
     case "add-book":     yield* rx.set.book(e.id, true);      break;
-    case "add-patron":   yield* rx.set.patron(e.id, true);    break;
+    case "add-patron":   yield* rx.set.patron(e.id, true);    console.log("############ added patron", e.id); break;
     case "try-checkout": yield* rx.set.checkout(e.id, true);  break;
 
     // ...but for holds, we'll need to know which user it belongs to, so we can validate if a
@@ -665,7 +665,7 @@ function *validatePatronOne(
 
     case "try-hold":
       if (e.patron !== patron) return "unauthorized hold for of other patron";
-      if (!(yield* rx.get.patron(e.id))) return "no such patron";
+      if (!(yield* rx.get.patron(e.patron))) return "no such patron";
       if ("book" in e.target) {
         if (!(yield* rx.get.book(e.target.book))) return "no such book";
       } else {
@@ -726,7 +726,7 @@ function *validateAdminOne(
       return "";
 
     case "try-hold":
-      if (!(yield* rx.get.patron(e.id))) return "no such patron";
+      if (!(yield* rx.get.patron(e.patron))) return "no such patron";
       if ("book" in e.target) {
         if (!(yield* rx.get.book(e.target.book))) return "no such book";
       } else {
@@ -778,7 +778,7 @@ export function *validateAdminCommands(
 // events shall be raw json (still needs decoding)
 // returns [newUuids[], error]
 export function *validatePatronCommands(
-  rx: RelayRX, patron: string, events: unknown[],
+  rx: RelayRX, events: unknown[], patron: string,
 ): Reducer<[string[], string]> {
   const newUuids: string[] = [];
   for (const e of events) {

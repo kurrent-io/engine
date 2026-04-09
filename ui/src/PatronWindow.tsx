@@ -9,6 +9,7 @@ import {
 } from './model';
 import { useQuery } from './useQuery';
 import { useFramework } from './useFramework';
+import { generateUuid } from './util';
 
 const { Text } = Typography;
 
@@ -230,7 +231,9 @@ export default function PatronWindow({
       title={
         <Flex align="center" gap="small">
           {patron
-            ? <PatronName name={patron.name} onRename={(_newName) => { /* TODO: wire sendCommands */ }} />
+            ? <PatronName name={patron.name} onRename={(newName) => {
+                fw.sendCommands([{ type: "rename-patron", id: patronId, name: newName, timestamp: new Date() }]);
+              }} />
             : <Spin size="small" />
           }
           {patron?.researcher && <Tag color="green">researcher</Tag>}
@@ -252,8 +255,12 @@ export default function PatronWindow({
           <Books
             fw={fw}
             researcher={patron?.researcher ?? false}
-            onHold={(_isbn) => { /* TODO: wire sendCommands */ }}
-            onHoldRestricted={(_isbn) => { /* TODO: wire sendCommands */ }}
+            onHold={(isbn) => {
+              fw.sendCommands([{ type: "try-hold", id: generateUuid(), patron: patronId, target: { edition: isbn }, open: false, timestamp: new Date() }]);
+            }}
+            onHoldRestricted={(isbn) => {
+              fw.sendCommands([{ type: "try-hold", id: generateUuid(), patron: patronId, target: { edition: isbn }, open: patron?.researcher ?? false, timestamp: new Date() }]);
+            }}
           />
         </div>
       </Card>

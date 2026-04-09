@@ -53,7 +53,7 @@ async def waitgroup(*coros: Coroutine) -> None:
                 tg.create_task(coro)
     except BaseExceptionGroup as e:
         # preserve first exception... why would I ever want anything else
-        raise e.exceptions[0]
+        raise e.exceptions[0] from None
 
 
 class Sync:
@@ -82,23 +82,23 @@ def assert_never(arg: Never) -> Never:
     raise AssertionError("Expected code to be unreachable")
 
 
-def stream_for(event: RelayCommands) -> str:
-    match event.type:
+def stream_for(event: Dict[str, Any]) -> str:
+    match event["type"]:
         case "add-edition":            return "books"
         case "update-edition-title":   return "books"
         case "add-book":               return "books"
         case "update-book-restricted": return "books"
         case "remove-book":            return "books"
 
-        case "add-patron":    return f"patron.{event.id}"
-        case "rename-patron": return f"patron.{event.id}"
-        case "assign-patron": return f"patron.{event.id}"
+        case "add-patron":    return f'patron.{event["id"]}'
+        case "rename-patron": return f'patron.{event["id"]}'
+        case "assign-patron": return f'patron.{event["id"]}'
 
         case "try-hold":     return "status"
         case "cancel-hold":  return "status"
         case "try-checkout": return "status"
         case "end-checkout": return "status"
-        case _: assert_never(event)
+        case _: raise RuntimeError(f'unrecognized command type: {event["type"]}')
 
 
 class Appender:
@@ -108,6 +108,7 @@ class Appender:
         self.client = client
 
     async def append(self, new_uuids: List[str], batch: List[model.Event[Any]]) -> None:
+        log.debug(f"appending: {batch}")
         # the plural of NewEvents is "new_eventses", which you have to say with a Gollum voice.
         new_eventses = []
 
@@ -137,7 +138,9 @@ class Appender:
         last_stream = None
         events: List[kdbc.NewEvent] = []
         for event in batch:
-            stream = stream_for(event["data"])
+            id = event["id"]
+            data = event["data"]
+            stream = stream_for(data)
             if last_stream != stream:
                 # start a new NewEvents object, with a new events list that we'll grow
                 last_stream = stream
@@ -152,8 +155,8 @@ class Appender:
             events.append(
                 kdbc.NewEvent(
                     type="LibraryEvents",
-                    data=json.dumps(event).encode('utf8'),
-                    id=uuid.UUID(event["id"]),
+                    data=json.dumps(data).encode('utf8'),
+                    id=uuid.UUID(id),
                 ),
             )
 
@@ -167,7 +170,7 @@ class Appender:
 def wrap(event: kdbc.RecordedEvent, alt_data: str | None = None) -> str:
     """Wrap an event in an envelope of metadata, to match typescript's RealEvent type."""
     return '{"position": %d, "id": "%s", "data": %s}'%(
-        event.stream_position,
+        event.commit_position,
         str(event.id),
         alt_data or event.data.decode('utf8'),
     )
@@ -241,21 +244,22 @@ class Subscriber:
                 await self.q.put(event)
 
     async def process(self) -> None:
-        # get one or more events from collector
-        batch = []
-        batch.append(await self.q.get())
-        while not self.q.empty():
-            batch.append(self.q.get_nowait())
+        while True:
+            # get one or more events from collector
+            batch = []
+            batch.append(await self.q.get())
+            while not self.q.empty():
+                batch.append(self.q.get_nowait())
 
-        await self.update_read_model(batch)
-        self.dispatch(batch)
+            await self.update_read_model(batch)
+            self.dispatch(batch)
 
     async def update_read_model(self, batch: List[kdbc.RecordedEvent]) -> None:
         # first read all the json
         events = []
         for event in batch:
             events.append({
-                "position": event.stream_position,
+                "position": event.commit_position,
                 "id": str(event.id),
                 "data": json.loads(event.data),
             })
@@ -264,7 +268,7 @@ class Subscriber:
         self.fw.recv_events(events)
 
         # notify anybody who was waiting for a round-trip
-        await self.sync.update(batch[-1].stream_position)
+        await self.sync.update(batch[-1].commit_position)
 
     def dispatch(self, batch: List[kdbc.RecordedEvent]) -> None:
         # also dispatch the events to the various watches
@@ -272,11 +276,11 @@ class Subscriber:
             wrapped = wrap(event)
             match event.stream_name.split(".", maxsplit=1):
                 # events not relayed to end users:
-                case ("status", _):
+                case ("status",):
                     pass
 
                 # events with global distribution
-                case ("books", _):
+                case ("books",):
                     for put in (put for w in self.watches.values() for put in w):
                         put(wrapped)
 
@@ -289,7 +293,7 @@ class Subscriber:
                         put(wrapped)
 
                 # events needing sanitization
-                case ("vstatus", _):
+                case ("vstatus",):
                     # we'll need to examine the contents of this message type
                     j = json.loads(event.data)
                     typ = j["type"]
@@ -298,22 +302,24 @@ class Subscriber:
                     sanitized = None
                     if typ in ("new-vhold", "new-vcheckout"):
                         temp = dict(j)
-                        del temp["patron_id"]
+                        del temp["patron"]
                         sanitized = wrap(event, json.dumps(temp))
 
                     # actually distribute the events
-                    for put, w_patron_id in (
-                        (put, w_patron_id) for w_patron_id, w in self.watches.items() for put in w
+                    for put, patron_id in (
+                        (put, patron_id) for patron_id, w in self.watches.items() for put in w
                     ):
-                        if typ == "vhold-rejected" and w_patron_id != j["patron_id"]:
+                        if typ == "vhold-rejected" and patron_id != j["patron"]:
                             # this event is only for the patron whose hold was rejected
                             continue
-                        elif sanitized and patron_id not in (ADMIN, j["patron_id"]):
+                        elif sanitized and patron_id not in (ADMIN, j["patron"]):
                             # emit sanitized message
                             put(sanitized)
                         else:
                             # emit full message
                             put(wrapped)
+                case _:
+                    raise RuntimeError("no subscription to event", event)
 
     async def catchup(
         self, patron_id: PatronID, since: int,
@@ -332,20 +338,20 @@ class Subscriber:
         ) as stream:
             async for event in stream:
                 if patron_id == ADMIN or event.stream_name != "vstatus":
-                    yield wrap(event), event.stream_position
+                    yield wrap(event), event.commit_position
                     continue
                 # sanitize the vstatus stream
                 j = json.loads(event.data)
-                typ = j.type
+                typ = j["type"]
                 if typ == "vhold-rejected":
                     # only yield those which match our patron_id
-                    if patron_id == j.patron_id:
-                        yield wrap(event), event.stream_position
+                    if patron_id == j["patron"]:
+                        yield wrap(event), event.commit_position
                     continue
                 if typ in ("new-vhold", "new-vcheckout"):
                     # sanitize
-                    del j["patron_id"]
-                yield wrap(event, json.dumps(j)), event.stream_position
+                    del j["patron"]
+                yield wrap(event, json.dumps(j)), event.commit_position
 
 
     async def stream(self, patron_id: PatronID, since: int, w: Writer) -> None:
@@ -402,15 +408,19 @@ class Writer:
         while True:
             msg = await self.startq.get()
             if msg is None: break
-            await self.ws.send_str(msg)
+            await self._send(msg)
 
         # send a caughtup message
-        await self.ws.send_str("caughtup")
+        await self._send("caughtup")
 
         # then drain the liveq forever
         while True:
             msg = await self.liveq.get()
-            await self.ws.send_str(msg)
+            await self._send(msg)
+
+    async def _send(self, msg: str) -> None:
+        log.debug(f"send: {msg}")
+        await self.ws.send_str(msg)
 
     async def put_start(self, msg: str) -> None:
         await self.startq.put(msg)
@@ -474,7 +484,8 @@ class Reader:
         if patron_id == ADMIN:
             self.validator = fw.module["validateAdminCommands"]
         else:
-            self.validator = fw.module["validatePatronCommands"]
+            func = fw.module["validatePatronCommands"]
+            self.validator = lambda rx, events: func(rx, events, self.patron_id)
 
     async def run(self) -> None:
         await waitgroup(self.collect(), self.process())
@@ -559,10 +570,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     try:
         await ws.prepare(request)
 
-        # first message is a handshake: {"patron_id": "...", "since": 123}
+        # first message is a handshake: {"patron": "...", "since": 123}
         handshake_msg = await ws.receive_json()
         # TODO: have some real authentication
-        patron_id: PatronID = handshake_msg.get("patron_id") or ADMIN
+        patron_id: PatronID = handshake_msg.get("patron") or ADMIN
         since: int | None = handshake_msg.get("since")
 
         w = Writer(patron_id, ws)

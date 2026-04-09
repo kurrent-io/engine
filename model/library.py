@@ -76,7 +76,10 @@ class Timestamp(Concrete):
             "try:\n"
             f"    datetime.datetime.strptime({val}, '%Y-%m-%dT%H:%M:%SZ')\n"
             "except ValueError:\n"
-            f"    problems += [{path} + ': invalid timestamp']\n"
+            "    try:\n"
+            f"        datetime.datetime.strptime({val}, '%Y-%m-%dT%H:%M:%S.%fZ')\n"
+            "    except ValueError:\n"
+            f"        problems += [{path} + ': invalid timestamp']\n"
         )
         # encoder example:
         # datetime.datetime.now().astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -224,7 +227,9 @@ DeciderStore = Store(
 # - a shard of the patron data, which is really just themselves
 #    - this can conveniently be typed the same as the full patron data
 # - all virtualized status data for
-UserStore = Store(BookStore, PatronStore, VStatusStore)
+UserStore = Store(BookStore, PatronStore, VStatusStore, {
+    "messages": Array(String),
+})
 
 #################
 ## Event Layer ##

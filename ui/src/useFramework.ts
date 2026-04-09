@@ -13,17 +13,24 @@ export function useFramework(
   patronId: string,
   enabled: boolean,
 ): [UserFramework, ConnectionState] {
+  const [connState, setConnState] = useState<ConnectionState>('disconnected');
+  const wsRef = useRef<WebSocket | null>(null);
+
   // create a framework instance once, for the lifetime of this hook
   const fw = useMemo(() => {
     const storage = new InMemStorage();
     return new UserFramework(storage, {
       migrate: userMigrate,
       reducer: userReducer,
+      onCommands: (commands) => {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        for (const cmd of commands) {
+          ws.send(JSON.stringify(cmd));
+        }
+      },
     });
   }, []);
-
-  const [connState, setConnState] = useState<ConnectionState>('disconnected');
-  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (!enabled) {
@@ -55,10 +62,14 @@ export function useFramework(
           backoff = 1000;
           // handshake: identify ourselves and where to resume
           ws.send(JSON.stringify({
-            patron_id: patronId,
+            patron: patronId,
             since: result.checkpoint ?? null,
           }));
           setConnState('connected');
+          // resend any commands that were persisted but which haven't round-tripped
+          for (const cmd of result.commands) {
+            ws.send(JSON.stringify(cmd));
+          }
         };
 
         ws.onmessage = (msg) => {

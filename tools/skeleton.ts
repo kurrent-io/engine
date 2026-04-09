@@ -2290,7 +2290,7 @@ export class Framework<QX, RX, E, C> {
   // command ids the user explicitly marks as completed
   #roundTripped: string[] = [];
   // ordered map of command ids to the forecasted events from that command
-  #forecasts: Map<string, E[]> = new Map();
+  #unsent: Map<string, E[]> = new Map();
   // just a flag if new queries exist to be run; we don't store them here for typing purposes.
   #newQueries: boolean = false;
   #simulates: (() => Reducer<void>)[] = [];
@@ -2429,9 +2429,6 @@ export class Framework<QX, RX, E, C> {
       });
     }
 
-    // reload forecasted state
-    if (!this.#forecaster) return;
-
     // load unsent commands from storage
     const commands: Event<any>[] = [];
     yield* withRTxn(this.#fx, this.#storage, function*() {
@@ -2443,13 +2440,22 @@ export class Framework<QX, RX, E, C> {
     });
     if (commands.length === 0) return;
 
-    // forecast events
+    if (!this.#forecaster) {
+      // reload just the list of unset event ids
+      for (const command of commands) {
+        this.#unsent.set(command.id, []);
+      }
+      return;
+    }
+
+    // reload forecasted state
+
     const forecasts: E[] = [];
     for (const command of commands) {
       // note that since storage may be in-memory, we must take care to preserve command.data
       const c = copyOnWrite(this.#decodeCommand!(command.data));
       const fs = recover(this.#forecaster(c));
-      this.#forecasts.set(command.id, fs);
+      this.#unsent.set(command.id, fs);
       forecasts.push(...fs);
     }
     if (forecasts.length === 0) return;
@@ -2550,6 +2556,13 @@ export class Framework<QX, RX, E, C> {
 
       // discard commands that we see have round-tripped.  It has to be in this txn, since we save
       // a checkpoint here and we won't see these events again.
+      if (self.#unsent.size > 0) {
+        for (const event of events) {
+          if (self.#unsent.has(event.id)) {
+            self.#roundTripped.push(event.id);
+          }
+        }
+      }
       yield* self.#discardRoundTripped();
 
       return updates;
@@ -2558,9 +2571,9 @@ export class Framework<QX, RX, E, C> {
     self.#roundTripped = [];
 
     // discard sent commands which have now round-tripped
-    if (this.#forecasts.size > 0) {
+    if (this.#unsent.size > 0) {
       for (const event of events) {
-        this.#forecasts.delete(event.id);
+        this.#unsent.delete(event.id);
       }
     }
 
@@ -2577,7 +2590,7 @@ export class Framework<QX, RX, E, C> {
     this.#overlay = new OverlayStorage(this.#storage);
 
     // rebuild overlay with current forecasts
-    const forecasts = [...this.#forecasts.values()].flat();
+    const forecasts = [...this.#unsent.values()].flat();
     if (forecasts.length > 0) {
       const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
         return yield* runReducer(self.#reducer(self.#rx, forecasts));
@@ -2618,14 +2631,21 @@ export class Framework<QX, RX, E, C> {
     // schedule a callback for the user to know it is time to send these commands
     setTimeout(() => this.#onCommands!(commands));
 
+    // store those commands as unsent
+
     // now forecast events based on those commands
-    if (!this.#forecaster) return;
+    if (!this.#forecaster) {
+      for (const command of commands) {
+        this.#unsent.set(command.id, []);
+      }
+      return;
+    }
 
     const forecasts: E[] = [];
     for (const command of commands) {
       const c = copyOnWrite(command.data);
       const fs = recover(this.#forecaster(c));
-      this.#forecasts.set(command.id, fs);
+      this.#unsent.set(command.id, fs);
       forecasts.push(...fs);
     }
 

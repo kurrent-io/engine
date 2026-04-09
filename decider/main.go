@@ -91,7 +91,6 @@ func setupFramework(
 		vm *goja.Runtime, qx model.DeciderQueryContext, prev *[]model.DeciderEvents,
 	) []model.DeciderEvents {
 		out := qx.Decider_events()
-		println("got decider events of length", len(out))
 		return out
 	})
 
@@ -123,7 +122,7 @@ func setupKurrent(
 	*kurrentdb.Client,
 	*kurrentdb.Subscription,
 	uint64,
-	*kurrentdb.StreamRevision,
+	kurrentdb.StreamState,
 	func(),
 	error,
 ) {
@@ -165,7 +164,7 @@ func setupKurrent(
 	}
 	defer reader.Close()
 	var dbCheckpoint uint64
-	var revision *kurrentdb.StreamRevision
+	var revision kurrentdb.StreamState
 	ev, err := reader.Recv()
 	if err != nil {
 		if kerr, ok := err.(*kurrentdb.Error); !ok && !kerr.IsErrorCode(
@@ -175,7 +174,7 @@ func setupKurrent(
 		}
 		// no checkpoint exists yet
 		dbCheckpoint = 0
-		revision = nil
+		revision = kurrentdb.NoStream{}
 	} else {
 		// checkpoint found
 		var val PublishedCheckpoint
@@ -184,7 +183,7 @@ func setupKurrent(
 			return nil, nil, 0, nil, nil, fmt.Errorf("unmarashaling published checkpoint: %w\n", err)
 		}
 		dbCheckpoint = val.PublishedUntil
-		revision = &kurrentdb.StreamRevision{ev.Event.EventNumber}
+		revision = kurrentdb.StreamRevision{ev.Event.EventNumber}
 	}
 
 	// start our subscription
@@ -349,8 +348,8 @@ func publishDecisions(
 	client *kurrentdb.Client,
 	deciderEvents []model.DeciderEvents,
 	checkpoint uint64,
-	revision *kurrentdb.StreamRevision,
-) (*kurrentdb.StreamRevision, error) {
+	revision kurrentdb.StreamState,
+) (kurrentdb.StreamState, error) {
 	if len(deciderEvents) == 0 {
 		// nothing to publish
 		return revision, nil
@@ -378,21 +377,15 @@ func publishDecisions(
 		return revision, fmt.Errorf("marshaling checkpoint", err)
 	}
 
-	// expect the decider-state stream to be untouched since we last touched it
-	var expectState kurrentdb.StreamState = kurrentdb.Any{}
-	if revision != nil {
-		expectState = *revision
-	}
-
 	reqs := slices.Values([]kurrentdb.AppendStreamRequest{
 		{
 			StreamName:          vstatusStream,
-			ExpectedStreamState: kurrentdb.Any{},
+			ExpectedStreamState: revision,
 			Events:              slices.Values(vstatusData),
 		},
 		{
 			StreamName:          deciderStateStream,
-			ExpectedStreamState: expectState,
+			ExpectedStreamState: revision,
 			Events: slices.Values([]kurrentdb.EventData{{
 				EventID:     uuid.New(),
 				EventType:   "PublishedCheckpoint",
@@ -417,7 +410,7 @@ func publishDecisions(
 		return revision, fmt.Errorf("did not find decider-state stream in response: %v", resp)
 	}
 
-	return out, nil
+	return *out, nil
 }
 
 func run(ctx context.Context) error {

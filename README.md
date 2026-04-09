@@ -205,7 +205,7 @@ at-most-one runner mechanics within each shard).
               ^                                   |
               | events                            | commands
  _____________|___________________________________|____________
-| Server      |                                   |            |
+| Relay       |                                   |            |
 |     ________|___________________________________v____        |
 |    |                                                 |       |
 |    |                  websockets                     |       |

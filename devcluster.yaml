@@ -17,6 +17,7 @@ stages:
     post:
       - conncheck:
           port: 2113
+
 - custom:
     name: setup
     pre:
@@ -24,6 +25,7 @@ stages:
     cmd:
       - sleep
       - "1000000"
+
 - custom:
     name: relay
     pre:
@@ -32,3 +34,10 @@ stages:
       - python
       - -u
       - relay/relay.py
+
+- custom:
+    name: decider
+    pre:
+      - sh: make decider
+    cmd:
+      - decider/decider
