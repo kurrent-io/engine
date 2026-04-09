@@ -57,7 +57,16 @@ ui/                 Frontend (React 19 + Ant Design 6 + @ant-design/icons)
   src/useQuery.ts       Generic React hook for framework queries (library-quality, framework-agnostic)
   src/model.{js,d.ts}   GENERATED bundles from model/ui.ts
 
+skill/              Developer skill files for building apps on this framework
+  data-model.md     Python DSL for defining types, events, stores, frameworks
+  reducers.md       Generator-based reducers, rx contexts, composition
+  relay.md          Relay architecture, websocket protocol, validation
+  decider.md        Go+goja decider, decision events, at-most-one semantics
+  frontend.md       React integration, useFramework, useQuery, commands, forecasting
+  cross-runtime.md  Browser/Python/Go runtimes, code generation, UUID injection
+
 populate.py         Utility script to seed KurrentDB with test data (run with relay/.venv/bin/python)
+dump.py             Utility to dump events from a KurrentDB stream as JSON
 devcluster.yaml     Config for running KurrentDB locally via devcluster
 ```
 
