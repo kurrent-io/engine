@@ -267,34 +267,30 @@ export default function PatronWindow({
       }
       style={{ width: '32em' }}
     >
-      <Card type="inner" title="Books">
-        <div style={{ maxHeight: '20em', overflowY: 'auto' }}>
-          <Books
-            fw={fw}
-            patronId={patronId}
-            researcher={patron?.researcher ?? false}
-            onHold={(isbn) => fw.sendCommands([{
-              type: "try-hold",
-              id: generateUuid(),
-              patron: patronId,
-              target: { edition: isbn },
-              open: false,
-              timestamp: new Date(),
-            }])}
-            onHoldRestricted={(bookId) => fw.sendCommands([{
-              type: "try-hold",
-              id: generateUuid(),
-              patron: patronId,
-              target: { book: bookId },
-              open: false,
-              timestamp: new Date(),
-            }])}
-            onCancelHold={(holdId) => {
-              fw.sendCommands([{ type: "cancel-hold", id: holdId }]);
-            }}
-          />
-        </div>
-      </Card>
+      <Books
+        fw={fw}
+        patronId={patronId}
+        researcher={patron?.researcher ?? false}
+        onHold={(isbn) => fw.sendCommands([{
+          type: "try-hold",
+          id: generateUuid(),
+          patron: patronId,
+          target: { edition: isbn },
+          open: false,
+          timestamp: new Date(),
+        }])}
+        onHoldRestricted={(bookId) => fw.sendCommands([{
+          type: "try-hold",
+          id: generateUuid(),
+          patron: patronId,
+          target: { book: bookId },
+          open: false,
+          timestamp: new Date(),
+        }])}
+        onCancelHold={(holdId) => {
+          fw.sendCommands([{ type: "cancel-hold", id: holdId }]);
+        }}
+      />
       {visibleMessages.length > 0 && (
         <div style={{ marginTop: '0.5em' }}>
           <Space direction="vertical" style={{ width: '100%' }} size="small">
