@@ -1720,32 +1720,33 @@ export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
 // yield* rx.old.project(key): explicitly get the old value for key
 
 // wrap a Reducer so it acts like a WStorageGenerator, returning a set of updated keys
-export function *runReducer(g: Reducer<void>, simulate?: boolean): WStorageGenerator<string[]> {
+export function *runReducer(g: Reducer<any[] | void>, simulate?: boolean): WStorageGenerator<[string[], any[]]> {
   // our cache of get's we've already completed
   const old: Record<string, unknown> = Object.create(null);
   // our planned sets and dels that we submit at the end
   const cur: Record<string, unknown> = Object.create(null);
 
-  function *finish(): WStorageGenerator<string[]> {
+  function *finish(retVal: any[]): WStorageGenerator<[string[], any[]]> {
     const updates = [];
     const question: WStorageQuestion = {get: {}, set: {}, del: {}};
     for (const [k, v] of Object.entries(cur)) {
-      // de-copyOnWrite-ify the value
-      const r = recover(v);
-      // get the old value
-      const o = old[k];
-      // detect noop
-      if (r === o) continue;
-      // otherwise write the value to storage
-      updates.push(k);
-      if (r === DELETED) {
+      if (v === DELETED) {
         question.del![k] = true;
+        updates.push(k);
       } else {
+        // de-copyOnWrite-ify the value
+        const r = recover(v);
+        // get the old value
+        const o = old[k];
+        // detect noop
+        if (r === o) continue;
+        // otherwise write the value to storage
+        updates.push(k);
         question.set![k] = r;
       }
     }
     // is there any storage updates to make?
-    if (updates.length === 0 || simulate) return updates;
+    if (updates.length === 0 || simulate) return [updates, retVal];
     let nupdated = 0;
     while (nupdated < updates.length) {
       // actually yield the write request to storage
@@ -1760,7 +1761,7 @@ export function *runReducer(g: Reducer<void>, simulate?: boolean): WStorageGener
         nupdated++;
       }
     }
-    return updates;
+    return [updates, retVal];
   }
 
   let ans: ReducerAnswer = {old: {}, get: {}, set: {}, del: {}};
@@ -1778,7 +1779,7 @@ export function *runReducer(g: Reducer<void>, simulate?: boolean): WStorageGener
     let ready = true;
     while (ready) {
       const {value, done} = g.next(ans);
-      if (done) return yield* finish();
+      if (done) return yield* finish(value ?? []);
 
       ans = {old: {}, get: {}, set: {}, del: {}};
       ready = false;
@@ -2262,6 +2263,46 @@ export function DecodeRealEvent<T>(val: any, subdecoder: (val: any) => T): RealE
   return { ...val, data: subdecoder(val.data) } as RealEvent<T>;
 }
 
+function matchSent<C>(tpl: any, cmd: C): boolean {
+  if (typeof tpl !== typeof cmd) return false;
+  switch (typeof tpl) {
+    case "boolean":
+    case "bigint":
+    case "number":
+    case "string":
+    case "undefined":
+      return tpl === cmd;
+
+    case "function":
+      return tpl(cmd);
+
+    case "object":
+      // null handled here
+      if (tpl === null) return cmd === null;
+      // general objects handled below
+      break;
+
+    case "symbol":
+    default:
+      throw new Error(`mark of type "${typeof tpl}" not handled by matchSent`);
+  }
+
+  if (Array.isArray(tpl)) {
+    if (!Array.isArray(cmd)) return false;
+    if (tpl.length !== cmd.length) return false;
+    return tpl.every((v, i) => matchSent(v, cmd[i]));
+  }
+
+  if (tpl instanceof Map) {
+    throw new Error(`mark of type Map not handled by matchSent`);
+  }
+  if (tpl instanceof Set) {
+    throw new Error(`mark of type Set not handled by matchSent`);
+  }
+
+  return Object.entries(tpl).every(([k, v]) => matchSent(v, (cmd as Record<string, any>)[k]));
+}
+
 // "R"educerConte"x"t
 // "Q"ueryConte"x"t
 // "E"vents
@@ -2271,7 +2312,7 @@ export class Framework<QX, RX, E, C> {
   #storage: Storage;
   #decodeEvent: (raw: any) => E;
   #migrate: null | ((rx: RX) => Reducer<void>);
-  #reducer: (rx: RX, events: E[]) => Reducer<void>;
+  #reducer: (rx: RX, events: E[]) => Reducer<any[] | void>;
   #forecaster: null | ((commands: C) => E[]);
   #decodeCommand: null | ((raw: any) => C);
   #onCommands: null | ((commands: Event<any>[]) => void);
@@ -2381,8 +2422,8 @@ export class Framework<QX, RX, E, C> {
 
   // normally forecasted events are discarded when the event id that was submitted is observed in
   // recvEvents().  But if the command was rejected, then it may be necessary to explicitly flag the
-  // command as rejected, so the forecasted events from that rejected command can be discarded.
-  roundTripped(...id: string[]): void {
+  // command as sent, so the forecasted events from that rejected command can be discarded.
+  markSent(...id: string[]): void {
     this.#roundTripped.push(...id);
     this.#schedule();
   }
@@ -2557,30 +2598,42 @@ export class Framework<QX, RX, E, C> {
 
       // run the reducer with our new events
       const eventsData = events.map((event) => event.data);
-      const updates = yield* runReducer(self.#reducer(self.#rx, eventsData));
+      const [updates, markedSent] = yield* runReducer(self.#reducer(self.#rx, eventsData));
 
-      // discard commands that we see have round-tripped.  It has to be in this txn, since we save
-      // a checkpoint here and we won't see these events again.
+      // discard unsent commands that we now know are sent
       if (self.#unsent.size > 0) {
+        // discard commands we observed round-trip by matching event ids
         for (const event of events) {
           if (self.#unsent.has(event.id)) {
             self.#roundTripped.push(event.id);
           }
         }
+        // discard commands that match what the reducer says was sent
+        if (markedSent.length > 0) {
+          const toIgnore = self.#roundTripped.reduce(
+            (acc, id) => (acc[id] = true, acc),
+            {} as Record<string, true>,
+          );
+          for (const id of self.#unsent.keys()) {
+            if (id in toIgnore) continue;
+            const event = (yield* txnGet(`.command-${id}`)) as Event<any>;
+            const cmd = self.#decodeCommand!(event.data);
+            for (const m of markedSent) {
+              if (!matchSent(m, cmd)) continue;
+              self.#roundTripped.push(event.id);
+              break;
+            }
+          }
+        }
       }
+      // discard commands based on calls to Framework.markSent()
       yield* self.#discardRoundTripped();
 
       return updates;
     })
     this.#graph.dirty(updates);
-    self.#roundTripped = [];
-
-    // discard sent commands which have now round-tripped
-    if (this.#unsent.size > 0) {
-      for (const event of events) {
-        this.#unsent.delete(event.id);
-      }
-    }
+    this.#roundTripped.map((id) => this.#unsent.delete(id));
+    this.#roundTripped = [];
 
     if (this.#live) {
       yield* this.#rebuildOverlay();
@@ -2597,7 +2650,7 @@ export class Framework<QX, RX, E, C> {
     // rebuild overlay with current forecasts
     const forecasts = [...this.#unsent.values()].flat();
     if (forecasts.length > 0) {
-      const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
+      const [updates, _markedSent] = yield* withWTxn(this.#fx, this.#overlay, function*(){
         return yield* runReducer(self.#reducer(self.#rx, forecasts));
       });
       self.#graph.dirty(updates);
@@ -2657,7 +2710,7 @@ export class Framework<QX, RX, E, C> {
     if (forecasts.length === 0 || !this.#live) return;
 
     // open a write txn against the existing overlay
-    const updates = yield* withWTxn(this.#fx, this.#overlay, function*(){
+    const [updates, _markedSent] = yield* withWTxn(this.#fx, this.#overlay, function*(){
       return yield* runReducer(self.#reducer(self.#rx, forecasts));
     });
     this.#graph.dirty(updates);
@@ -2698,6 +2751,7 @@ export class Framework<QX, RX, E, C> {
     const changed = yield* withWTxn(this.#fx, this.#storage, function*(){
       return yield* self.#discardRoundTripped();
     });
+    this.#roundTripped.map((id) => this.#unsent.delete(id));
     this.#roundTripped = [];
     if (changed && this.#live) {
       yield* this.#rebuildOverlay()

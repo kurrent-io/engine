@@ -157,6 +157,7 @@ func setupKurrent(
 	// load the latest state we've published to the database
 	reader, err := client.ReadStream(ctx, deciderStateStream, kurrentdb.ReadStreamOptions{
 		Direction:      kurrentdb.Backwards,
+		From:           kurrentdb.End{},
 		RequiresLeader: true,
 	}, 1)
 	if err != nil {
@@ -316,6 +317,8 @@ func recvBatches(
 				recvd2 = recvd
 				ckpt2 = ckpt
 				recvd = nil
+				// wakeup recvOne in case it is in backpressure
+				cond.Signal()
 			}()
 			if recvFail != nil {
 				yield(Batch{}, fmt.Errorf("receiver failed: %w", recvFail))
@@ -380,7 +383,7 @@ func publishDecisions(
 	reqs := slices.Values([]kurrentdb.AppendStreamRequest{
 		{
 			StreamName:          vstatusStream,
-			ExpectedStreamState: revision,
+			ExpectedStreamState: kurrentdb.Any{},
 			Events:              slices.Values(vstatusData),
 		},
 		{

@@ -212,9 +212,11 @@ function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
   }
 
   let isbn: string;
+  let targetsRestrictedBook = false;
   if ("book" in e.target) {
     // hold is targeting a specific book
     const book = yield* rx.get.book(e.target.book);
+    targetsRestrictedBook = book.restricted;
     if (!patron.researcher && book.restricted){
       return "non-researcher not allowed to issue hold for restricted book";
     }
@@ -232,17 +234,19 @@ function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
     isbn = e.target.edition;
   }
 
-  // check for edition-level holds
-  const edition = yield* rx.get.edition(isbn);
-  const books: Book[] = [];
-  for (const book_uuid of Object.keys(edition.books)) {
-    const book = yield* rx.get.book(book_uuid);
-    // ignore books which have book-level holds or are checked out
-    // also ignore restricted books, which must be held specifically
-    if (!book.status && !book.restricted) books.push(book);
-  }
-  if (Object.keys(edition.holds).length >= books.length) {
-    return "all remaining books are already on hold";
+  if (!targetsRestrictedBook) {
+    // check for edition-level holds
+    const edition = yield* rx.get.edition(isbn);
+    const books: Book[] = [];
+    for (const book_uuid of Object.keys(edition.books)) {
+      const book = yield* rx.get.book(book_uuid);
+      // ignore books which have book-level holds or are checked out
+      // also ignore restricted books, which must be held specifically
+      if (!book.status && !book.restricted) books.push(book);
+    }
+    if (Object.keys(edition.holds).length >= books.length) {
+      return "all remaining books are already on hold";
+    }
   }
 
   // hold was successful!
@@ -421,21 +425,31 @@ function *reduceOverdueCheckout(
 
 type FullVStatusRX = VStatusRX & BookRX & PatronRX;
 
-function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold): Reducer<void> {
+function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold, sent: any[]): Reducer<void> {
+  // create the vhold
   const hold: VHold = {
     id: e.id,
     target: e.target,
   };
   if (e.patron) {
     hold.patron = e.patron;
+    // patron-id is guaranteed to be our patron-id, so this is our hold
     yield* rx.update.patron(e.patron, (patron) => patron.holds[e.id] = true);
+    sent.push({ type: "try-hold", id: e.id });
   }
-  if (e.patron) hold.patron = e.patron;
   yield* rx.set.hold(e.id, hold);
+  // update hold target (book or edition)
+  if ("book" in hold.target) {
+    yield* rx.update.book(hold.target.book, (book) => book.status = { hold: e.id });
+  } else {
+    yield* rx.update.edition(hold.target.edition, (edition) => edition.holds[e.id] = true);
+  }
 }
 
-function *reduceVHoldRejected(rx: UserRX, e: VHoldRejected): Reducer<void> {
+function *reduceVHoldRejected(rx: UserRX, e: VHoldRejected, sent: any[]): Reducer<void> {
   yield *rx.update.messages((msgs) => msgs.push(e.reason));
+  // the presence of a vhold-rejected means our try-hold has round-tripped
+  sent.push({ type: "try-hold", id: e.id })
 }
 
 function *reduceVEndHold(rx: FullVStatusRX, e: CancelHold|ExpireHold): Reducer<void> {
@@ -563,7 +577,8 @@ export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer
 }
 
 // user composition of reducers
-export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<void> {
+export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]> {
+  const sent: any[] = [];
   for (const e of events) {
     // extend read model
     switch(e.type){
@@ -577,13 +592,13 @@ export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<void>
       case "rename-patron": yield* reduceRenamePatron(rx, e); break;
       case "assign-patron": yield* reduceAssignPatron(rx, e); break;
 
-      case "new-vhold":        yield* reduceNewVHold(rx, e);        break;
-      case "vhold-rejected":   yield* reduceVHoldRejected(rx, e);   break;
+      case "new-vhold":        yield* reduceNewVHold(rx, e, sent);       break;
+      case "vhold-rejected":   yield* reduceVHoldRejected(rx, e, sent);  break;
       case "cancel-hold":      // fallthru
-      case "expire-hold":      yield* reduceVEndHold(rx, e);        break;
-      case "new-vcheckout":    yield* reduceNewVCheckout(rx, e);    break;
-      case "end-checkout":     yield* reduceVEndCheckout(rx, e);    break;
-      case "overdue-checkout": yield* reduceOverdueCheckout(rx, e); break;
+      case "expire-hold":      yield* reduceVEndHold(rx, e);             break;
+      case "new-vcheckout":    yield* reduceNewVCheckout(rx, e);         break;
+      case "end-checkout":     yield* reduceVEndCheckout(rx, e);         break;
+      case "overdue-checkout": yield* reduceOverdueCheckout(rx, e);      break;
 
       // events we aren't allowed to receive
       case "try-hold":
@@ -595,6 +610,7 @@ export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<void>
         return _typecheck;
     }
   }
+  return sent;
 }
 
 /* ---------- relay logic below ----------
@@ -615,7 +631,7 @@ function *relayReduceOne(rx: RelayRX, e: LibraryEvents): Reducer<void> {
     // otheriwse, the read model in the relay is mostly concerned with the existence of objects...
     case "add-edition":  yield* rx.set.edition(e.isbn, true); break;
     case "add-book":     yield* rx.set.book(e.id, true);      break;
-    case "add-patron":   yield* rx.set.patron(e.id, true);    console.log("############ added patron", e.id); break;
+    case "add-patron":   yield* rx.set.patron(e.id, true);    break;
     case "try-checkout": yield* rx.set.checkout(e.id, true);  break;
 
     // ...but for holds, we'll need to know which user it belongs to, so we can validate if a

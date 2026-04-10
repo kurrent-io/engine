@@ -6,6 +6,7 @@ import {
   UserFramework,
   UserQX,
   QueryGenerator,
+  VHold,
 } from './model';
 import { useQuery } from './useQuery';
 import { useFramework } from './useFramework';
@@ -67,8 +68,8 @@ type BookInfo = {
   isbn: string;
   title: string;
   availableNormal: number;
-  availableRestricted: number;
-  heldHoldId: string | null;
+  availableRestricted: string[];
+  hold: VHold | null;
 };
 
 type PatronInfo = {
@@ -89,28 +90,38 @@ function BookItem({
   onHoldRestricted: (isbn: string) => void;
   onCancelHold: (holdId: string) => void;
 }) {
-  const held = !!book.heldHoldId;
+  const heldNormal = book.hold && "edition" in book.hold.target;
+  // this assumes book-targeting holds are only used for restricted books, but whatever
+  const heldRestricted = book.hold && "book" in book.hold.target;
   return (
     <List.Item>
       <div style={{ width: '100%' }}>
         <div>{book.title}</div>
         <Flex gap="small" style={{ marginTop: 4 }}>
-          <Button
-            size="small"
-            disabled={!held && book.availableNormal <= 0}
-            onClick={() => held ? onCancelHold(book.heldHoldId!) : onHold(book.isbn)}
-            color={held ? "green" : "default"}
-            variant={held ? "solid" : "outlined"}
-          >
-            {held ? "Cancel Hold" : "Hold"}
-          </Button>
-          <Button
-            size="small"
-            disabled={held || !researcher || book.availableRestricted <= 0}
-            onClick={() => onHoldRestricted(book.isbn)}
-          >
-            Hold Restricted
-          </Button>
+          {/* hold or cancel-hold */}
+          {heldNormal ? <Button
+              size="small"
+              onClick={() => onCancelHold(book.hold!.id)}
+              color={"green"}
+              variant={"solid"}>Cancel Hold</Button>
+          : <Button
+              size="small"
+              disabled={heldRestricted || book.availableNormal < 1}
+              onClick={() => onHold(book.isbn)}
+              color={"default"}
+              variant={"outlined"}>Hold</Button> }
+          {/* hold-restricted or cancel-hold-restricted */}
+          {heldRestricted ? <Button
+              size="small"
+              onClick={() => onCancelHold(book.hold!.id)}
+              color={"green"}
+              variant={"solid"}>Cancel Hold</Button>
+          : <Button
+              size="small"
+              disabled={heldNormal || !researcher || book.availableRestricted.length === 0}
+              onClick={() => onHoldRestricted(book.availableRestricted[0])}
+              color={"default"}
+              variant={"outlined"}>Hold Restricted</Button> }
         </Flex>
       </div>
     </List.Item>
@@ -129,20 +140,20 @@ function Books({
   patronId: string;
   researcher: boolean;
   onHold: (isbn: string) => void;
-  onHoldRestricted: (isbn: string) => void;
+  onHoldRestricted: (bookId: string) => void;
   onCancelHold: (holdId: string) => void;
 }) {
   const booksLookup = useCallback(function*(qx: UserQX): QueryGenerator<BookInfo[]> {
     const patron = yield* qx.get.patron(patronId);
     // build maps of this patron's holds by target
-    const holdsByEdition: Record<string, string> = {};
-    const holdsByBook: Record<string, string> = {};
+    const holdsByEdition: Record<string, VHold> = {};
+    const holdsByBook: Record<string, VHold> = {};
     for (const holdId of Object.keys(patron.holds)) {
       const hold = yield* qx.get.hold(holdId);
       if ("edition" in hold.target) {
-        holdsByEdition[hold.target.edition] = holdId;
+        holdsByEdition[hold.target.edition] = hold;
       } else {
-        holdsByBook[hold.target.book] = holdId;
+        holdsByBook[hold.target.book] = hold;
       }
     }
     const editions = yield* qx.get.editions();
@@ -150,12 +161,12 @@ function Books({
     for (const isbn of Object.keys(editions)) {
       const edition = yield* qx.get.edition(isbn);
       let availableNormal = 0;
-      let availableRestricted = 0;
+      let availableRestricted = [];
       for (const bookId of Object.keys(edition.books)) {
         const book = yield* qx.get.book(bookId);
         if (book.status) continue; // held or checked out
         if (book.restricted) {
-          availableRestricted++;
+          availableRestricted.push(book.id);
         } else {
           availableNormal++;
         }
@@ -163,13 +174,11 @@ function Books({
       // edition-level holds consume normal copies
       availableNormal -= Object.keys(edition.holds).length;
       // check if patron holds this edition or any book in it
-      let heldHoldId: string | null = holdsByEdition[isbn] ?? null;
-      if (!heldHoldId) {
-        for (const bookId of Object.keys(edition.books)) {
-          if (holdsByBook[bookId]) { heldHoldId = holdsByBook[bookId]; break; }
-        }
+      let hold = holdsByEdition[isbn];
+      for (const bookId of Object.keys(edition.books)) {
+        if (holdsByBook[bookId]) { hold = holdsByBook[bookId]; break; }
       }
-      out.push({ isbn, title: edition.title, availableNormal, availableRestricted, heldHoldId });
+      out.push({ isbn, title: edition.title, availableNormal, availableRestricted, hold });
     }
     return out;
   }, [patronId]);
@@ -272,11 +281,11 @@ export default function PatronWindow({
               open: false,
               timestamp: new Date(),
             }])}
-            onHoldRestricted={(isbn) => fw.sendCommands([{
+            onHoldRestricted={(bookId) => fw.sendCommands([{
               type: "try-hold",
               id: generateUuid(),
               patron: patronId,
-              target: { edition: isbn },
+              target: { book: bookId },
               open: false,
               timestamp: new Date(),
             }])}
