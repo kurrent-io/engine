@@ -343,6 +343,8 @@ class Subscriber:
             ),
         ) as stream:
             async for event in stream:
+                # TODO: why is this necessary?  Seems really annoying...
+                if event.commit_position == since: continue
                 if patron_id == ADMIN or event.stream_name != "vstatus":
                     yield wrap(event), event.commit_position
                     continue
@@ -354,7 +356,7 @@ class Subscriber:
                     if patron_id == j["patron"]:
                         yield wrap(event), event.commit_position
                     continue
-                if typ in ("new-vhold", "new-vcheckout"):
+                if typ in ("new-vhold", "new-vcheckout") and patron_id not in (ADMIN, j["patron"]):
                     # sanitize
                     del j["patron"]
                 yield wrap(event, json.dumps(j)), event.commit_position
