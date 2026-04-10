@@ -477,6 +477,7 @@ def generate_store(d, annos, store):
     # also create typeof shorthand
     d.print(f"\nexport type {ctx_name}RX = typeof {ctx_name}ReducerContext;\n")
 
+
 def generate_framework(d, annos, f):
     event_type = annos[f.event_type]
     command_type = annos[f.command_type]
@@ -510,6 +511,55 @@ export class {f.name} extends Framework<{QX}, {RX}, {event_type}, {command_type}
         decodeEvent: {decode_event},
         decodeCommand: {decode_command},
     }});
+  }}
+}}
+""")
+
+    # Then generate a TestData helper.  This could use typescript's "constrained mixins", but why
+    # complicate code that's only used for testing?
+    d.print(f'\nexport class {ctx_name}TestData {{\n')
+    d.indent('  ')
+    d.print(f'data: Record<string, any>;\n')
+    d.print(f'\n')
+    d.print(f'constructor(data: Record<string, any>){{\n')
+    d.indent('  ')
+    d.print(f'this.data = data;\n')
+    d.dedent()
+    d.print(f'}}\n')
+
+    for si in f.store.items:
+        d.print(f'\n{si.name}(')
+        d.print(', '.join(p + ": string" for p in si.params))
+        d.print(f'): {annos[si.type]} {{\n')
+        d.indent('  ')
+        d.print(f'return this.data[`')
+        for chunk, param in zip(si.chunks[:-1], si.params):
+            d.print(chunk + "${" + param + "}")
+        d.print(si.chunks[-1])
+        d.print(f'`] as {annos[si.type]}\n')
+        d.dedent()
+        d.print(f'}}\n')
+
+    d.dedent()
+    d.print(f'}}\n')
+
+    # Then generate a ReducerTester matching this Framework
+    d.print(f"""
+export class {ctx_name}ReducerTester extends ReducerTester<{RX}, {event_type}, {ctx_name}TestData> {{
+  constructor(
+    migrateOrInitialData: ((rx: {RX}) => Reducer<void>) | Record<string, any>,
+    reducer: (rx: {RX}, events: {event_type}[]) => Reducer<void | any[]>,
+  ) {{
+    let migrate: null | ((rx: {RX}) => Reducer<void>);
+    let data: Record<string, any>;
+    if (migrateOrInitialData instanceof Function) {{
+        migrate = migrateOrInitialData;
+        data = {{}};
+    }} else {{
+        migrate = null;
+        data = migrateOrInitialData;
+    }}
+    super({rx}, migrate, reducer, new InMemStorage(data), new {ctx_name}TestData(data));
   }}
 }}
 """)

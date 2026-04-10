@@ -2796,4 +2796,56 @@ export class Framework<QX, RX, E, C> {
   }
 }
 
+export class ReducerTester<RX, E, S> {
+  #rx: RX;
+  #reducer: (rx: RX, events: E[]) => Reducer<void | any[]>;
+  #storage: InMemStorage;
+  data: S;
+
+  constructor(
+    rx: RX,
+    migrate: null | ((rx: RX) => Reducer<void>),
+    reducer: (rx: RX, events: E[]) => Reducer<void | any[]>,
+    storage: InMemStorage,
+    testData: S,
+  ) {
+    this.#rx = rx;
+    this.#reducer = reducer;
+    this.#storage = storage;
+    this.data = testData;
+
+    if (migrate) {
+      this.#run(migrate(rx));
+    }
+  }
+
+  #run(g: Reducer<void | any[]>): [string[], any[]] {
+    // do the "FutureContext" dance.
+    let fx: FutureContext;
+    let result: [string[], any[]] | undefined = undefined;
+    const self = this;
+    const coro = function*() {
+      result = yield* withWTxn(fx!, self.#storage, function*() {
+        return yield* runReducer(g, false);
+      });
+    }();
+    fx = new FutureContext(coro);
+
+    // with InMemStorage, this should always be completed in a single shot
+    fx.wakeup();
+    if (!result) {
+      throw new Error("expected test coroutine to complete in one shot");
+    }
+    return result;
+  }
+
+  // run events against provided reducer
+  run(events: E[]): {updates: string[], markedSent: any[]} {
+    const g = this.#reducer(this.#rx, events);
+    const [ updates, markedSent ] = this.#run(g);
+    updates.sort();
+    return { updates, markedSent };
+  }
+}
+
 // end of skeleton ////////////////////////////////////////////////////////////
