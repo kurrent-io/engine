@@ -875,6 +875,13 @@ class Store:
             si.resolve()
         return self
 
+    def __repr__(self):
+        return (
+            "Store(\n  "
+            + ",\n  ".join(f"{si.tpl}: {si.type}" for si in self.items) + "\n"
+            + ")"
+        )
+
 
 _all_frameworks = []
 
@@ -895,6 +902,15 @@ class Framework:
         self.command_type = self.command_type.resolve()
         self.store = self.store.resolve()
         return self
+
+    def __repr__(self):
+        return (
+            "Framework(\n"
+            f"  event_type={self.event_type},\n"
+            f"  command_type={self.command_type},\n"
+            f"  store=" + repr(self.store).replace("\n", "\n  ") + ",\n"
+            ")"
+        )
 
 
 class Denter:
@@ -1014,6 +1030,12 @@ def _main():
             if fresh:
                 name_to_obj[name] = (obj, d)
                 obj_to_name[obj] = (name, d)
+
+    # Also go ahead and resolve any unnamed Stores or Frameworks.  This is for coherency.  These are
+    # also probably user bugs, but we report those bugs later on.
+    for x in [*_all_stores, *_all_frameworks]:
+        x.resolve()
+
     # now go through and assign names
     roots_available = {}
     stores_available = {}
@@ -1067,6 +1089,19 @@ def _main():
         raise ValueError(
             "unable to locate generate() function in generator module ({args.generator})"
        )
+
+    # make sure everything we're going to pass in was named
+    for s in stores:
+        if s.name is not None: continue
+        raise ValueError(
+            f"store was created without a name; should look like `MyStore = Store(...)`:\n{s}",
+        )
+    for f in frameworks:
+        if f.name is not None: continue
+        raise ValueError(
+            "framework was created without a name; "
+            f"should look like `MyFramework = Framework(...)`:\n{f}",
+        )
 
     # call the generator
     d = Denter()
