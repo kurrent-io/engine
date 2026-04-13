@@ -73,7 +73,7 @@ ui/check: ui
 	cd ui && tsc
 
 .PHONY: check
-check: model/check relay/check ui/check
+check: decider/decider model/check relay/_quickjs.so relay/check ui/check
 
 .PHONY: serve
 serve: ui

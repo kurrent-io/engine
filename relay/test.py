@@ -1,3 +1,4 @@
+import datetime
 import traceback
 
 import _quickjs
@@ -64,6 +65,13 @@ except XErr as xe:
     traceback.print_exc()
     print("###############")
     assert xe.args[0] == x2, (xe.args, x2)
+
+js2py_date = q.eval("new Date()")
+print('js2py_date', type(js2py_date).__name__, js2py_date)
+
+q.eval("""
+    (py2js_date) => console.log("py2js_date:", py2js_date)
+""")(datetime.datetime.now(datetime.timezone.utc))
 
 
 # import lmdb

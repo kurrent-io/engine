@@ -7,6 +7,7 @@ def generate_annotations(d, annos, t):
         if t in annos: return
         # handle type aliases for builtin types
         for (cls, jsname) in [
+            (Date, "Date"),
             (String, "string"),
             (Int, "number"),
             (Bool, "boolean"),
@@ -161,6 +162,11 @@ def generate_decoders(d, annos, decoders, t):
         if isinstance(t, (String, Int, Bool, Null, Literal, Json)):
             decoders[t] = identity_decoder
             # bulitin types and their aliases need no Decode{t.name}() function
+            return
+
+        if isinstance(t, Date):
+            decoders[t] = lambda val: f"new Date({val} as string)"
+            # no Decode{t.name}() needed
             return
 
         if hasattr(t, "ts_generate_decoder"):

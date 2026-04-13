@@ -37,6 +37,7 @@ from protos import (
     Array,
     Bool,
     Concrete,
+    Date,
     Int,
     Literal,
     Maybe,
@@ -51,66 +52,6 @@ from protos import (
 
 def Enum(*strings):
     return Union(*(Literal(s) for s in strings))
-
-class Timestamp(Concrete):
-    json_type = "string"
-
-    def __str__(self):
-        return "timestamp"
-
-    @staticmethod
-    def ts_generate_annotation(d, annos, visit):
-        return "Date"
-
-    @staticmethod
-    def ts_generate_decoder(d, annos, decoders, visit):
-        return lambda val: f"new Date({val} as string)"
-
-    @staticmethod
-    def py_generate_annotation(d, annos, visit, path):
-        return "datetime.datetime"
-
-    @staticmethod
-    def py_generate_checker(d, annos, decoders, visit):
-        return lambda val, path: (
-            "try:\n"
-            f"    datetime.datetime.strptime({val}, '%Y-%m-%dT%H:%M:%SZ')\n"
-            "except ValueError:\n"
-            "    try:\n"
-            f"        datetime.datetime.strptime({val}, '%Y-%m-%dT%H:%M:%S.%fZ')\n"
-            "    except ValueError:\n"
-            f"        problems += [{path} + ': invalid timestamp']\n"
-        )
-        # encoder example:
-        # datetime.datetime.now().astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-    @staticmethod
-    def go_generate_type(d, imports, annos, converters, visit, path):
-        imports["time"] = None
-        imports["fmt"] = None
-        d.print("\nfunc NewTimestamp(value goja.Value) time.Time {\n")
-        d.indent("\t")
-        d.print('strtime := value.Export().(string)\n')
-        d.print('out, err := time.Parse("2006-01-02T15:04:05Z", strtime)\n')
-        d.print('if err != nil {\n')
-        d.indent("\t")
-        d.print('panic(fmt.Sprintf("invalid timestamp (%v): %v", strtime, err))\n')
-        d.dedent()
-        d.print('}\n')
-        d.print('return out\n')
-        d.dedent()
-        d.print("}\n")
-        return "time.Time", lambda var: f"NewTimestamp({var})"
-
-    @staticmethod
-    def go_generate_checker(d, annos, decoders, visit):
-        return lambda var, path: (
-            f'if strtime, ok := {var}.Export().(string); !ok {{\n'
-            f'\terrs = append(errs, fmt.Errorf("%v: not a string", {path}))\n'
-            f'}} else if _, err := time.Parse("2006-01-02T15:04:05Z", strtime); err != nil {{\n'
-            f'\terrs = append(errs, fmt.Errorf("%v: not a valid timestamp: %w", {path}, err))\n'
-            f'}}\n'
-        )
 
 ###################
 ## Storage Layer ##
@@ -162,14 +103,14 @@ Hold = Struct(
     id=Uuid,
     patron=Uuid,
     target=Struct(book=Uuid) | Struct(edition=Isbn),
-    expires=Maybe(Timestamp),
+    expires=Maybe(Date),
 )
 
 Checkout = Struct(
     id=Uuid,
     book=Uuid,
     patron=Uuid,
-    expires=Timestamp,
+    expires=Date,
     overdue=Bool,  # server determination based on expires
 )
 
@@ -187,7 +128,7 @@ StatusStore = Store({
 VHold = Struct(
     id=Uuid,
     target=Struct(book=Uuid) | Struct(edition=Isbn),
-    expires=Maybe(Timestamp),
+    expires=Maybe(Date),
     # contains your id or nothing
     patron=Maybe(Uuid),
 )
@@ -195,7 +136,7 @@ VHold = Struct(
 VCheckout = Struct(
     id=Uuid,
     book=Uuid,
-    expires=Timestamp,
+    expires=Date,
     overdue=Bool,  # server determination based on expires
     # contains your id or nothing
     patron=Maybe(Uuid),
@@ -252,7 +193,7 @@ AddEdition = BookEvents.add(Struct(
     type=Literal("add-edition"),
     isbn=Isbn,
     title=String,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # stream: "books"
@@ -260,7 +201,7 @@ UpdateEditionTitle = BookEvents.add(Struct(
     type=Literal("update-edition-title"),
     isbn=Isbn,
     title=String,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # books: globally visible
@@ -271,7 +212,7 @@ AddBook = BookEvents.add(Struct(
     id=Uuid,
     isbn=Isbn,
     restricted=Bool,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # stream: "books"
@@ -279,14 +220,14 @@ UpdateBookRestricted = BookEvents.add(Struct(
     type=Literal("update-book-restricted"),
     id=Uuid,
     restricted=Bool,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # stream: "books"
 RemoveBook = BookEvents.add(Struct(
     type=Literal("remove-book"),
     id=Uuid,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # patrons: same data in frontend and backend, but client can only view self
@@ -299,7 +240,7 @@ AddPatron = PatronEvents.add(Struct(
     id=Uuid,
     name=String,
     researcher=Bool,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # stream: "patron.{patron_uuid}"
@@ -307,7 +248,7 @@ RenamePatron = PatronEvents.add(Struct(
     type=Literal("rename-patron"),
     id=Uuid,
     name=String,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # stream: "patron.{patron_uuid}"
@@ -315,7 +256,7 @@ AssignPatron = PatronEvents.add(Struct(
     type=Literal("assign-patron"),
     id=Uuid,
     researcher=Bool,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 StatusEvents = Union()
@@ -330,7 +271,7 @@ TryHold = StatusEvents.add(Struct(
     # can hold a specific book or just any generic one
     target=Struct(book=Uuid) | Struct(edition=Isbn),
     open=Bool,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # stream: "status"
@@ -344,7 +285,7 @@ CancelHold = StatusEvents.add(Struct(
 ExpireHold = StatusEvents.add(Struct(
     type=Literal("expire-hold"),
     id=Uuid,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # checkouts: fully visible to hold owners; partially visible globally
@@ -357,14 +298,14 @@ TryCheckout = StatusEvents.add(Struct(
     id=Uuid,
     patron=Uuid,
     book=Uuid,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # stream: "status"
 EndCheckout = StatusEvents.add(Struct(
     type=Literal("end-checkout"),
     checkout=Uuid,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # system-generated event
@@ -372,7 +313,7 @@ EndCheckout = StatusEvents.add(Struct(
 OverdueCheckout = StatusEvents.add(Struct(
     type=Literal("overdue-checkout"),
     checkout=Uuid,
-    timestamp=Timestamp,
+    timestamp=Date,
 ))
 
 # virtualized status (or "view of" status): sanitized data for clients to view.
@@ -389,8 +330,8 @@ NewVHold = DeciderEvents.add(Struct(
     id=Uuid,
     target=Struct(book=Uuid) | Struct(edition=Isbn),
     open=Bool,
-    expires=Maybe(Timestamp),
-    timestamp=Timestamp,
+    expires=Maybe(Date),
+    timestamp=Date,
     # DB stores patron, but the server strips it before streaming it to clients.
     patron=Maybe(Uuid),
 ))
@@ -413,7 +354,7 @@ NewVCheckout = DeciderEvents.add(Struct(
     type=Literal("new-vcheckout"),
     id=Uuid,
     book=Uuid,
-    expires=Timestamp,
+    expires=Date,
     # DB stores patron, but the server strips it before streaming it to clients.
     patron=Maybe(Uuid),
 ))

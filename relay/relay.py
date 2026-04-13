@@ -312,10 +312,10 @@ class Subscriber:
                         sanitized = wrap(event, json.dumps(temp))
 
                     # actually distribute the events
-                    for put, patron_id in (
-                        (put, patron_id) for patron_id, w in self.watches.items() for put in w
+                    for put, w_patron_id in (
+                        (put, w_patron_id) for w_patron_id, w in self.watches.items() for put in w
                     ):
-                        if typ == "vhold-rejected" and patron_id != j["patron"]:
+                        if typ == "vhold-rejected" and w_patron_id != j["patron"]:
                             # this event is only for the patron whose hold was rejected
                             continue
                         elif sanitized and patron_id not in (ADMIN, j["patron"]):

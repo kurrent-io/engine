@@ -137,6 +137,11 @@ class Bool(Concrete):
     def __repr__(self):
         return "bool"
 
+class Date(Concrete):
+    json_type = "string"
+    def __repr__(self):
+        return "Date"
+
 class Literal(Concrete):
     def __init__(self, value, /):
         self.value = value

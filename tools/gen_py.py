@@ -12,6 +12,7 @@ def generate_annotations(d, annos, t):
             (Bool, "bool"),
             (Json, "JSON"),
             (Null, "None"),
+            (Date, "datetime.datetime"),
         ]:
             if isinstance(t, cls):
                 if type(t) is cls:
@@ -206,6 +207,14 @@ def generate_checkers(d, annos, checkers, t):
             checkers[t] = lambda val, path: (
                 f"if {val} is not None:\n"
                 f"    problems += [{path} + f': is of type {{type({val}).__name__}}, not null']\n"
+            )
+            return
+        if isinstance(t, Date):
+            checkers[t] = lambda val, path: (
+                "try:\n"
+                f"    datetime.datetime.strptime({val}, '%Y-%m-%dT%H:%M:%SZ')\n"
+                "except ValueError:\n"
+                f"    problems += [{path} + ': invalid timestamp']\n"
             )
             return
         if isinstance(t, Literal):

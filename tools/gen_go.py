@@ -240,6 +240,23 @@ def generate_types(d, imports, annos, converters, t):
                 annos[t] = anno
                 converters[t] = converter
                 return
+        if isinstance(t, Date):
+            imports["time"] = None
+            annos[t] = "time.Time"
+            d.print("\nfunc ToDate(value goja.Value) time.Time {\n")
+            d.indent("\t")
+            d.print('strtime := value.Export().(string)\n')
+            d.print('out, err := time.Parse("2006-01-02T15:04:05Z", strtime)\n')
+            d.print('if err != nil {\n')
+            d.indent("\t")
+            d.print('panic(fmt.Sprintf("invalid timestamp (%v): %v", strtime, err))\n')
+            d.dedent()
+            d.print('}\n')
+            d.print('return out\n')
+            d.dedent()
+            d.print("}\n")
+            converters[t] = lambda var: f"ToDate({var})"
+            return
         # handle literals, which never need a type definition
         if isinstance(t, Literal):
             if isinstance(t.value, str):
@@ -679,6 +696,15 @@ def generate_checkers(d, annos, checkers, t):
             checkers[t] = lambda var, path: (
                 f'if typ := {var}.ExportType(); typ != reflectTypeNil {{\n'
                 f'\terrs = append(errs, fmt.Errorf("%v: is of type %v, not bool", {path}, typ))\n'
+                f'}}\n'
+            )
+            return
+        if isinstance(t, Date):
+            checkers[t] = lambda var, path: (
+                f'if strtime, ok := {var}.Export().(string); !ok {{\n'
+                f'\terrs = append(errs, fmt.Errorf("%v: not a string", {path}))\n'
+                f'}} else if _, err := time.Parse("2006-01-02T15:04:05Z", strtime); err != nil {{\n'
+                f'\terrs = append(errs, fmt.Errorf("%v: not a valid timestamp: %w", {path}, err))\n'
                 f'}}\n'
             )
             return

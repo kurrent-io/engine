@@ -8,6 +8,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <datetime.h>
 
 #include "quickjs/quickjs.h"
 
@@ -60,6 +61,7 @@ typedef struct {
     // js function for extracting a js stack
     JSValue add_source_map;
     JSValue show_stack;
+    JSClassID date_class_id;
 } py_quickjs_t;
 
 // a wrapper around a JSValue
@@ -212,6 +214,47 @@ die:
 }
 
 
+static PyObject *js2py_date(JSContext *ctx, JSValueConst val) {
+    JSValue valueOf = JS_UNINITIALIZED;
+    JSValue ms = JS_UNINITIALIZED;
+    PyObject *args = NULL;
+    PyObject *out = NULL;
+
+    // ms = val.valueOf()
+    valueOf = JS_GetPropertyStr(ctx, val, "valueOf");
+    if(JS_IsException(valueOf)) {
+        js_exception(ctx);
+        goto done;
+    }
+    ms = JS_Call(ctx, valueOf, val, 0, NULL);
+    if(JS_IsException(valueOf)) {
+        js_exception(ctx);
+        goto done;
+    }
+
+    // timestamp = double(ms) / 1000;
+    double timestamp;
+    int ret = JS_ToFloat64(ctx, &timestamp, ms);
+    if(ret){
+        js_exception(ctx);
+        goto done;
+    }
+    timestamp /= 1000;
+
+    // return datetime.datetime.fromtimestamp(timestamp, datetime.UTC)
+    PyObject* utc = PyDateTime_TimeZone_UTC;
+    args = Py_BuildValue("(dO)", timestamp, PyDateTime_TimeZone_UTC);
+    if(!args) goto done;
+    Py_INCREF(utc); // freeing args later will free utc singleton, so incref now
+    out = PyDateTime_FromTimestamp(args);
+
+done:
+    JS_FreeValue(ctx, valueOf);
+    JS_FreeValue(ctx, ms);
+    Py_CLEAR(args);
+    return out;
+}
+
 // borrows val, this
 static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
     int tag = JS_VALUE_GET_TAG(val);
@@ -270,13 +313,18 @@ static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
         return out;
     }
 
+    // then check for a Date object, since datetime.datetime can't be made into a weakref
+    py_quickjs_t *q = JS_GetContextOpaque(ctx);
+    if (JS_GetClassID(val) == q->date_class_id) {
+        return js2py_date(ctx, val);
+    }
+
     // more sophisticated types get more cleanup
     bool success = false;
     PyObject *pywr = NULL;
     JSValue jswr = JS_UNINITIALIZED;
 
     // next: check if we have a weakref to a working python object
-    py_quickjs_t *q = JS_GetContextOpaque(ctx);
     jswr = JS_GetProperty(ctx, val, q->weakref_symbol);
     if(JS_IsException(jswr)){
         js_exception(ctx);
@@ -306,6 +354,7 @@ static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
     if(JS_IsFunction(ctx, val)){
         // wrap value in Function
         out = py_value_new(ctx, val, this);
+        if(!out) goto done;
         goto embed_weakref;
     }
 
@@ -409,6 +458,40 @@ done:
     return out;
 }
 
+static JSValue py2js_date(JSContext *ctx, PyObject *val) {
+    PyObject *method = NULL;
+    PyObject *timestamp = NULL;
+    JSValue out = JS_EXCEPTION;
+
+    // timestamp = val.timestamp()
+    method = PyObject_GetAttrString(val, "timestamp");
+    if(!method){
+        py_exception(ctx);
+        goto done;
+    }
+    timestamp = PyObject_CallNoArgs(method);
+    if(!timestamp){
+        py_exception(ctx);
+        goto done;
+    }
+
+    // ms = timestamp * 1000;
+    double ms = PyFloat_AsDouble(timestamp);
+    if(ms == -1 && PyErr_Occurred()){
+        py_exception(ctx);
+        goto done;
+    }
+    ms *= 1000;
+
+    // return new Date(ms)
+    out = JS_NewDate(ctx, ms);
+
+done:
+    Py_CLEAR(method);
+    Py_CLEAR(timestamp);
+    return out;
+}
+
 // borrows val
 static JSValue py2js(JSContext *ctx, PyObject *val) {
     // is object a singleton?
@@ -439,6 +522,16 @@ static JSValue py2js(JSContext *ctx, PyObject *val) {
             return py_exception(ctx);
         }
         return JS_NewInt64(ctx, i);
+    }
+
+    // is object a datetime.datetime?
+    if(PyDateTime_Check(val)){
+        // make sure the caller remembers to provide utc timezone; that's all we support
+        if(PyDateTime_DATE_GET_TZINFO(val) != PyDateTime_TimeZone_UTC) {
+            PyErr_Format(PyExc_ValueError, "non-utc datetime not supported");
+            return py_exception(ctx);
+        }
+        return py2js_date(ctx, val);
     }
 
     // is object a _quickjs.Value?
@@ -886,6 +979,15 @@ static int py_quickjs_init(py_quickjs_t *self, PyObject *args, PyObject *kwds){
         PyErr_SetString(PyExc_RuntimeError, "failed to create PyRef javascript class");
         return -1;
     }
+
+    // get the class_id of Date
+    JSValue date = JS_NewDate(self->ctx, 0);
+    if(JS_IsException(date)){
+        (void)js_exception(self->ctx);
+        return -1;
+    }
+    self->date_class_id = JS_GetClassID(date);
+    JS_FreeValue(self->ctx, date);
 
     // remember this struct for later
     JS_SetContextOpaque(self->ctx, self);
@@ -2280,6 +2382,10 @@ static struct PyModuleDef _quickjs_module = {
 // main entrypoint for python module
 PyObject* PyInit__quickjs(void);
 PyObject* PyInit__quickjs(void){
+    // import datetime (C api)
+    PyDateTime_IMPORT;
+    if (PyErr_Occurred()) return NULL;
+
     if (PyType_Ready(&py_quickjs_type) < 0) return NULL;
     if (PyType_Ready(&py_value_type) < 0) return NULL;
     if (PyType_Ready(&py_opaque_type) < 0) return NULL;
