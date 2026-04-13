@@ -2354,7 +2354,7 @@ export class Framework<QX, RX, E, C> {
       // optional: configure storage before any events arrive
       migrate?: (rx: RX) => Reducer<void>,
       // required: reduce a batch of events into the read model
-      reducer: (rx: RX, events: E[]) => Reducer<void>,
+      reducer: (rx: RX, events: E[]) => Reducer<void | any[]>,
       // optional: forecast the events a server will send for a batch of commands
       forecaster?: (commands: C) => E[],
       // required if using sendCommands: receive events to send on the wire

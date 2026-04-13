@@ -280,21 +280,24 @@ class Subscriber:
                     for put in (put for w in self.watches.values() for put in w):
                         put(wrapped)
 
-                # a subset of status events also have global distribution
-                # (these are not re-written by the decider)
+                # events with limited distribution
                 case ("status",):
                     j = json.loads(event.data)
                     typ = j["type"]
-                    if typ not in ("cancel-hold", "expire-hold", "end-checkout"):
-                        continue
-                    for put in (put for w in self.watches.values() for put in w):
-                        put(wrapped)
+                    if typ in ("cancel-hold", "expire-hold", "end-checkout"):
+                        # global distribution for these event types
+                        for put in (put for w in self.watches.values() for put in w):
+                            put(wrapped)
+                    else:
+                        # admin-only distribution for the rest
+                        for put in self.watches.get(ADMIN, []):
+                            put(wrapped)
 
-                # events with limited distribution
                 case ("patron", patron_id):
+                    # each patron sees their own patron events
                     for put in self.watches.get(patron_id, []):
                         put(wrapped)
-                    # always include admins
+                    # and admins see everyone
                     for put in self.watches.get(ADMIN, []):
                         put(wrapped)
 
@@ -315,10 +318,12 @@ class Subscriber:
                     for put, w_patron_id in (
                         (put, w_patron_id) for w_patron_id, w in self.watches.items() for put in w
                     ):
+                        # skip admins; they don't care about vstatus
+                        if w_patron_id == ADMIN: continue
                         if typ == "vhold-rejected" and w_patron_id != j["patron"]:
                             # this event is only for the patron whose hold was rejected
                             continue
-                        elif sanitized and patron_id not in (ADMIN, j["patron"]):
+                        elif sanitized and w_patron_id != j["patron"]:
                             # emit sanitized message
                             put(sanitized)
                         else:
@@ -339,13 +344,14 @@ class Subscriber:
             filter_include=(
                 "books",
                 patron_stream_prefix,
-                "vstatus",
+                # admins reads all of status; everyone else reads a subset of vstatus
+                "status" if patron_id == ADMIN else "vstatus",
             ),
         ) as stream:
             async for event in stream:
                 # TODO: why is this necessary?  Seems really annoying...
                 if event.commit_position == since: continue
-                if patron_id == ADMIN or event.stream_name != "vstatus":
+                if event.stream_name != "vstatus":
                     yield wrap(event), event.commit_position
                     continue
                 # sanitize the vstatus stream
@@ -356,7 +362,7 @@ class Subscriber:
                     if patron_id == j["patron"]:
                         yield wrap(event), event.commit_position
                     continue
-                if typ in ("new-vhold", "new-vcheckout") and patron_id not in (ADMIN, j["patron"]):
+                if typ in ("new-vhold", "new-vcheckout") and patron_id != j["patron"]:
                     # sanitize
                     del j["patron"]
                 yield wrap(event, json.dumps(j)), event.commit_position

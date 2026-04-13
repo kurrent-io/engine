@@ -92,8 +92,8 @@ Patron = Struct(
     holds=Setx,
 )
 
-# servers and clients keep data in the same shape, but clients will only have
-# their own info here
+# servers and clients keep data in the same shape, but unprivileged clients
+# will only have their own info here
 PatronStore = Store({
     "patron.{patron_uuid}": Patron,
     "patrons": Setx,
@@ -163,14 +163,18 @@ DeciderStore = Store(
     {"decider_events": Array(DeciderEvents)},
 )
 
-# The (unprivileged) client will need:
+# The (unprivileged) user client will need:
 # - all book data
 # - a shard of the patron data, which is really just themselves
 #    - this can conveniently be typed the same as the full patron data
-# - all virtualized status data for
+# - all virtualized status data
+# - a place to store UI messages that originate in the reducers
 UserStore = Store(BookStore, PatronStore, VStatusStore, {
     "messages": Array(String),
 })
+
+# The admin client will need all state, but it relies on State, not VState
+AdminStore = Store(BookStore, PatronStore, StatusStore)
 
 #################
 ## Event Layer ##
@@ -348,6 +352,14 @@ VHoldRejected = DeciderEvents.add(Struct(
     patron=Uuid,
 ))
 
+# If a patron is demoted, their now-invalid holds get canceled by the system.  Other patrons won't
+# see the demotion so we need to broadcast this.
+EndVHold = DeciderEvents.add(Struct(
+    type=Literal("end-vhold"),
+    id=Uuid,
+    timestamp=Date,
+))
+
 # Similar to NewVHold, but for checkouts.
 # stream: "vstatus"
 NewVCheckout = DeciderEvents.add(Struct(
@@ -362,23 +374,18 @@ NewVCheckout = DeciderEvents.add(Struct(
 # Note: there is no VCheckoutRejected because only the front desk, which has
 # admin privileges, can create checkouts in the first place.
 
-# VStatusEvents are the StatusEvents which need no sanitation plus DeciderEvents
-# XXX: why are OverdueCheckout and ExpireHold here too?
-VStatusEvents = (
-    CancelHold | ExpireHold | EndCheckout | OverdueCheckout | DeciderEvents
-)
-
 # union of all state-related events
 LibraryEvents = BookEvents | PatronEvents | StatusEvents | DeciderEvents
 
 # predefine some frameworks
 UserFramework = Framework(LibraryEvents, LibraryEvents, UserStore)
+AdminFramework = Framework(LibraryEvents, LibraryEvents, AdminStore)
 DeciderFramework = Framework(LibraryEvents, LibraryEvents, DeciderStore)
 
 ################
 
-# A user has very limited write capabilities.  Each of these events may be written but only to their
-# own patron_uuid.
+# A patron has very limited write capabilities.  Each of these events may be written but only to
+# their own patron_uuid.
 PatronCommands = (
     RenamePatron
     | TryHold

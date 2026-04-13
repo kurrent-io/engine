@@ -42,6 +42,7 @@ import {
   DecodeAdminCommands,
   DecodePatronCommands,
   EndCheckout,
+  EndVHold,
   ExpireHold,
   Hold,
   LibraryEvents,
@@ -61,6 +62,7 @@ import {
   UpdateBookRestricted,
   UpdateEditionTitle,
   UserRX,
+  AdminRX,
   VCheckout,
   VHold,
   VHoldRejected,
@@ -97,6 +99,12 @@ export function *deciderMigrate(rx: DeciderRX): Reducer<void> {
   yield* rx.set.decider_events(
     (yield* rx.get.decider_events()) ?? []
   );
+}
+
+export function *adminMigrate(rx: AdminRX): Reducer<void> {
+  yield* migrateBooks(rx);
+  yield* migratePatrons(rx);
+  yield* migrateStatus(rx);
 }
 
 export function *userMigrate(rx: UserRX): Reducer<void> {
@@ -180,7 +188,14 @@ function *reduceAssignPatron(
       if ("edition" in hold.target) continue;
       const book = yield* rx.get.book(hold.target.book);
       if (!book.restricted) continue;
+      // hold is now invalid!
       invalidHolds.push(hold_uuid);
+      // update book as not held
+      yield* rx.update.book(hold.target.book, (book) => delete book.status);
+      // remove hold from patron (saved at the end)
+      delete patron.holds[hold_uuid];
+      // delete this hold
+      yield* rx.del.hold(hold_uuid);
     }
   }
   yield* rx.set.patron(e.id, patron);
@@ -452,7 +467,7 @@ function *reduceVHoldRejected(rx: UserRX, e: VHoldRejected, sent: any[]): Reduce
   sent.push({ type: "try-hold", id: e.id })
 }
 
-function *reduceVEndHold(rx: FullVStatusRX, e: CancelHold|ExpireHold): Reducer<void> {
+function *reduceEndVHold(rx: FullVStatusRX, e: EndVHold|CancelHold|ExpireHold): Reducer<void> {
   // look up the hold
   const hold = yield* rx.get.hold(e.id);
   // be idempotent
@@ -501,7 +516,9 @@ function *reduceVEndCheckout(rx: FullVStatusRX, e: EndCheckout): Reducer<void> {
 
 /* ----- compositions of individual reducers ----- */
 
-export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer<void> {
+// The decider and the front desk admin both have access to all events, so we can share the same
+// reducer logic for both components.
+function *privilegedReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<DeciderEvents[]> {
   const deciderEvents: DeciderEvents[] = [];
 
   for (const e of events) {
@@ -517,20 +534,7 @@ export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer
       case "assign-patron": {
         const invalidHolds = yield* reduceAssignPatron(rx, e);
         for (const hold_uuid of invalidHolds) {
-          const hold = yield* rx.get.hold(hold_uuid);
-          if ("book" in hold.target) {
-            // update book as not held
-            yield* rx.update.book(hold.target.book, (book) => delete book.status);
-          } else {
-            // remove a hold from the edition
-            yield* rx.update.edition(
-              hold.target.edition, (edition) => delete edition.holds[hold.id],
-            );
-          }
-          // remove hold from patron
-          yield* rx.update.patron(hold.patron, (patron) => delete patron.holds[hold_uuid]);
-          // delete this hold
-          yield* rx.del.hold(hold_uuid);
+          deciderEvents.push({ type: "end-vhold", id: hold_uuid, timestamp: new Date() })
         }
       } break;
 
@@ -563,6 +567,7 @@ export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer
       // ignored events
       case "new-vhold":
       case "vhold-rejected":
+      case "end-vhold":
       case "new-vcheckout":
         break
 
@@ -572,11 +577,22 @@ export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer
     }
   }
 
+  return deciderEvents;
+}
+
+export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer<void> {
   // save the deciderEvents we just created
+  const deciderEvents = yield* privilegedReducer(rx, events);
   yield* rx.set.decider_events(deciderEvents);
 }
 
-// user composition of reducers
+// administrator composition of reducers; for ui (priviledged)
+export function *adminReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<void> {
+  // like deciderReducer, we can use the privilegedReducer, only we then discard the decider events
+  privilegedReducer(rx, events);
+}
+
+// patron composition of reducers; for ui (unprivileged)
 export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]> {
   const sent: any[] = [];
   for (const e of events) {
@@ -595,7 +611,8 @@ export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]
       case "new-vhold":        yield* reduceNewVHold(rx, e, sent);       break;
       case "vhold-rejected":   yield* reduceVHoldRejected(rx, e, sent);  break;
       case "cancel-hold":      // fallthru
-      case "expire-hold":      yield* reduceVEndHold(rx, e);             break;
+      case "expire-hold":      // fallthru
+      case "end-vhold":        yield* reduceEndVHold(rx, e);             break;
       case "new-vcheckout":    yield* reduceNewVCheckout(rx, e);         break;
       case "end-checkout":     yield* reduceVEndCheckout(rx, e);         break;
       case "overdue-checkout": yield* reduceOverdueCheckout(rx, e);      break;
@@ -657,6 +674,7 @@ function *relayReduceOne(rx: RelayRX, e: LibraryEvents): Reducer<void> {
     // building state
     case "new-vhold":
     case "vhold-rejected":
+    case "end-vhold":
     case "new-vcheckout":
       break;
 

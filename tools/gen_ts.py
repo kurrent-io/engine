@@ -503,7 +503,7 @@ export class {f.name} extends Framework<{QX}, {RX}, {event_type}, {command_type}
       // optional: configure storage before any events arrive
       migrate?: (rx: {RX}) => Reducer<void>,
       // required: reduce a batch of events into the read model
-      reducer: (rx: {RX}, events: {event_type}[]) => Reducer<void>,
+      reducer: (rx: {RX}, events: {event_type}[]) => Reducer<void | any[]>,
       // optional: forecast the events a server will send for a command
       forecaster?: (commands: {command_type}) => {event_type}[],
       // required if using sendCommands: receive events to send on the wire

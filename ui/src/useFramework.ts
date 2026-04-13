@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   InMemStorage,
+  AdminFramework,
   UserFramework,
   userMigrate,
   userReducer,
@@ -8,11 +9,25 @@ import {
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
+// function overload signature: without patronId, return AdminFramework
 export function useFramework(
   relayUrl: string,
-  patronId: string,
   enabled: boolean,
-): [UserFramework, ConnectionState] {
+): [AdminFramework, ConnectionState];
+
+// function overload signature: with patronId, return UserFramework
+export function useFramework(
+  relayUrl: string,
+  enabled: boolean,
+  patronId: string,
+): [UserFramework, ConnectionState];
+
+// implementation signature: returns either AdminFramework or UserFramework
+export function useFramework(
+  relayUrl: string,
+  enabled: boolean,
+  patronId?: string,
+): [UserFramework | AdminFramework, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
 

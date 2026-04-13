@@ -210,7 +210,7 @@ export default function PatronWindow({
   relayUrl: string;
 }) {
   const [enabled, setEnabled] = useState(true);
-  const [fw, connState] = useFramework(relayUrl, patronId, enabled);
+  const [fw, connState] = useFramework(relayUrl, enabled, patronId);
 
   const patronLookup = useCallback(function*(qx: UserQX): QueryGenerator<PatronInfo> {
     const patron = yield* qx.get.patron(patronId);
