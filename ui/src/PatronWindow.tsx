@@ -102,6 +102,7 @@ function BookItem({
           {/* hold or cancel-hold */}
           {heldNormal ? <Button
               size="small"
+              loading={book.hold!.forecasted}
               onClick={() => onCancelHold(book.hold!.id)}
               color={"green"}
               variant={"solid"}>Cancel Hold</Button>
@@ -114,6 +115,7 @@ function BookItem({
           {/* hold-restricted or cancel-hold-restricted */}
           {heldRestricted ? <Button
               size="small"
+              loading={book.hold!.forecasted}
               onClick={() => onCancelHold(book.hold!.id)}
               color={"green"}
               variant={"solid"}>Cancel Hold</Button>

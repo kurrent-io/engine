@@ -5,5 +5,5 @@ export {
   relayMigrate,
   relayReducer,
   validateAdminCommands,
-  validatePatronCommands,
+  validateUserCommands,
 } from "./reducers";

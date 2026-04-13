@@ -8,4 +8,4 @@ export {
   DecodeLibraryEvents,
   InMemStorage,
 } from "./library.gen";
-export { userMigrate, userReducer, adminMigrate, adminReducer } from "./reducers";
+export { userMigrate, userReducer, userForecaster, adminMigrate, adminReducer } from "./reducers";

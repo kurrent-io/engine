@@ -7,6 +7,7 @@ import {
   adminReducer,
   userMigrate,
   userReducer,
+  userForecaster,
 } from './model';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
@@ -47,6 +48,7 @@ export function useFramework(
       return new UserFramework(storage, {
         migrate: userMigrate,
         reducer: userReducer,
+        forecaster: userForecaster,
         onCommands,
       });
     } else {

@@ -38,7 +38,6 @@ def main():
     patrons = [
         ("patron-1", "Alice", True),
         ("patron-2", "Bob", False),
-        ("patron-3", "Charlie", False),
     ]
 
     # add editions and books

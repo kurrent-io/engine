@@ -40,7 +40,7 @@ import {
   DeciderEvents,
   DeciderRX,
   DecodeAdminCommands,
-  DecodePatronCommands,
+  DecodeUserCommands,
   Edition,
   EndCheckout,
   EndVHold,
@@ -51,7 +51,7 @@ import {
   NewVHold,
   NoSet,
   OverdueCheckout,
-  PatronCommands,
+  UserCommands,
   PatronRX,
   Reducer,
   RelayRX,
@@ -523,6 +523,8 @@ function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold, sent: any[]): Reducer<v
     yield* rx.update.patron(e.patron, (patron) => patron.holds[e.id] = true);
     sent.push({ type: "try-hold", id: e.id });
   }
+  // handle special forecasted flag, to indicate unresolved requests
+  if (e.forecasted) hold.forecasted = true;
   yield* rx.set.hold(e.id, hold);
   // update hold target (book or edition)
   if ("book" in hold.target) {
@@ -704,6 +706,32 @@ export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]
   return sent;
 }
 
+export function userForecaster(cmd: UserCommands): LibraryEvents[] {
+  switch(cmd.type){
+    // commands which are virtually guaranteed to land don't need any kind of visualization
+    case "rename-patron":
+    case "cancel-hold":
+      return [cmd];
+
+    // while commands which are racy need an indicator so the UI can show they're unresolved.
+    case "try-hold":
+      return [{
+        type: "new-vhold",
+        id: cmd.id,
+        target: cmd.target,
+        open: cmd.open,
+        timestamp: cmd.timestamp,
+        patron: cmd.patron,
+        // here's our special indicator
+        forecasted: true,
+      }];
+
+    default:
+      const _typecheck: never = cmd;
+      return _typecheck;
+  }
+}
+
 /* ---------- relay logic below ----------
 
    The relay logic is a little special because it doesn't do anything "intelligent" with the read
@@ -768,7 +796,7 @@ export function *relayReducer(rx: RelayRX, events: LibraryEvents[]): Reducer<voi
 
 // Validate incoming commands from a patron.  Returns an error, or an empty string.
 function *validatePatronOne(
-  rx: RelayRX, patron: string, e: PatronCommands, newUuids: string[],
+  rx: RelayRX, patron: string, e: UserCommands, newUuids: string[],
 ): Reducer<string> {
   switch(e.type){
     case "rename-patron":
@@ -892,12 +920,12 @@ export function *validateAdminCommands(
 
 // events shall be raw json (still needs decoding)
 // returns [newUuids[], error]
-export function *validatePatronCommands(
+export function *validateUserCommands(
   rx: RelayRX, events: unknown[], patron: string,
 ): Reducer<[string[], string]> {
   const newUuids: string[] = [];
   for (const e of events) {
-    const d = DecodePatronCommands(e);
+    const d = DecodeUserCommands(e);
     const err = yield* validatePatronOne(rx, patron, d, newUuids);
     if (err) return [newUuids, err];
     yield* relayReduceOne(rx, d);

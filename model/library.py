@@ -134,6 +134,8 @@ VHold = Struct(
     expires=Maybe(Date),
     # contains your id or nothing
     patron=Maybe(Uuid),
+    # this is only ever set to true by the userForecaster
+    forecasted=Maybe(Literal(True)),
 )
 
 VCheckout = Struct(
@@ -341,6 +343,8 @@ NewVHold = DeciderEvents.add(Struct(
     timestamp=Date,
     # DB stores patron, but the server strips it before streaming it to clients.
     patron=Maybe(Uuid),
+    # this is only ever set to true by the userForecaster
+    forecasted=Maybe(Literal(True)),
 ))
 
 # Similarly, since clients cannot have enough information to make hold decisions
@@ -380,26 +384,25 @@ NewVCheckout = DeciderEvents.add(Struct(
 # union of all state-related events
 LibraryEvents = BookEvents | PatronEvents | StatusEvents | DeciderEvents
 
-# predefine some frameworks
-UserFramework = Framework(LibraryEvents, LibraryEvents, UserStore)
-AdminFramework = Framework(LibraryEvents, LibraryEvents, AdminStore)
 DeciderFramework = Framework(LibraryEvents, LibraryEvents, DeciderStore)
 
 ################
 
 # A patron has very limited write capabilities.  Each of these events may be written but only to
 # their own patron_uuid.
-PatronCommands = (
+UserCommands = (
     RenamePatron
     | TryHold
     | CancelHold
 )
 
+UserFramework = Framework(LibraryEvents, UserCommands, UserStore)
+
 # An admin (the librarian at the front desk) has most of the write capabilities in the system,
 # except they cannot create decider-specific events.
 AdminCommands = (
-    # admin can create PatronCommands with whatever patron_uuid they want
-    PatronCommands
+    # admin can create UserCommands with whatever patron_uuid they want
+    UserCommands
     | AddEdition
     | UpdateEditionTitle
     | AddBook
@@ -411,9 +414,11 @@ AdminCommands = (
     | EndCheckout
 )
 
-# ok, technically PatronCommands is a subset of AdminCommands, but this expresses that the relay is
+AdminFramework = Framework(LibraryEvents, AdminCommands, AdminStore)
+
+# ok, technically UserCommands is a subset of AdminCommands, but this expresses that the relay is
 # going to relay commands from both types of clients.
-RelayCommands = Alias(PatronCommands | AdminCommands)
+RelayCommands = Alias(UserCommands | AdminCommands)
 
 RelayHold = Struct(patron=Uuid)
 

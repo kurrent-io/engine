@@ -344,19 +344,26 @@ class Subscriber:
             filter_include=(
                 "books",
                 patron_stream_prefix,
-                # admins reads all of status; everyone else reads a subset of vstatus
-                "status" if patron_id == ADMIN else "vstatus",
+                "status",
+                "vstatus",
             ),
         ) as stream:
             async for event in stream:
                 # TODO: why is this necessary?  Seems really annoying...
                 if event.commit_position == since: continue
-                if event.stream_name != "vstatus":
+                if event.stream_name not in ("status", "vstatus"):
                     yield wrap(event), event.commit_position
                     continue
-                # sanitize the vstatus stream
+                # we'll need to examine the event to know how to distribute it
                 j = json.loads(event.data)
                 typ = j["type"]
+                if event.stream_name == "status":
+                    # admin gets all status events, users get some
+                    if patron_id == ADMIN or typ in ("cancel-hold", "expire-hold", "end-checkout"):
+                        yield wrap(event), event.commit_position
+                    continue
+                # vstatus stream needs sanitizing
+                assert event.stream_name == "vstatus"
                 if typ == "vhold-rejected":
                     # only yield those which match our patron_id
                     if patron_id == j["patron"]:
@@ -498,7 +505,7 @@ class Reader:
         if patron_id == ADMIN:
             self.validator = fw.module["validateAdminCommands"]
         else:
-            func = fw.module["validatePatronCommands"]
+            func = fw.module["validateUserCommands"]
             self.validator = lambda rx, events: func(rx, events, self.patron_id)
 
     async def run(self) -> None:
