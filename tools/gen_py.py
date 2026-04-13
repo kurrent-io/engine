@@ -214,7 +214,10 @@ def generate_checkers(d, annos, checkers, t):
                 "try:\n"
                 f"    datetime.datetime.strptime({val}, '%Y-%m-%dT%H:%M:%SZ')\n"
                 "except ValueError:\n"
-                f"    problems += [{path} + ': invalid timestamp']\n"
+                "    try:\n"
+                f"        datetime.datetime.strptime({val}, '%Y-%m-%dT%H:%M:%S.%fZ')\n"
+                "    except ValueError:\n"
+                f"        problems += [{path} + ': invalid timestamp']\n"
             )
             return
         if isinstance(t, Literal):

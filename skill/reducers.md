@@ -123,18 +123,69 @@ type and forget to handle it, TypeScript will report an error.
 
 ## Cross-Store Access with NoSet
 
-When a reducer needs read access to a store it doesn't own, use `NoSet<T>` to strip the `set` and
-`del` operations:
+When a reducer needs access to a store it doesn't own, use `NoSet<T>` to strip the `set` operation
+(only `set` — `get`, `del`, `update`, and `old` all remain). `set` is stripped because it has
+type-safety issues with union types. Using `NoSet<StatusRX|VStatusRX>` lets the same reducer work
+in both the decider (StatusRX) and user (VStatusRX) contexts:
 
 ```typescript
-function *reduceAssignPatron(
-  rx: PatronRX & BookRX & NoSet<StatusRX|VStatusRX>, e: AssignPatron,
+function *reduceUpdateBookRestricted(
+  rx: BookRX & NoSet<StatusRX|VStatusRX> & PatronRX, e: UpdateBookRestricted,
 ): Reducer<string[]> {
-  // can read from StatusRX (holds) but can't write to it
-  const hold = yield* rx.get.hold(hold_uuid);
+  // can read holds from StatusRX or VStatusRX
+  const hold = yield* rx.get.hold(holdId);
+  // can delete holds
+  yield* rx.del.hold(holdId);
+  // can update patrons (PatronRX is not wrapped in NoSet)
+  yield* rx.update.patron(hold.patron, (p) => delete p.holds[holdId]);
   // ...
 }
 ```
+
+When a reducer invalidates entities from another store, return the IDs rather than emitting events
+directly. The caller (`privilegedReducer`) is responsible for emitting the corresponding decider
+events:
+
+```typescript
+// in privilegedReducer:
+case "update-book-restricted": {
+  const invalidHolds = yield* reduceUpdateBookRestricted(rx, e);
+  for (const hold_uuid of invalidHolds) {
+    deciderEvents.push({ type: "end-vhold", id: hold_uuid, timestamp: new Date() })
+  }
+} break;
+```
+
+## Safety Patterns
+
+**Idempotency guards:** Check if an update is actually changing anything before doing work. This
+prevents unnecessary side effects and makes correctness obvious:
+
+```typescript
+const book = yield* rx.get.book(e.id);
+if (book.restricted === e.restricted) return [];  // no-op
+```
+
+**Relevance guards:** When an event might trigger cascading effects, check preconditions explicitly.
+For example, marking a book restricted only affects the unrestricted pool if the book was available:
+
+```typescript
+if (!e.restricted || book.status) return [];  // only available→restricted matters
+```
+
+**Optional fields:** When working with `NoSet<StatusRX|VStatusRX>`, types are the union of both
+stores. For example, `Hold.patron` is always a string, but `VHold.patron` is optional (other
+patrons' holds are anonymous). Guard with `if`, never use `!`:
+
+```typescript
+if (hold.patron) {
+  yield* rx.update.patron(hold.patron, (p) => delete p.holds[holdId]);
+}
+```
+
+**Don't rely on object key order.** Copy-on-write proxies and serialization layers may not preserve
+JS insertion order. When ordering matters (e.g. "end the most recently added hold"), use explicit
+data like timestamps.
 
 ## Migrations
 

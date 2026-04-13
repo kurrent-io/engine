@@ -73,6 +73,7 @@ Book = Struct(
     id=Uuid,
     isbn=Isbn,
     restricted=Bool,
+    timestamp=Date,
     # book-level holds and checkouts
     status=Maybe(Struct(hold=Uuid) | Struct(checkout=Uuid)),
 )
@@ -103,6 +104,7 @@ Hold = Struct(
     id=Uuid,
     patron=Uuid,
     target=Struct(book=Uuid) | Struct(edition=Isbn),
+    timestamp=Date,
     expires=Maybe(Date),
 )
 
@@ -128,6 +130,7 @@ StatusStore = Store({
 VHold = Struct(
     id=Uuid,
     target=Struct(book=Uuid) | Struct(edition=Isbn),
+    timestamp=Date,
     expires=Maybe(Date),
     # contains your id or nothing
     patron=Maybe(Uuid),

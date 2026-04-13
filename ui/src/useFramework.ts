@@ -3,6 +3,8 @@ import {
   InMemStorage,
   AdminFramework,
   UserFramework,
+  adminMigrate,
+  adminReducer,
   userMigrate,
   userReducer,
 } from './model';
@@ -34,17 +36,26 @@ export function useFramework(
   // create a framework instance once, for the lifetime of this hook
   const fw = useMemo(() => {
     const storage = new InMemStorage();
-    return new UserFramework(storage, {
-      migrate: userMigrate,
-      reducer: userReducer,
-      onCommands: (commands) => {
-        const ws = wsRef.current;
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        for (const cmd of commands) {
-          ws.send(JSON.stringify(cmd));
-        }
-      },
-    });
+    const onCommands = (commands: any[]) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      for (const cmd of commands) {
+        ws.send(JSON.stringify(cmd));
+      }
+    };
+    if (patronId !== undefined) {
+      return new UserFramework(storage, {
+        migrate: userMigrate,
+        reducer: userReducer,
+        onCommands,
+      });
+    } else {
+      return new AdminFramework(storage, {
+        migrate: adminMigrate,
+        reducer: adminReducer,
+        onCommands,
+      });
+    }
   }, []);
 
   useEffect(() => {

@@ -11,6 +11,7 @@ import {
 import { useQuery } from './useQuery';
 import { useFramework } from './useFramework';
 import { generateUuid } from './util';
+import { colorHash } from './colorhash';
 
 const { Text } = Typography;
 
@@ -161,16 +162,18 @@ function Books({
     for (const isbn of Object.keys(editions)) {
       const edition = yield* qx.get.edition(isbn);
       let availableNormal = 0;
-      let availableRestricted = [];
+      const restrictedBooks: {id: string, timestamp: Date}[] = [];
       for (const bookId of Object.keys(edition.books)) {
         const book = yield* qx.get.book(bookId);
         if (book.status) continue; // held or checked out
         if (book.restricted) {
-          availableRestricted.push(book.id);
+          restrictedBooks.push({id: book.id, timestamp: book.timestamp});
         } else {
           availableNormal++;
         }
       }
+      restrictedBooks.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      const availableRestricted = restrictedBooks.map(b => b.id);
       // edition-level holds consume normal copies
       availableNormal -= Object.keys(edition.holds).length;
       // check if patron holds this edition or any book in it
@@ -180,6 +183,7 @@ function Books({
       }
       out.push({ isbn, title: edition.title, availableNormal, availableRestricted, hold });
     }
+    out.sort((a, b) => a.title.localeCompare(b.title));
     return out;
   }, [patronId]);
 
@@ -248,9 +252,15 @@ export default function PatronWindow({
       title={
         <Flex align="center" gap="small">
           {patron
-            ? <PatronName name={patron.name} onRename={(newName) => fw.sendCommands([
-                { type: "rename-patron", id: patronId, name: newName, timestamp: new Date() },
-              ])} />
+            ? <span style={{
+                backgroundColor: colorHash(patronId),
+                padding: '2px 8px',
+                borderRadius: 4,
+              }}>
+                <PatronName name={patron.name} onRename={(newName) => fw.sendCommands([
+                  { type: "rename-patron", id: patronId, name: newName, timestamp: new Date() },
+                ])} />
+              </span>
             : <Spin size="small" />
           }
           {patron?.researcher && <Tag color="green">researcher</Tag>}

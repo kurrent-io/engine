@@ -41,6 +41,7 @@ import {
   DeciderRX,
   DecodeAdminCommands,
   DecodePatronCommands,
+  Edition,
   EndCheckout,
   EndVHold,
   ExpireHold,
@@ -143,20 +144,88 @@ function *reduceAddBook(rx: BookRX, e: AddBook): Reducer<void> {
     id: e.id,
     isbn: e.isbn,
     restricted: e.restricted,
+    timestamp: e.timestamp,
   });
   // add book to edition
   yield* rx.update.edition(e.isbn, (edition) => edition.books[e.id] = true);
 }
 
-function *reduceUpdateBookRestricted(rx: BookRX, e: UpdateBookRestricted): Reducer<void> {
-  yield* rx.update.book(e.id, (book) => book.restricted = true);
+type RebalanceRX = BookRX & NoSet<StatusRX|VStatusRX> & PatronRX;
+
+// End the most-recently-added edition-level holds until holds <= available unrestricted books.
+// Returns IDs of ended holds.  Caller must emit end-vhold decider events for each.
+function *rebalanceEditionHolds(
+  rx: RebalanceRX, edition: Edition,
+): Reducer<string[]> {
+  const editionHoldIds = Object.keys(edition.holds);
+  if (editionHoldIds.length === 0) return [];
+  let available = 0;
+  for (const bookId of Object.keys(edition.books)) {
+    const b = yield* rx.get.book(bookId);
+    if (!b.status && !b.restricted) available++;
+  }
+  if (editionHoldIds.length <= available) return [];
+  // sort holds by timestamp descending so we end the most recent first
+  const holds = [];
+  for (const holdId of editionHoldIds) {
+    holds.push(yield* rx.get.hold(holdId));
+  }
+  holds.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  const invalidHolds: string[] = [];
+  while (holds.length > available) {
+    const hold = holds.shift()!;
+    delete edition.holds[hold.id];
+    yield* rx.del.hold(hold.id);
+    if (hold.patron) {
+      yield* rx.update.patron(hold.patron, (p) => delete p.holds[hold.id]);
+    }
+    // TODO: should also update active_holds, but it's only in StatusRX, not VStatusRX
+    invalidHolds.push(hold.id);
+  }
+  return invalidHolds;
 }
 
-function *reduceRemoveBook(rx: BookRX, e: RemoveBook): Reducer<void> {
+// returns nowInvalidHolds (edition-level holds that exceed available unrestricted books)
+function *reduceUpdateBookRestricted(
+  rx: RebalanceRX, e: UpdateBookRestricted,
+): Reducer<string[]> {
+  const book = yield* rx.get.book(e.id);
+  // be idempotent
+  if (book.restricted === e.restricted) return [];
+  book.restricted = e.restricted;
+  yield* rx.set.book(e.id, book);
+  if (!e.restricted || book.status) return [];
+  // marking an available book restricted shrinks the unrestricted pool
+  const edition = yield* rx.get.edition(book.isbn);
+  const invalidHolds = yield* rebalanceEditionHolds(rx, edition);
+  yield* rx.set.edition(book.isbn, edition);
+  return invalidHolds;
+}
+
+// returns nowInvalidHolds
+function *reduceRemoveBook(
+  rx: RebalanceRX, e: RemoveBook,
+): Reducer<string[]> {
   const book = yield* rx.get.book(e.id);
   yield* rx.del.book(e.id);
-  // just remove from edition
-  yield* rx.update.edition(book.isbn, (edition) => delete edition.books[e.id]);
+  const edition = yield* rx.get.edition(book.isbn);
+  delete edition.books[e.id];
+  const invalidHolds: string[] = [];
+  // if book had a book-level hold, end it
+  if (book.status && "hold" in book.status) {
+    const hold = yield* rx.get.hold(book.status.hold);
+    yield* rx.del.hold(hold.id);
+    if (hold.patron) {
+      yield* rx.update.patron(hold.patron, (p) => delete p.holds[hold.id]);
+    }
+    invalidHolds.push(hold.id);
+  }
+  // if book was unrestricted and available, the pool shrank; rebalance edition-level holds
+  if (!book.restricted && !book.status) {
+    invalidHolds.push(...(yield* rebalanceEditionHolds(rx, edition)));
+  }
+  yield* rx.set.edition(book.isbn, edition);
+  return invalidHolds;
 }
 
 function *reduceAddPatron(rx: PatronRX, e: AddPatron): Reducer<void> {
@@ -271,6 +340,7 @@ function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
     id: e.id,
     patron: e.patron,
     target: e.target,
+    timestamp: e.timestamp,
   };
   if (!e.open) {
     hold.expires = new Date(e.timestamp.getTime() + 1000 * 60 * 60 * 24 * 5)
@@ -445,6 +515,7 @@ function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold, sent: any[]): Reducer<v
   const hold: VHold = {
     id: e.id,
     target: e.target,
+    timestamp: e.timestamp,
   };
   if (e.patron) {
     hold.patron = e.patron;
@@ -521,22 +592,25 @@ function *reduceVEndCheckout(rx: FullVStatusRX, e: EndCheckout): Reducer<void> {
 function *privilegedReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<DeciderEvents[]> {
   const deciderEvents: DeciderEvents[] = [];
 
+  // several event-level reducers return invalid hold uuids, so we'll write a helper
+  const asEndVHolds = function*(g: Reducer<string[]>) {
+    const invalidHolds = yield* g;
+    for (const hold_uuid of invalidHolds) {
+      deciderEvents.push({ type: "end-vhold", id: hold_uuid, timestamp: new Date() })
+    }
+  }
+
   for (const e of events) {
     switch(e.type){
       case "add-edition":            yield* reduceAddEdition(rx, e);           break;
       case "update-edition-title":   yield* reduceUpdateEditionTitle(rx, e);   break;
       case "add-book":               yield* reduceAddBook(rx, e);              break;
-      case "update-book-restricted": yield* reduceUpdateBookRestricted(rx, e); break;
-      case "remove-book":            yield* reduceRemoveBook(rx, e);           break;
+      case "update-book-restricted": yield* asEndVHolds(reduceUpdateBookRestricted(rx, e)); break;
+      case "remove-book":            yield* asEndVHolds(reduceRemoveBook(rx, e));           break;
 
       case "add-patron":    yield* reduceAddPatron(rx, e);    break;
       case "rename-patron": yield* reduceRenamePatron(rx, e); break;
-      case "assign-patron": {
-        const invalidHolds = yield* reduceAssignPatron(rx, e);
-        for (const hold_uuid of invalidHolds) {
-          deciderEvents.push({ type: "end-vhold", id: hold_uuid, timestamp: new Date() })
-        }
-      } break;
+      case "assign-patron": yield* asEndVHolds(reduceAssignPatron(rx, e)); break;
 
       case "cancel-hold":      // fallthru
       case "expire-hold":      yield* reduceEndHold(rx, e);         break;
@@ -589,7 +663,7 @@ export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer
 // administrator composition of reducers; for ui (priviledged)
 export function *adminReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<void> {
   // like deciderReducer, we can use the privilegedReducer, only we then discard the decider events
-  privilegedReducer(rx, events);
+  yield* privilegedReducer(rx, events);
 }
 
 // patron composition of reducers; for ui (unprivileged)
