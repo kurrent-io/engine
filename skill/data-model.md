@@ -128,11 +128,14 @@ example, `BookStore` generates:
 store (what state is maintained):
 
 ```python
-UserFramework = Framework(LibraryEvents, LibraryEvents, UserStore)
-AdminFramework = Framework(LibraryEvents, LibraryEvents, AdminStore)
+UserFramework = Framework(LibraryEvents, UserCommands, UserStore)
+AdminFramework = Framework(LibraryEvents, AdminCommands, AdminStore)
 DeciderFramework = Framework(LibraryEvents, LibraryEvents, DeciderStore)
 RelayFramework = Framework(LibraryEvents, RelayCommands, RelayStore)
 ```
+
+Using typed command types (e.g. `UserCommands` instead of `LibraryEvents`) makes the `forecaster`
+callback type-safe — it receives only the commands that component can send.
 
 The three parameters are: `(event_type, command_type, store)`.
 

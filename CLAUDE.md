@@ -11,8 +11,8 @@ framework; the real product is the reusable tooling in `tools/` and `relay/_quic
 should be high-quality and readable but may take shortcuts (e.g. no authentication).
 
 The UI is connected to the relay.  Read path, command sending (holds, cancels, renames), and
-forecasting all work.  Admin and patron views both exist.  Next steps: continue debugging edge
-cases and build out the admin UI.
+forecasting all work.  Admin window supports editing patrons, editions, books, and managing
+holds/checkouts.  Next steps: continue debugging edge cases.
 
 ## Architecture
 
@@ -54,10 +54,12 @@ decider/            Go decider service
   model/model.go    GENERATED from library.py
 
 ui/                 Frontend (React 19 + Ant Design 6 + @ant-design/icons)
-  src/App.tsx           Top-level layout; renders multiple PatronWindows side by side
+  src/App.tsx           Top-level layout; renders AdminWindow + PatronWindows side by side
+  src/AdminWindow.tsx   Admin UI: patron editing, edition/book management, hold/checkout actions
   src/PatronWindow.tsx  Per-patron UI: books list, holds, checkouts, name editing
   src/useFramework.ts   Hook combining framework creation + websocket lifecycle
   src/useQuery.ts       Generic React hook for framework queries (library-quality, framework-agnostic)
+  src/colorhash.ts      Deterministic HSL color from string (for patron color correlation)
   src/model.{js,d.ts}   GENERATED bundles from model/ui.ts
 
 skill/              Developer skill files for building apps on this framework
@@ -91,7 +93,7 @@ When changing `library.py` or codegen in `tools/`, run `make` to regenerate all 
 ## Running the Demo
 
 1. `devcluster --config devcluster.yaml` - start KurrentDB on port 2113
-2. `relay/.venv/bin/python populate.py` - seed test data (4 editions, 8 books, 3 patrons)
+2. `relay/.venv/bin/python populate.py` - seed test data (4 editions, 8 books, 2 patrons)
 3. `cd relay && .venv/bin/python relay.py` - start relay on port 3003
 4. `cd ui && pnpm serve` - start UI on http://localhost:3000
 
@@ -126,11 +128,13 @@ queries execute.  During catchup, events are buffered and the query graph is fro
 `caughtUp()` is called, the overlay is rebuilt and all queries run at once.
 
 **Forecasting:** When `sendCommands()` is called, commands are assigned UUIDs, persisted to storage,
-and passed to the optional `forecaster` callback to predict server responses.  Forecasts are keyed
-by command ID and discarded when matching event IDs appear in `recvEvents()`.  Reducers can also
-return a `markedSent` array of partial command shapes to match unsent commands by content (used when
-the round-tripped event has a different ID than the original command, e.g. `try-hold` → `new-vhold`).
-Call `markSent(id)` to explicitly discard forecasts by event ID.
+and passed to the optional `forecaster` callback to predict server responses.  The `userForecaster`
+predicts `new-vhold` (with `forecasted: true`) for `try-hold` commands, and passes through
+`rename-patron` and `cancel-hold` directly.  Forecasts are keyed by command ID and discarded when
+matching event IDs appear in `recvEvents()`.  Reducers can also return a `markedSent` array of
+partial command shapes to match unsent commands by content (used when the round-tripped event has a
+different ID than the original command, e.g. `try-hold` → `new-vhold`).  Call `markSent(id)` to
+explicitly discard forecasts by event ID.
 
 **UUID generation:** `generateUuid()` is available in all runtimes.  In browsers it uses
 `crypto.getRandomValues()`.  In QuickJS it's injected from Python's `uuid.uuid4()`.  In goja it's

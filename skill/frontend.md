@@ -123,17 +123,39 @@ with a `forecaster` callback configured, the framework:
 4. When the real events arrive (matching by event ID), the forecasts are discarded and replaced
    with reality
 
+The `userForecaster` is a plain function (not a generator) that maps commands to predicted events:
+
+```typescript
+export function userForecaster(cmd: UserCommands): LibraryEvents[] {
+  switch(cmd.type){
+    case "rename-patron":
+    case "cancel-hold":
+      return [cmd];  // pass through directly, virtually guaranteed to land
+    case "try-hold":
+      return [{
+        type: "new-vhold",
+        id: cmd.id,
+        target: cmd.target,
+        open: cmd.open,
+        timestamp: cmd.timestamp,
+        patron: cmd.patron,
+        forecasted: true,  // indicates unresolved optimistic state
+      }];
+  }
+}
+```
+
+The `forecasted` flag on `VHold` and `NewVHold` lets the UI distinguish unresolved optimistic holds
+from confirmed ones (e.g. show a spinner on the cancel button while the hold is pending).
+
 Configure forecasting in the framework constructor:
 
 ```typescript
 new UserFramework(storage, {
     migrate: userMigrate,
     reducer: userReducer,
-    forecaster: (command) => {
-        // return predicted events for this command
-        // e.g. for a try-hold, predict a new-vhold
-    },
-    onCommands: (commands) => { /* send over websocket */ },
+    forecaster: userForecaster,
+    onCommands,
 });
 ```
 
@@ -156,3 +178,10 @@ function PatronWindow({ patronId, relayUrl }) {
 
 Each `PatronWindow` has its own framework instance, websocket connection, and storage. The
 framework's virtualization layer ensures each patron only sees their own data.
+
+The `AdminWindow` works similarly but uses `useFramework(relayUrl, enabled)` (no patronId) to get
+an `AdminFramework`. It sees real status (holds/checkouts with patron IDs) and can send admin
+commands (edit patrons, editions, books, manage holds/checkouts).
+
+Patron colors are derived from patron IDs via `colorHash()` (deterministic HSL), used as background
+on patron names and as borders on held/checked-out book buttons for visual correlation across panels.

@@ -187,6 +187,26 @@ if (hold.patron) {
 JS insertion order. When ordering matters (e.g. "end the most recently added hold"), use explicit
 data like timestamps.
 
+## Shared Helpers
+
+When multiple reducers need the same cascading logic, extract a helper. For example,
+`rebalanceEditionHolds` is used by both `reduceUpdateBookRestricted` and `reduceRemoveBook` to end
+excess edition-level holds when the unrestricted book pool shrinks:
+
+```typescript
+type RebalanceRX = BookRX & NoSet<StatusRX|VStatusRX> & PatronRX;
+
+function *rebalanceEditionHolds(
+  rx: RebalanceRX, edition: Edition,
+): Reducer<string[]> {
+  // count available unrestricted books, sort holds by timestamp descending,
+  // end the most recent holds until holds <= available
+}
+```
+
+The caller passes the edition (which it may have already modified, e.g. after deleting a book from
+`edition.books`) and is responsible for calling `rx.set.edition()` afterward.
+
 ## Migrations
 
 Migration functions initialize storage with default values. They run once when the framework starts
