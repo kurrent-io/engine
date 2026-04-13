@@ -92,6 +92,13 @@ qx = RelayQueryContext()
 - Custom `Txn` protocol: Implement `get`, `set`, `delete`, `commit`, `abort` for persistent
   storage (e.g. LMDB)
 
+### Date Handling
+
+`_quickjs.c` handles JS `Date` ↔ Python `datetime.datetime` conversion natively. JS Date objects
+crossing into Python become UTC `datetime.datetime` instances (via `valueOf()` → timestamp →
+`datetime.fromtimestamp`). Python `datetime.datetime` objects crossing into JS become `new Date(ms)`
+(UTC-only; non-UTC datetimes raise `ValueError`).
+
 ### UUID Generation
 
 `uuid.uuid4()` is injected into the QuickJS environment as `generateUuid()` via `_quickjs.c`.

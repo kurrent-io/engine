@@ -7,33 +7,14 @@ instance, websocket connection, and materialized view.
 
 ### useFramework
 
-App-specific hook that creates a `UserFramework` instance and manages the websocket connection.
-Returns `[fw, connState]`.
+App-specific hook that creates a framework instance and manages the websocket connection. Overloaded
+to return the right framework type:
 
 ```typescript
-import { UserFramework, userMigrate, userReducer, InMemStorage } from './model';
-
-export function useFramework(
-    relayUrl: string, patronId: string, enabled: boolean,
-): [UserFramework, ConnectionState] {
-    const wsRef = useRef<WebSocket | null>(null);
-
-    const fw = useMemo(() => {
-        return new UserFramework(new InMemStorage(), {
-            migrate: userMigrate,
-            reducer: userReducer,
-            onCommands: (commands) => {
-                const ws = wsRef.current;
-                if (!ws || ws.readyState !== WebSocket.OPEN) return;
-                for (const cmd of commands) {
-                    ws.send(JSON.stringify(cmd));
-                }
-            },
-        });
-    }, []);
-
-    // ... websocket lifecycle in useEffect ...
-}
+// admin: no patronId
+function useFramework(relayUrl: string, enabled: boolean): [AdminFramework, ConnectionState];
+// patron: with patronId
+function useFramework(relayUrl: string, enabled: boolean, patronId: string): [UserFramework, ConnectionState];
 ```
 
 The websocket lifecycle handles:
@@ -127,8 +108,9 @@ transport.
   buffer without triggering expensive query reruns.
 - `fw.reconnect(cb)` - Get the last committed checkpoint and any unsent commands from storage.
   Use the checkpoint as `since` in the handshake, and resend the commands.
-- `fw.roundTripped(...ids)` - Explicitly discard forecasted events for commands that were rejected
-  (when you won't see a matching event ID in the stream).
+- `fw.markSent(...ids)` - Explicitly discard forecasted events for commands that have round-tripped
+  (when you won't see a matching event ID in the stream). Reducers can also return a `markedSent`
+  array to match unsent commands by content shape (see reducers.md).
 
 ## Forecasting (Optimistic Updates)
 
@@ -162,7 +144,7 @@ For a multi-window demo, each window is a self-contained component:
 ```tsx
 function PatronWindow({ patronId, relayUrl }) {
     const [enabled, setEnabled] = useState(true);
-    const [fw, connState] = useFramework(relayUrl, patronId, enabled);
+    const [fw, connState] = useFramework(relayUrl, enabled, patronId);
 
     // queries
     const patron = useQuery(fw, patronLookup);

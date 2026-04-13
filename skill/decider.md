@@ -103,10 +103,15 @@ stream in KurrentDB.
 |-------|---------|
 | `new-vhold` | Hold was accepted. Contains target, expiration, patron. |
 | `vhold-rejected` | Hold was rejected. Contains reason and patron (for notification). |
+| `end-vhold` | Hold was forcibly removed (e.g. patron demoted from researcher). |
 | `new-vcheckout` | Checkout was accepted. Contains book, expiration, patron. |
 
-These flow from `vstatus` through the relay to clients. The relay sanitizes them (strips patron IDs
-for privacy) before forwarding.
+These flow from `vstatus` through the relay to patron clients (sanitized) and from `status` to
+admin clients (unsanitized).
+
+The `end-vhold` event is emitted when `assign-patron` revokes researcher status and the patron held
+restricted books. The hold cleanup (book status, edition holds, patron holds) happens inside
+`reduceAssignPatron`, and the decider emits `end-vhold` so other clients learn about the removal.
 
 ## Publishing Decisions
 

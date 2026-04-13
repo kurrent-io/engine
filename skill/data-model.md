@@ -36,25 +36,22 @@ Book = Struct(
 Use `Maybe(T)` for optional fields. Use `|` to create inline unions (e.g. a status that is either
 a hold or a checkout).
 
-## Custom Concrete Types
+## Built-in Date Type
 
-For types that need custom encoding/decoding across languages (like timestamps), subclass
-`Concrete` and implement static methods for each target language:
+`Date` is a built-in type that maps to `Date` in TypeScript, `datetime.datetime` in Python, and
+`time.Time` in Go. It serializes as an ISO 8601 string on the wire. The QuickJS bindings
+(`_quickjs.c`) handle JS `Date` ↔ Python `datetime.datetime` conversion natively (UTC only).
 
 ```python
-class Timestamp(Concrete):
-    json_type = "string"
-
-    @staticmethod
-    def ts_generate_annotation(d, annos, visit):
-        return "Date"
-
-    @staticmethod
-    def ts_generate_decoder(d, annos, decoders, visit):
-        return lambda val: f"new Date({val} as string)"
-
-    # similarly for py_generate_* and go_generate_*
+expires = Maybe(Date),
+timestamp = Date,
 ```
+
+## Custom Concrete Types
+
+For types that need custom encoding/decoding across languages, subclass `Concrete` and implement
+static methods for each target language. (The built-in `Date` type used to be implemented this way
+as `Timestamp` but was promoted to a first-class type.)
 
 ## Defining Events
 
@@ -132,14 +129,20 @@ store (what state is maintained):
 
 ```python
 UserFramework = Framework(LibraryEvents, LibraryEvents, UserStore)
+AdminFramework = Framework(LibraryEvents, LibraryEvents, AdminStore)
 DeciderFramework = Framework(LibraryEvents, LibraryEvents, DeciderStore)
 RelayFramework = Framework(LibraryEvents, RelayCommands, RelayStore)
 ```
 
 The three parameters are: `(event_type, command_type, store)`.
 
+Every `Store` and `Framework` must be assigned to a module-level variable (e.g.
+`MyStore = Store(...)`) so the code generators can discover its name. Unnamed stores or frameworks
+will raise an error at generation time.
+
 Different components may have different stores for the same domain. For example, the relay only
-tracks existence of objects (for validation), while the decider tracks full state (for decisions).
+tracks existence of objects (for validation), the decider tracks full state (for decisions), and
+the admin client sees real status while patron clients see virtualized status.
 
 ## Code Generation
 

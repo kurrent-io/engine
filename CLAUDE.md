@@ -10,19 +10,21 @@ This is a demo project.  The library domain (books, patrons, holds, checkouts) i
 framework; the real product is the reusable tooling in `tools/` and `relay/_quickjs.c`.  Demo code
 should be high-quality and readable but may take shortcuts (e.g. no authentication).
 
-The UI is connected to the relay (read path works).  Next steps: wire up command sending (holds,
-renames, etc.) and continue debugging the relay.
+The UI is connected to the relay.  Read path, command sending (holds, cancels, renames), and
+forecasting all work.  Admin and patron views both exist.  Next steps: continue debugging edge
+cases and build out the admin UI.
 
 ## Architecture
 
 Three system components consume the shared model:
 
-- **UI (browser)** - Runs framework natively in JS.  Gets virtualized status events (VHold,
-  VCheckout) so it can't see other patrons' data.  Uses OverlayStorage for optimistic updates.
+- **UI (browser)** - Runs framework natively in JS.  Patron clients get virtualized status events
+  (VHold, VCheckout) so they can't see other patrons' data; admin clients see real status.  Uses
+  OverlayStorage for optimistic updates.
 - **Relay (Python + QuickJS)** - Validates incoming commands (reference checks, authorization).
   Does not make domain decisions; rejects obviously invalid requests and forwards the rest.
 - **Decider (Go + goja)** - Has full state, makes authoritative decisions.  Emits DeciderEvents
-  (new-vhold, vhold-rejected, new-vcheckout) that flow back through the relay to clients.
+  (new-vhold, vhold-rejected, end-vhold, new-vcheckout) that flow back through the relay to clients.
 
 KurrentDB is the event store (always required, runs locally via devcluster on port 2113).
 InMemStorage, IndexedDB, etc. are for client-side materialized views, not event storage.
@@ -34,6 +36,7 @@ model/              Shared business logic (TypeScript)
   library.py        Data model definition (Python DSL using tools/protos.py)
   library.gen.ts    GENERATED from library.py - do not edit (edits are overwritten on rebuild)
   reducers.ts       Hand-written business logic (reducer functions for all event types)
+  reducers.test.ts  Jest tests for reducers (using generated ReducerTester)
   {ui,relay,decider}.ts   Export stubs for each system component
 
 tools/              Reusable codegen tooling
@@ -124,8 +127,10 @@ queries execute.  During catchup, events are buffered and the query graph is fro
 
 **Forecasting:** When `sendCommands()` is called, commands are assigned UUIDs, persisted to storage,
 and passed to the optional `forecaster` callback to predict server responses.  Forecasts are keyed
-by command ID and discarded when matching event IDs appear in `recvEvents()`.  If a command is
-rejected, call `roundTripped(id)` to explicitly discard its forecasts.
+by command ID and discarded when matching event IDs appear in `recvEvents()`.  Reducers can also
+return a `markedSent` array of partial command shapes to match unsent commands by content (used when
+the round-tripped event has a different ID than the original command, e.g. `try-hold` → `new-vhold`).
+Call `markSent(id)` to explicitly discard forecasts by event ID.
 
 **UUID generation:** `generateUuid()` is available in all runtimes.  In browsers it uses
 `crypto.getRandomValues()`.  In QuickJS it's injected from Python's `uuid.uuid4()`.  In goja it's
@@ -135,9 +140,10 @@ implemented in Go using `crypto/rand`.
 method signature (`{ newQuery<X>(fn: QueryFunction<QX, X>): Query<X> }`) to infer the query
 context type from the framework instance.
 
-**useFramework hook:** App-specific hook that creates a `UserFramework` instance and manages the
-websocket connection lifecycle (handshake, message decoding, exponential backoff reconnect capping
-at 60s, enable/disable toggle).
+**useFramework hook:** App-specific hook that manages websocket connection lifecycle (handshake,
+message decoding, exponential backoff reconnect capping at 60s, enable/disable toggle).  Overloaded:
+`useFramework(url, enabled)` returns `AdminFramework`; `useFramework(url, enabled, patronId)`
+returns `UserFramework`.
 
 ## Working Conventions
 
@@ -145,6 +151,7 @@ at 60s, enable/disable toggle).
 - Generated files (`library.gen.ts`, `model.py`, `model.go`, `ui/src/model.*`) should not be
   hand-edited except for throwaway experiments.  Change `library.py` and regenerate instead.
 - Prefer larger changes; the user will ask to slow down if needed.
-- No test suite is in place right now; `test.py` is throwaway, jest config is leftover.
+- Reducer tests use the generated `ReducerTester` class: `cd model && pnpm test`.  `test.py` is
+  throwaway.
 - `useQuery.ts` should be treated as library-quality code (generic, reusable).
 - `useFramework.ts` is app-specific (hardcodes relay protocol); prioritize clarity over generality.

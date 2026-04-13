@@ -25,8 +25,11 @@ Clients connect to `ws://<host>:<port>/ws`.
 ```json
 {"patron_id": "some-uuid", "since": 12345}
 ```
-- `patron_id`: identifies the user (empty or missing for admin)
+- `patron_id`: identifies the user; empty or missing for admin connections
 - `since`: last known commit position, or `null` for a fresh connection
+
+Admin clients subscribe to the `status` stream directly and see all events. Patron clients subscribe
+to `vstatus` and receive sanitized events.
 
 **Server -> client:** Wrapped event messages:
 ```json
@@ -62,14 +65,14 @@ The subscriber dispatches events to clients based on stream name:
 |--------|-------------|
 | `books` | All connected clients |
 | `patron.{id}` | That patron + all admins |
-| `status` | Not relayed to clients (internal) |
-| `vstatus` | Sanitized per-client (see below) |
+| `status` | Subset broadcast globally (`cancel-hold`, `expire-hold`, `end-checkout`); rest admin-only |
+| `vstatus` | Sanitized per-patron (see below); admins do not receive vstatus |
 
 **VStatus sanitization:** Events on the `vstatus` stream contain sensitive patron IDs. Before
-forwarding to clients:
-- `new-vhold` and `new-vcheckout`: strip the `patron` field (unless the recipient is the owner
-  or an admin)
+forwarding to patron clients:
+- `new-vhold` and `new-vcheckout`: strip the `patron` field (unless the recipient is the owner)
 - `vhold-rejected`: only forward to the patron whose hold was rejected
+- Admins are excluded from vstatus distribution entirely (they see real status instead)
 
 ## Validation
 

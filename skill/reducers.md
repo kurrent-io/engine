@@ -53,7 +53,7 @@ call `rx.set` to persist the changes. The framework tracks which keys were modif
 
 ## Return Values
 
-Reducers can return values. This is useful for reducers that make decisions:
+Individual reducers can return values. This is useful for reducers that make decisions:
 
 ```typescript
 // Returns rejection reason, or empty string on success
@@ -67,6 +67,28 @@ function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
   return "";
 }
 ```
+
+Top-level reducers can return `void` or `any[]`. When a top-level reducer returns an array, it is
+treated as a `markedSent` list — partial command shapes that the framework uses to match and discard
+unsent commands (for forecasting). This is how the client learns that a `try-hold` has round-tripped
+when it sees a `new-vhold` with a different event ID:
+
+```typescript
+export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]> {
+  const sent: any[] = [];
+  for (const e of events) {
+    switch(e.type){
+      case "new-vhold":      yield* reduceNewVHold(rx, e, sent);      break;
+      case "vhold-rejected": yield* reduceVHoldRejected(rx, e, sent); break;
+      // ...
+    }
+  }
+  return sent;
+}
+```
+
+Inside those reducers, push partial shapes like `{ type: "try-hold", id: e.id }` onto the `sent`
+array. The framework's `matchSent()` does a structural subset match against each unsent command.
 
 ## Composing Reducers
 
@@ -130,13 +152,68 @@ export function *userMigrate(rx: UserRX): Reducer<void> {
 The pattern `(yield* rx.get.key()) ?? defaultValue` ensures idempotency - if the key already
 exists (e.g. after a reconnect), the existing value is preserved.
 
+## Shared Privileged Reducer
+
+The decider and the admin UI both have access to all events and the same store shape (modulo the
+decider's extra `decider_events` key). Their common logic is extracted into `privilegedReducer`,
+which returns `DeciderEvents[]`:
+
+```typescript
+function *privilegedReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<DeciderEvents[]> {
+  const deciderEvents: DeciderEvents[] = [];
+  // ... full business logic, pushes to deciderEvents ...
+  return deciderEvents;
+}
+
+export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer<void> {
+  const deciderEvents = yield* privilegedReducer(rx, events);
+  yield* rx.set.decider_events(deciderEvents);
+}
+
+export function *adminReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<void> {
+  yield* privilegedReducer(rx, events);  // discard decider events
+}
+```
+
 ## Different Reducers for Different Components
 
 The same event types are handled differently by each component:
 
-- **Decider**: Full business logic. Validates holds/checkouts against all constraints, emits
-  decision events (`new-vhold`, `vhold-rejected`, `new-vcheckout`).
-- **User (client)**: Applies virtualized decisions. Doesn't see `try-hold` or `try-checkout`
-  directly - instead sees `new-vhold` and `new-vcheckout` after the decider processes them.
+- **Decider / Admin**: Full business logic via `privilegedReducer`. Validates holds/checkouts
+  against all constraints, emits decision events (`new-vhold`, `vhold-rejected`, `end-vhold`,
+  `new-vcheckout`).
+- **User (patron client)**: Applies virtualized decisions. Doesn't see `try-hold` or `try-checkout`
+  directly - instead sees `new-vhold` and `new-vcheckout` after the decider processes them. Returns
+  a `markedSent` array to help the framework discard forecasts.
 - **Relay**: Minimal read model. Only tracks existence of objects for reference validation and
   hold ownership for authorization checks.
+
+## Unit Testing with ReducerTester
+
+The code generators produce a `ReducerTester` subclass for each framework. It runs reducers
+synchronously against `InMemStorage`, returning updated keys and markedSent:
+
+```typescript
+import { UserReducerTester } from './library.gen';
+import { userMigrate, userReducer } from './reducers';
+
+test("user reducer", () => {
+  const t = new UserReducerTester(userMigrate, userReducer);
+  t.run([
+    { type: "add-edition", isbn: "isbn-1", title: "Title", timestamp: new Date() },
+    { type: "add-book", id: "book-1", isbn: "isbn-1", restricted: false, timestamp: new Date() },
+  ]);
+  expect(t.data.editions()).toStrictEqual({"isbn-1": true});
+
+  const result = t.run([
+    { type: "new-vhold", id: "hold-1", patron: "p1", target: { edition: "isbn-1" },
+      open: false, timestamp: new Date() },
+  ]);
+  expect(result.updates).toStrictEqual(["edition.isbn-1", "hold.hold-1", "patron.p1"]);
+  expect(result.markedSent).toStrictEqual([{ type: "try-hold", id: "hold-1" }]);
+});
+```
+
+The constructor accepts either a migrate function or an initial data object (a plain
+`Record<string, any>`). The `t.data` accessor provides typed read access to the store via a
+generated `TestData` class.
