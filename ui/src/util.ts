@@ -30,13 +30,3 @@ export function generateUuid(): string {
     out.substring(20, 32),
   ].join('-');
 }
-
-
-export function setdefault<T>(obj: Record<string, T>, key: string, dfault: T): T {
-  if (key in obj) {
-    return obj[key];
-  } else {
-    obj[key] = dfault;
-    return dfault;
-  }
-}

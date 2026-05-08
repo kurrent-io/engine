@@ -473,9 +473,9 @@ def generate_store(d, annos, store):
             d.print(chunk + "${" + param + "}")
         d.print(si.chunks[-1])
         d.print(f"`, fn),\n")
-    d.dedent()
     for dep in store.deps:
         d.print(f"...{context_name(dep.name)}ReducerContext.update,\n")
+    d.dedent()
     d.print("},\n")
 
     d.dedent()

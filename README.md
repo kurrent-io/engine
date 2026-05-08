@@ -79,7 +79,7 @@ UI).
              |
         _____v______
        |            |
-       |  *server   |
+       |   *relay   |
        |____________|
              ^
              |
@@ -94,7 +94,7 @@ UI).
 The abstract nature of the business logic encourages the reducers block to be free of side-effects,
 making it easy to to reuse that business logic with an in-memory storage overlay to achieve
 optimistic UI updates.  This requires an extra function from the user, which I call a "forecaster",
-that produces events the application expects the server to create from each outgoing command.
+that produces events the application expects the relay to create from each outgoing command.
 
 ```
 (* = owned by user)
@@ -126,7 +126,7 @@ that produces events the application expects the server to create from each outg
              |
         _____v______
        |            |
-       |  *server   |
+       |   *relay   |
        |____________|
              ^
              |
@@ -138,10 +138,10 @@ that produces events the application expects the server to create from each outg
 
 **Interfaces**
 
-A: server to/from websocket:
-  - server authenticates connection
-  - server authorizes which streams a client can read, relays from KurrentDB
-  - server authorizes and validates incoming write events, relays to KurrentDB
+A: relay to/from websocket:
+  - relay authenticates connection
+  - relay authorizes which streams a client can read, relays from KurrentDB
+  - relay authorizes and validates incoming write events, relays to KurrentDB
   - websocket automatically reconnects after network disruptions
 
 B: websocket to reducers:
@@ -192,7 +192,7 @@ I: new events get sent over websocket
 
 Or: "Yes, this framework will be useful in backends, too".
 
-Note that the Server shown here scales horizontally, but the decider needs to have at-most-one
+Note that the relay shown here scales horizontally, but the decider needs to have at-most-one
 runners at a time.  To scale it, you'd need to shard its responsibility (and you'd still have
 at-most-one runner mechanics within each shard).
 ```
