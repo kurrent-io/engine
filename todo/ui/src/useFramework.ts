@@ -39,8 +39,13 @@ export function useFramework(
   }, []);
 
   useEffect(() => {
-    setConnState(enabled ? 'connected' : 'disconnected');
-  }, [enabled]);
+    if (enabled) {
+      setConnState('connected');
+      fw.caughtUp();
+    } else {
+      setConnState('disconnected');
+    }
+  }, [enabled, fw]);
 
   // useEffect(() => {
   //   if (!enabled) {

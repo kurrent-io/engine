@@ -67,9 +67,10 @@ EditItem = Struct(
     text=String,
 )
 
-DoneItem = Struct(
-    type=Literal("done-item"),
+MarkItem = Struct(
+    type=Literal("mark-item"),
     id=Uuid,
+    done=Bool,
 )
 
 ArchiveItem = Struct(
@@ -77,6 +78,6 @@ ArchiveItem = Struct(
     id=Uuid,
 )
 
-TodoEvents = NewList | RenameList | ArchiveList | NewItem | EditItem | DoneItem | ArchiveItem
+TodoEvents = NewList | RenameList | ArchiveList | NewItem | EditItem | MarkItem | ArchiveItem
 
 TodoFramework = Framework(TodoEvents, TodoEvents, TodoStore)

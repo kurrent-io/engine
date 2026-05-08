@@ -31,14 +31,15 @@ export function *reduceTodos(rx: TodoRX, events: TodoEvents[]): Reducer<void> {
 
       case "new-item":
         yield* rx.set.item(e.id, { id: e.id, text: e.text, done: false, archived: false });
+        yield* rx.update.list(e.list, (list) => list.items.push(e.id));
         break;
 
       case "edit-item":
         yield* rx.update.item(e.id, (item) => item.text = e.text);
         break;
 
-      case "done-item":
-        yield* rx.update.item(e.id, (item) => item.done = true);
+      case "mark-item":
+        yield* rx.update.item(e.id, (item) => item.done = e.done);
         break;
 
       case "archive-item":

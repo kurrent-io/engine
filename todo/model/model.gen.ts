@@ -2868,11 +2868,11 @@ export type NewItem = {type: "new-item", id: string, list: string, text: string}
 
 export type EditItem = {type: "edit-item", id: string, text: string};
 
-export type DoneItem = {type: "done-item", id: string};
+export type MarkItem = {type: "mark-item", id: string, done: boolean};
 
 export type ArchiveItem = {type: "archive-item", id: string};
 
-export type TodoEvents = NewItem | ArchiveItem | EditItem | RenameList | ArchiveList | DoneItem | NewList;
+export type TodoEvents = NewItem | ArchiveItem | EditItem | RenameList | ArchiveList | MarkItem | NewList;
 
 export function DecodeConcreteStruct(val: any): ConcreteStruct {
   return val as ConcreteStruct;
@@ -2910,8 +2910,8 @@ export function DecodeEditItem(val: any): EditItem {
   return val as EditItem;
 }
 
-export function DecodeDoneItem(val: any): DoneItem {
-  return val as DoneItem;
+export function DecodeMarkItem(val: any): MarkItem {
+  return val as MarkItem;
 }
 
 export function DecodeArchiveItem(val: any): ArchiveItem {
