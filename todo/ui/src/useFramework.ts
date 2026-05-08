@@ -14,6 +14,10 @@ export function useFramework(
 ): [TodoFramework, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
+  // ref so onCommands sees the latest connection state, not the one captured
+  // when the framework was constructed
+  const connStateRef = useRef<ConnectionState>('disconnected');
+  connStateRef.current = connState;
 
   // create a framework instance once, for the lifetime of this hook
   const fw = useMemo<TodoFramework>(() => {
@@ -25,7 +29,7 @@ export function useFramework(
     //   }
     // };
     const onCommands = (commands: any[]) => {
-      if (connState !== "connected") return;
+      if (connStateRef.current !== "connected") return;
       fw.recvEvents(commands);
     };
     return new TodoFramework(

@@ -3,7 +3,54 @@ h1 {
 }
 
 body {
-    font-family: Arial, sans-serif;
-    padding: 2rem;
-    background-color: #73161c;
+  font-family: Arial, sans-serif;
+  padding: 2rem;
+  background-color: #73161c;
+}
+
+.window {
+  width: 32em;
+}
+
+.list {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 4px;
+  margin-bottom: 8px;
+}
+
+.row {
+  padding: 4px 8px;
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.dim {
+  opacity: 0.7;
+}
+
+.grow {
+  flex: 1;
+}
+
+.done {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Highlight on hover; reveal .hover-action children only on hover. */
+.hoverable {
+  border-radius: 4px;
+  transition: background-color 0.1s;
+}
+.hoverable:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+.hoverable .hover-action {
+  visibility: hidden;
+}
+.hoverable:hover .hover-action {
+  visibility: visible;
 }
