@@ -78,3 +78,5 @@ ArchiveItem = Struct(
 )
 
 TodoEvents = NewList | RenameList | ArchiveList | NewItem | EditItem | DoneItem | ArchiveItem
+
+TodoFramework = Framework(TodoEvents, TodoEvents, TodoStore)

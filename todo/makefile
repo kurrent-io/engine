@@ -48,25 +48,25 @@ model/check: model
 # decider/decider: decider/decider.js decider/main.go decider/model/model.go
 # 	cd decider && go build -o decider .
 
-# .PHONY: ui
-# ui: ui/src/model.js ui/src/model.d.ts
-#
-# ui/src/model.js:  model/library.gen.ts model/ui.ts
-# 	cd model && pnpm rollup -m inline --format=esm -p typescript ui.ts -o ../$@
-#
-# ui/src/model.d.ts: model/library.gen.ts model/ui.ts
-# 	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
-#
-# .PHONY: ui/check
-# ui/check: ui
-# 	cd ui && tsc
+.PHONY: ui
+ui: ui/src/model.js ui/src/model.d.ts
+
+ui/src/model.js:  model/model.gen.ts model/ui.ts
+	cd model && pnpm rollup -m inline --format=esm -p typescript ui.ts -o ../$@
+
+ui/src/model.d.ts: model/model.gen.ts model/ui.ts
+	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
+
+.PHONY: ui/check
+ui/check: ui
+	cd ui && tsc
 
 # .PHONY: check
 # check: decider/decider model/check relay/_quickjs.so relay/check ui/check
 
-# .PHONY: serve
-# serve: ui
-# 	cd ui && pnpm serve
+.PHONY: serve
+serve: ui
+	cd ui && pnpm serve
 
 # clean:
 # 	@rm -f model/library.gen.ts \

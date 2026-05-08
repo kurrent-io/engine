@@ -3002,3 +3002,65 @@ export const TodoReducerContext = {
 
 export type TodoRX = typeof TodoReducerContext;
 
+export class TodoFramework extends Framework<TodoQX, TodoRX, TodoEvents, TodoEvents> {
+  constructor(
+    storage: Storage,
+    callbacks: {
+      // optional: configure storage before any events arrive
+      migrate?: (rx: TodoRX) => Reducer<void>,
+      // required: reduce a batch of events into the read model
+      reducer: (rx: TodoRX, events: TodoEvents[]) => Reducer<void | any[]>,
+      // optional: forecast the events a server will send for a command
+      forecaster?: (commands: TodoEvents) => TodoEvents[],
+      // required if using sendCommands: receive events to send on the wire
+      onCommands?: (commands: Event<any>[])=> void,
+    },
+    // used in cross-language support: inject an arbitrary object as the QueryContext
+    qx?: any,
+  ) {
+    super(qx ?? TodoQueryContext, TodoReducerContext, storage, {
+        ...callbacks,
+        decodeEvent: DecodeTodoEvents,
+        decodeCommand: DecodeTodoEvents,
+    });
+  }
+}
+
+export class TodoTestData {
+  data: Record<string, any>;
+
+  constructor(data: Record<string, any>){
+    this.data = data;
+  }
+
+  all_lists(): string[] {
+    return this.data[`all_lists`] as string[]
+  }
+
+  item(item_id: string): Item {
+    return this.data[`item.${item_id}`] as Item
+  }
+
+  list(list_id: string): List {
+    return this.data[`list.${list_id}`] as List
+  }
+}
+
+export class TodoReducerTester extends ReducerTester<TodoRX, TodoEvents, TodoTestData> {
+  constructor(
+    migrateOrInitialData: ((rx: TodoRX) => Reducer<void>) | Record<string, any>,
+    reducer: (rx: TodoRX, events: TodoEvents[]) => Reducer<void | any[]>,
+  ) {
+    let migrate: null | ((rx: TodoRX) => Reducer<void>);
+    let data: Record<string, any>;
+    if (migrateOrInitialData instanceof Function) {
+        migrate = migrateOrInitialData;
+        data = {};
+    } else {
+        migrate = null;
+        data = migrateOrInitialData;
+    }
+    super(TodoReducerContext, migrate, reducer, new InMemStorage(data), new TodoTestData(data));
+  }
+}
+

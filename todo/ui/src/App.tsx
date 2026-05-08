@@ -1,7 +1,6 @@
 import { ConfigProvider, Flex, theme } from 'antd';
 
-import AdminWindow from './AdminWindow';
-import PatronWindow from './PatronWindow';
+import Window from './Window';
 
 const RELAY_URL = 'ws://localhost:3003/ws';
 
@@ -11,11 +10,10 @@ function App() {
   return (
     <ConfigProvider theme={{ algorithm: darkAlgorithm }}>
       <div>
-        <h1>Kurrent Engine Demo</h1>
+        <h1>Todo Demo</h1>
         <Flex wrap gap="small">
-          <AdminWindow relayUrl={RELAY_URL} />
-          <PatronWindow patronId="patron-1" relayUrl={RELAY_URL} />
-          <PatronWindow patronId="patron-2" relayUrl={RELAY_URL} />
+          <Window name="Client A" relayUrl={RELAY_URL} />
+          <Window name="Client B" relayUrl={RELAY_URL} />
         </Flex>
       </div>
     </ConfigProvider>
