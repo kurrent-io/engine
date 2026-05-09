@@ -649,7 +649,7 @@ def check_solution(d, annos, checkers, solution):
 
 def generate_checkers(d, annos, checkers, t):
     """
-    func CheckAddPatron(value goja.Value, path string) error {
+    func CheckAddPatron(vm *goja.Runtime, value goja.Value, path string) error {
         var errs []error
         obj, ok := value.(*goja.Object)
         if !ok {
@@ -669,7 +669,7 @@ def generate_checkers(d, annos, checkers, t):
         if t in checkers: return
 
         if isinstance(t, Json):
-            raise ValueError("XXX")
+            raise ValueError(f"XXX: {t}")
             return
         if isinstance(t, String):
             checkers[t] = lambda var, path: (
@@ -753,11 +753,12 @@ def generate_checkers(d, annos, checkers, t):
                     d.print(f'xpath := fmt.Sprintf("%s[%d]", {path}, i)\n')
                     d.print(f'i++\n')
                     d.print(checkers[t.item_type]("item", "xpath"))
+                    d.print(f'return true\n')
                     d.dedent()
                     d.print(f"}})}})\n")
-                    d.print(f'if err != nil {{')
-                    d.print(f'\terrs = append(errs, fmt.Errorf("%v: ForOf: %w", {path}, err))')
-                    d.print(f'}}')
+                    d.print(f'if err != nil {{\n')
+                    d.print(f'\terrs = append(errs, fmt.Errorf("%v: ForOf: %w", {path}, err))\n')
+                    d.print(f'}}\n')
                     d.dedent()
                 d.print(f'}}\n')
                 return d.getvalue()
@@ -793,13 +794,13 @@ def generate_checkers(d, annos, checkers, t):
                 name = f"check{t.name}"
             else:
                 name = f"check{get_anon()}"
-            d.print(f"\nfunc {name}(value goja.Value, path string) []error {{\n")
+            d.print(f"\nfunc {name}(vm *goja.Runtime, value goja.Value, path string) []error {{\n")
             d.indent("\t")
             d.print(f'var errs []error\n')
             check_solution(d, annos, checkers, solution)
             d.dedent()
             d.print(f"}}\n")
-            checker = lambda var, path: f"errs = append(errs, {name}({var}, {path})...)\n"
+            checker = lambda var, path: f"errs = append(errs, {name}(vm, {var}, {path})...)\n"
 
         elif isinstance(t, ConcreteStruct):
             for ft in t.fields.values():
@@ -822,7 +823,7 @@ def generate_checkers(d, annos, checkers, t):
             d.print(f'}}\n')
 
             # write a function
-            d.print(f'\nfunc {func}(value goja.Value, path string) []error {{\n')
+            d.print(f'\nfunc {func}(vm *goja.Runtime, value goja.Value, path string) []error {{\n')
             d.indent('\t')
             d.print(f'var errs []error\n')
             d.print(f'obj, ok := value.(*goja.Object)\n')
@@ -865,14 +866,14 @@ def generate_checkers(d, annos, checkers, t):
             d.dedent()
             d.print(f"}}\n")
 
-            checker = lambda var, path: f"errs = append(errs, {func}({var}, {path})...)\n"
+            checker = lambda var, path: f"errs = append(errs, {func}(vm, {var}, {path})...)\n"
 
         else:
             raise ValueError(f"unhandled type in generate_checkers: {t}")
 
         # named types get a wrapper function that calls errors.Join() on the list of errors
         if t.name:
-            d.print(f'\nfunc Check{t.name}(value goja.Value, path string) error {{\n')
+            d.print(f'\nfunc Check{t.name}(vm *goja.Runtime, value goja.Value, path string) error {{\n')
             d.indent('\t')
             d.print(f'var errs []error\n')
             d.print(checker("value", "path"))

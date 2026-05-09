@@ -159,3 +159,8 @@ returns `UserFramework`.
   throwaway.
 - `useQuery.ts` should be treated as library-quality code (generic, reusable).
 - `useFramework.ts` is app-specific (hardcodes relay protocol); prioritize clarity over generality.
+- **Ask for help as soon as you are confused.**  If a result contradicts your model of what should
+  happen, do not keep poking at it with more commands hoping it will resolve.  Stop, summarize what
+  you observed and what you expected, and ask the user.  Burning rounds on cache theories, weird
+  Go behavior, "maybe it's a build artifact" etc. is wasted effort — the user usually sees the
+  answer immediately (e.g. wrong cwd, stale file, missing step).

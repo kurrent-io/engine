@@ -2,7 +2,17 @@
 A simple sync engine example: a collaborative to-do list.
 """
 
-from protos import *
+from protos import (
+    Alias,
+    Array,
+    Bool,
+    Literal,
+    Store,
+    String,
+    Struct,
+    Union,
+    Framework,
+)
 
 def Enum(*strings):
     return Union(*(Literal(s) for s in strings))

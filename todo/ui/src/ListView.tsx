@@ -147,31 +147,33 @@ export default function ListView({
 
   return (
     <div className="list">
-      {renamingList ? (
-        <EditTextRow
-          initial={list.name}
-          onSave={onRenameList}
-          onCancel={() => setRenamingList(false)}
-        />
-      ) : (
-        <Flex className="row hoverable" align="center" gap="small">
-          <Text strong className="grow">{list.name}</Text>
-          <Button
-            className="hover-action"
-            size="small"
-            type="text"
-            icon={<EditOutlined />}
-            onClick={() => setRenamingList(true)}
+      <div className="list-title">
+        {renamingList ? (
+          <EditTextRow
+            initial={list.name}
+            onSave={onRenameList}
+            onCancel={() => setRenamingList(false)}
           />
-          <Button
-            className="hover-action"
-            size="small"
-            type="text"
-            icon={<CloseOutlined />}
-            onClick={onArchiveList}
-          />
-        </Flex>
-      )}
+        ) : (
+          <Flex className="row hoverable" align="center" gap="small">
+            <Text strong className="grow">{list.name}</Text>
+            <Button
+              className="hover-action"
+              size="small"
+              type="text"
+              icon={<EditOutlined />}
+              onClick={() => setRenamingList(true)}
+            />
+            <Button
+              className="hover-action"
+              size="small"
+              type="text"
+              icon={<CloseOutlined />}
+              onClick={onArchiveList}
+            />
+          </Flex>
+        )}
+      </div>
       {list.items.map((item) => (
         <ItemRow
           key={item.id}

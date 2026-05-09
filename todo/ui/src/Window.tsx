@@ -16,8 +16,7 @@ export default function Window({
   name: string;
   relayUrl: string;
 }) {
-  const [enabled, setEnabled] = useState(true);
-  const [fw, connState] = useFramework(relayUrl, enabled);
+  const [fw, connState] = useFramework(relayUrl);
 
   const listsLookup = useCallback(function* (qx: TodoQX): QueryGenerator<ListData[]> {
     const ids = (yield* qx.get.all_lists()) ?? [];
@@ -82,13 +81,6 @@ export default function Window({
         <Flex align="center" gap="small">
           <Text strong className="grow">{name}</Text>
           <Tag color={stateColor}>{connState}</Tag>
-          <Switch
-            size="small"
-            checked={enabled}
-            onChange={setEnabled}
-            checkedChildren="on"
-            unCheckedChildren="off"
-          />
         </Flex>
       }
     >

@@ -1,0 +1,26 @@
+stages:
+- custom:
+    name: db
+    pre:
+      - sh: rm -rf .db .log
+    cmd:
+      - KurrentDB
+      - --worker-threads=1
+      - --initialization-threads=1
+      - --insecure
+      - --log=.log
+      - --db=.db
+      - --log-level=Debug
+      - --skip-db-verify=true
+      - --run-projections=System
+      - --enable-atom-pub-over-http
+    post:
+      - conncheck:
+          port: 2113
+
+- custom:
+    name: relay
+    pre:
+      - sh: make relay
+    cmd:
+      - relay/relay

@@ -584,7 +584,7 @@ func JSONToGoja(vm *goja.Runtime, s []byte) (goja.Value, error) {
 			object := stack[i.Level - 1]
 			key, err := jsonToGoString(i.Key())
 			if err != nil {
-				rootErr = fmt.Errorf("@%v: converting key: %w", err)
+				rootErr = fmt.Errorf("@%v: converting key: %w", i.Key(), err)
 				return true
 			}
 			object.Set(key, val)
@@ -1284,4 +1284,41 @@ func NewQuery[QX QueryContext, E any, C any, T any](
 		run:   fw.run,
 		query: query.(*goja.Object),
 	}
+}
+
+// helpers for dealing with metadata-wrapped event types
+
+func CheckEvent(
+	vm *goja.Runtime,
+	value goja.Value,
+	path string,
+	subChecker func(*goja.Runtime, goja.Value, string) error,
+) error {
+	var errs []error
+	obj, ok := value.(*goja.Object)
+	if !ok {
+		return fmt.Errorf("%v: is a %v, not a json object", path, value.ExportType())
+	}
+	if field := obj.Get("id"); field != nil {
+		xpath := path + ".id"
+		if typ := field.ExportType(); typ != reflectTypeString {
+			errs = append(errs, fmt.Errorf("%v: is of type %v, not string", xpath, typ))
+		}
+	} else {
+		errs = append(errs, fmt.Errorf("%v: missing required field", path))
+	}
+	if field := obj.Get("data"); field != nil {
+		xpath := path + ".data"
+		err := subChecker(vm, field, xpath)
+		// unwrap the inner errors.Join()
+		unwrapper, ok := err.(interface{ Unwrap() []error })
+		if ok {
+			errs = append(errs, unwrapper.Unwrap()...)
+		} else {
+			errs = append(errs, err)
+		}
+	} else {
+		errs = append(errs, fmt.Errorf("%v: missing required field", path))
+	}
+	return errors.Join(errs...)
 }

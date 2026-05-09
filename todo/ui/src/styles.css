@@ -19,6 +19,12 @@ body {
   margin-bottom: 8px;
 }
 
+.list-title {
+  /* extend the divider across .list's 4px padding so it reaches the border */
+  margin: 0 -4px 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
 .row {
   padding: 4px 8px;
 }
