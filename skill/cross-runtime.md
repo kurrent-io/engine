@@ -1,144 +1,131 @@
 # Cross-Runtime Usage
 
-The core value of the framework is write-once business logic. TypeScript reducers and query
+The core value of the framework is write-once business logic.  TypeScript reducers and query
 functions are bundled and executed in three different runtimes:
 
-| Runtime | JS Engine | Language | Use Case |
-|---------|-----------|----------|----------|
+| Runtime | JS Engine | Host Language | Typical Use |
+|---------|-----------|---------------|-------------|
 | Browser | Native V8/SpiderMonkey | TypeScript/JS | Client UI |
 | Python  | QuickJS (via `_quickjs.c`) | Python | Relay server |
-| Go      | goja | Go | Decider service |
+| Go      | goja | Go | Relay or decider service |
+
+A given demo picks the runtimes it needs.  The library demo uses all three (JS for UI, Python for
+the relay, Go for the decider).  The todo demo uses two (JS for UI, Go for the relay; no decider).
 
 ## How It Works
 
-1. Business logic is written in TypeScript (`model/reducers.ts`)
-2. Export stubs select what each component needs (`model/{ui,relay,decider}.ts`)
-3. Rollup bundles each stub into a single JS file
-4. Each runtime loads and executes that bundle
+1. Business logic is written in TypeScript (`<demo>/model/reducers.ts`).
+2. Per-component export stubs select what each runtime needs
+   (`<demo>/model/{ui,relay,decider}.ts`).
+3. Rollup bundles each stub into a single JS file.
+4. Each runtime loads and executes its bundle.
 
 ```
-model/reducers.ts ─┬─ model/ui.ts      ─→ rollup ─→ ui/src/model.js
-                   ├─ model/relay.ts   ─→ rollup ─→ relay/relay.js
-                   └─ model/decider.ts ─→ rollup ─→ decider/decider.js
+model/reducers.ts ─┬─ model/ui.ts      → rollup → ui/src/model.js
+                   ├─ model/relay.ts   → rollup → relay/relay.js
+                   └─ model/decider.ts → rollup → decider/decider.js
 ```
 
 ## Browser (Native JS)
 
-The simplest case. The bundled JS runs natively. The framework class is imported directly:
+The simplest case: the bundled JS runs natively.  Import the demo's framework class directly:
 
 ```typescript
-import { UserFramework, InMemStorage, userMigrate, userReducer } from './model';
+import { TodoFramework, InMemStorage, migrateTodos, reduceTodos } from './model';
 
-const fw = new UserFramework(new InMemStorage(), {
-    migrate: userMigrate,
-    reducer: userReducer,
+const fw = new TodoFramework(new InMemStorage(), {
+    migrate: migrateTodos,
+    reducer: reduceTodos,
 });
 ```
 
-Storage options: `InMemStorage` (default), `IndexedDBStorage` (persistent, for production PWAs).
+Storage options: `InMemStorage` (default, ephemeral), `IndexedDBStorage` (persistent, for PWAs).
 
 UUID generation uses `crypto.getRandomValues()`.
 
 ## Python + QuickJS
 
-The relay uses `_quickjs.c` to embed QuickJS in Python. The generated `model.py` provides a typed
-Python interface around the JS framework.
+The Python relay uses `_quickjs.c` (the QuickJS Python bindings, reusable across projects) to
+embed QuickJS.  The generated `model.py` provides typed Python wrappers around the JS framework:
 
 ```python
 import model
 
 fw = model.RelayFramework(
     "relay.js",          # path to bundled JS
-    None,                # storage: None = use JS InMemStorage
-    "relayMigrate",      # name of migrate function in bundle
-    "relayReducer",      # name of reducer function in bundle
+    None,                # storage: None = use JS-side InMemStorage
+    "relayMigrate",      # name of the migrate export in the bundle
+    "relayReducer",
 )
 ```
 
 ### Framework API (Python)
 
 ```python
-# Feed events from KurrentDB
-fw.recv_events(events)      # events are dicts matching RealEvent shape
-
-# Get checkpoint for reconnecting
+fw.recv_events(events)       # events match the RealEvent shape (id, data, position)
 checkpoint = fw.reconnect()  # returns int | None
-
-# Lifecycle
 fw.caught_up()
 fw.fell_behind()
-
-# Run validation without modifying state
-result = fw.simulate(validator_fn, events)
+result = fw.simulate(validator_fn, events)  # run reducer without committing
 ```
 
 ### Query Context
 
-Python queries use a Python query context (`QX`) that bridges to the JS storage. The generated
-framework subclass wires this up automatically:
+Python queries use a query context (`QX`) generated from the demo's `Store` definitions, with
+typed get/set accessors that bridge to JS storage:
 
 ```python
-class RelayQueryContext:
-    def __init__(self, ask):
-        self.get = RelayQueryContextGet(ask)
-
-# The framework creates this for you
-qx = RelayQueryContext()
+qx = MyQueryContext(ask)   # the framework wires this up automatically
+qx.get.some_key()
 ```
 
 ### Storage
 
-- `None` (default): Uses `InMemStorage` from the JS bundle
-- Custom `Txn` protocol: Implement `get`, `set`, `delete`, `commit`, `abort` for persistent
-  storage (e.g. LMDB)
+- `None` (default): JS-side `InMemStorage`.
+- Custom `Txn` protocol: implement `get`, `set`, `delete`, `commit`, `abort` for persistent
+  storage (e.g. LMDB).
 
 ### Date Handling
 
-`_quickjs.c` handles JS `Date` ↔ Python `datetime.datetime` conversion natively. JS Date objects
-crossing into Python become UTC `datetime.datetime` instances (via `valueOf()` → timestamp →
-`datetime.fromtimestamp`). Python `datetime.datetime` objects crossing into JS become `new Date(ms)`
-(UTC-only; non-UTC datetimes raise `ValueError`).
+`_quickjs.c` handles JS `Date` ↔ Python `datetime.datetime` conversion natively.  JS `Date`
+crossing into Python becomes a UTC `datetime.datetime` (via `valueOf()` → timestamp).  Python
+`datetime.datetime` crossing into JS becomes `new Date(ms)`.  UTC only; non-UTC datetimes raise
+`ValueError`.
 
 ### UUID Generation
 
-`uuid.uuid4()` is injected into the QuickJS environment as `generateUuid()` via `_quickjs.c`.
+`uuid.uuid4()` is injected into the QuickJS environment as `generateUuid()` by `_quickjs.c`.
 
 ## Go + goja
 
-The decider uses goja, a pure-Go JavaScript interpreter. The generated `model/model.go` provides
-typed Go wrappers.
+Go components (relays or deciders) use goja, a pure-Go JavaScript interpreter.  The generated
+`model/model.go` provides typed Go wrappers around the JS framework.
 
 ```go
-fw, err := model.NewDeciderFramework(
-    deciderScript,           // embedded JS string
-    model.NewInMemStorage(), // Go-side storage
-    "deciderMigrate",
-    "deciderReducer",
+fw, err := model.NewYourFramework(
+    bundledJS,                  // embedded JS string
+    model.NewInMemStorage(),    // Go-side storage
+    "migrate",
+    "reducer",
 )
 ```
 
 ### Framework API (Go)
 
 ```go
-// Feed events (pre-wrapped in metadata as goja.Value objects)
-err := fw.RecvEvents(batch)
-
-// Get checkpoint for reconnecting
-checkpoint, err := fw.Reconnect()  // returns *uint64, error
-
-// Lifecycle
+err := fw.RecvEvents(batch)       // batch is []goja.Value, each a wrapped RealEvent
+checkpoint, err := fw.Reconnect() // returns *uint64, error
 err := fw.CaughtUp()
 err := fw.FellBehind()
 ```
 
 ### Queries (Go)
 
-Go queries use a Go query context with typed accessors:
+Go queries use a typed Go query context:
 
 ```go
-query := model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQX, prev *MyResult) MyResult {
-    // qx.Get.Edition(isbn) etc.
-    // Returns typed Go values
+query := model.NewQuery(fw, func(vm *goja.Runtime, qx model.YourQX, prev *MyResult) MyResult {
+    // qx.Get.SomeKey() etc.
 })
 
 result := query.Start()
@@ -147,17 +134,18 @@ unsub := query.Subscribe(func(val MyResult) { ... })
 
 ### Storage
 
-- `model.NewInMemStorage()`: In-memory (default)
-- `model.GoStorage`: Implement the `Storage` interface for persistent backends
+- `model.NewInMemStorage()` — in-memory default.
+- `model.GoStorage` — implement the `Storage` interface for persistent backends.
 
 ### UUID Generation
 
-`generateUuid()` is injected into the goja environment using `crypto/rand` for randomness,
-producing RFC 4122 v4 UUIDs.
+`generateUuid()` is injected into the goja environment using `crypto/rand`, producing RFC 4122 v4
+UUIDs.
 
 ### Event Conversion
 
-Events from KurrentDB must be converted to goja values with metadata:
+Events from KurrentDB must be converted to goja values with metadata before being fed to the
+framework:
 
 ```go
 ev, err := model.JSONToGoja(vm, recordedEvent.Data)
@@ -167,27 +155,40 @@ obj.Set("id", recordedEvent.EventID.String())
 obj.Set("data", ev)
 ```
 
+### Structural Validation
+
+The Go codegen also produces `Check*` functions for validating raw JSON against the schema.
+These are useful in relays that want structural-only validation without instantiating a full
+framework:
+
+```go
+value, err := model.JSONToGoja(vm, payload)
+if err != nil { return err }
+return model.CheckYourEvents(value, "data")
+```
+
+A single goja runtime is enough for validation; it's not goroutine-safe, so serialize access
+with a mutex.
+
 ## Code Generation
 
-Each target language has its own code generator:
+| Generator | Input | Output | Generates |
+|-----------|-------|--------|-----------|
+| `gen_ts.py` | `<demo>.py` | `<demo>.gen.ts` | Types, decoders, store accessors, framework subclasses |
+| `gen_py.py` | `<demo>.py` | `model.py` | Protocol types, checkers, query contexts, framework subclass |
+| `gen_go.py` | `<demo>.py` | `model.go` | Go types, converters, query contexts, framework subclass, `Check*` validators |
 
-| Generator | Input | Output | What it generates |
-|-----------|-------|--------|-------------------|
-| `gen_ts.py` | `library.py` | `library.gen.ts` | Types, decoders, store accessors, framework subclasses |
-| `gen_py.py` | `library.py` | `model.py` | Protocol types, checkers, query contexts, framework subclass |
-| `gen_go.py` | `library.py` | `model.go` | Go types, converters, query contexts, framework subclass |
-
-Run all generators with `make`. The generators read `library.py` and the skeleton files
-(`skeleton.{ts,py,go}`) which contain the runtime framework code.
+Run `make` in the demo directory to regenerate everything.  The generators read the demo's `.py`
+file and the shared skeleton files (`tools/skeleton.{ts,py,go}`) which contain the runtime
+framework code.
 
 ## Environment Setup
 
-Each runtime needs `generateUuid()` available as a global. The framework skeleton code handles
-this:
+Each runtime needs `generateUuid()` available as a global.  The skeleton handles this:
 
-- **Browser**: Defined in `skeleton.ts`, uses `crypto.getRandomValues()`
-- **QuickJS**: Injected by `_quickjs.c` from Python's `uuid.uuid4()`
-- **goja**: Injected in `skeleton.go` using `crypto/rand`
+- **Browser**: defined in `skeleton.ts`, uses `crypto.getRandomValues()`.
+- **QuickJS**: injected by `_quickjs.c` from Python's `uuid.uuid4()`.
+- **goja**: injected in `skeleton.go` using `crypto/rand`.
 
 If `generateUuid` is already defined in `globalThis` (e.g. injected by the host), the browser
 version defers to it.

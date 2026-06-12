@@ -10,25 +10,18 @@ operation.
 ## Basic Reducer
 
 ```typescript
-import { Reducer } from './library.gen';
+import { Reducer } from './model.gen';
 
-function *reduceAddEdition(rx: BookRX, e: AddEdition): Reducer<void> {
-  yield* rx.set.edition(e.isbn, {
-    isbn: e.isbn,
-    title: e.title,
-    books: {},
-    holds: {},
-  });
-  const editions = yield* rx.get.editions();
-  editions[e.isbn] = true;
-  yield* rx.set.editions(editions);
+function *reduceNewList(rx: TodoRX, e: NewList): Reducer<void> {
+  yield* rx.update.all_lists((all_lists) => all_lists.push(e.id));
+  yield* rx.set.list(e.id, { id: e.id, name: e.name, items: [], archived: false });
 }
 ```
 
 ## The RX Parameter
 
-The `rx` parameter provides typed storage access. It is generated from the `Store` definition in
-`library.py`. Available operations:
+The `rx` parameter provides typed storage access.  It is generated from the `Store` definition in
+the demo's `.py`.  Available operations:
 
 - `rx.get.key(params...)` - Read a value (returns the value or undefined)
 - `rx.set.key(params..., value)` - Write a value
@@ -40,12 +33,12 @@ The `update` helper is a convenience for read-modify-write:
 
 ```typescript
 // These are equivalent:
-yield* rx.update.edition(isbn, (edition) => edition.title = newTitle);
+yield* rx.update.list(id, (list) => list.name = newName);
 
 // vs:
-const edition = yield* rx.get.edition(isbn);
-edition.title = newTitle;
-yield* rx.set.edition(isbn, edition);
+const list = yield* rx.get.list(id);
+list.name = newName;
+yield* rx.set.list(id, list);
 ```
 
 Values returned by `rx.get` are wrapped in copy-on-write proxies. You can mutate them freely and
@@ -53,28 +46,24 @@ call `rx.set` to persist the changes. The framework tracks which keys were modif
 
 ## Return Values
 
-Individual reducers can return values. This is useful for reducers that make decisions:
+Individual reducers can return values.  This is useful for reducers that make decisions — e.g.
+returning a rejection reason (empty string for success, non-empty for the reason):
 
 ```typescript
-// Returns rejection reason, or empty string on success
-function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
-  const patron = yield* rx.get.patron(e.patron);
-  if (!patron.researcher && e.open) {
-    return "non-researcher not allowed to issue open hold";
-  }
-  // ... validation logic ...
-  // success
+function *reduceTryThing(rx: SomeRX, e: TryThing): Reducer<string> {
+  if (/* some constraint fails */) return "constraint violated";
+  // ... apply the change ...
   return "";
 }
 ```
 
-Top-level reducers can return `void` or `any[]`. When a top-level reducer returns an array, it is
-treated as a `markedSent` list — partial command shapes that the framework uses to match and discard
-unsent commands (for forecasting). This is how the client learns that a `try-hold` has round-tripped
-when it sees a `new-vhold` with a different event ID:
+Top-level reducers can return `void` or `any[]`.  When a top-level reducer returns an array, it
+is treated as a `markedSent` list — partial command shapes that the framework uses to match and
+discard unsent commands (for forecasting).  This is how a client learns that a `try-X` command has
+round-tripped when the published event has a different ID (`new-vX`):
 
 ```typescript
-export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]> {
+export function *userReducer(rx: UserRX, events: AppEvents[]): Reducer<any[]> {
   const sent: any[] = [];
   for (const e of events) {
     switch(e.type){
@@ -87,27 +76,24 @@ export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]
 }
 ```
 
-Inside those reducers, push partial shapes like `{ type: "try-hold", id: e.id }` onto the `sent`
-array. The framework's `matchSent()` does a structural subset match against each unsent command.
+Inside those reducers, push partial shapes like `{ type: "try-hold", id: e.id }` onto `sent`.
+The framework's `matchSent()` does a structural subset match against each unsent command.
 
 ## Composing Reducers
 
 Each system component has its own top-level reducer that dispatches to individual reducers by event
-type. Use an exhaustive `switch` on the event `type` discriminator:
+type.  Use an exhaustive `switch` on the event `type` discriminator:
 
 ```typescript
-export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<void> {
+export function *reduceTodos(rx: TodoRX, events: TodoEvents[]): Reducer<void> {
   for (const e of events) {
     switch(e.type) {
-      case "add-edition":    yield* reduceAddEdition(rx, e);    break;
-      case "add-book":       yield* reduceAddBook(rx, e);       break;
-      case "rename-patron":  yield* reduceRenamePatron(rx, e);  break;
+      case "new-list":     yield* reduceNewList(rx, e);     break;
+      case "rename-list":  yield* reduceRenameList(rx, e);  break;
+      case "new-item":     yield* reduceNewItem(rx, e);     break;
       // ... handle all event types ...
 
-      // events this component doesn't process
-      case "try-hold":
-      case "try-checkout":
-        break;
+      // events this component doesn't process (if any) — fall through to `break`
 
       // TypeScript exhaustiveness check
       default:
@@ -118,64 +104,42 @@ export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<void>
 }
 ```
 
-The `never` typecheck at the end ensures you handle every event variant. If you add a new event
+The `never` typecheck at the end ensures you handle every event variant.  If you add a new event
 type and forget to handle it, TypeScript will report an error.
+
+A demo with multiple components (e.g. user-facing vs. admin-facing clients) may have multiple
+top-level reducers in the same file (one per component), often sharing helpers.
 
 ## Cross-Store Access with NoSet
 
-When a reducer needs access to a store it doesn't own, use `NoSet<T>` to strip the `set` operation
-(only `set` — `get`, `del`, `update`, and `old` all remain). `set` is stripped because it has
-type-safety issues with union types. Using `NoSet<StatusRX|VStatusRX>` lets the same reducer work
-in both the decider (StatusRX) and user (VStatusRX) contexts:
+When a reducer needs access to a store it doesn't own (e.g. shared logic that runs in multiple
+components, each with a slightly different RX), use `NoSet<T>` to strip the `set` operation (only
+`set` — `get`, `del`, `update`, and `old` all remain).  `set` is stripped because it has
+type-safety issues with union types.
 
-```typescript
-function *reduceUpdateBookRestricted(
-  rx: BookRX & NoSet<StatusRX|VStatusRX> & PatronRX, e: UpdateBookRestricted,
-): Reducer<string[]> {
-  // can read holds from StatusRX or VStatusRX
-  const hold = yield* rx.get.hold(holdId);
-  // can delete holds
-  yield* rx.del.hold(holdId);
-  // can update patrons (PatronRX is not wrapped in NoSet)
-  yield* rx.update.patron(hold.patron, (p) => delete p.holds[holdId]);
-  // ...
-}
-```
+For example, the library demo runs the same `reduceUpdateBookRestricted` against either the
+decider's full status store or a per-user virtualized status store; the type is
+`BookRX & NoSet<StatusRX|VStatusRX> & PatronRX`.
 
 When a reducer invalidates entities from another store, return the IDs rather than emitting events
-directly. The caller (`privilegedReducer`) is responsible for emitting the corresponding decider
-events:
-
-```typescript
-// in privilegedReducer:
-case "update-book-restricted": {
-  const invalidHolds = yield* reduceUpdateBookRestricted(rx, e);
-  for (const hold_uuid of invalidHolds) {
-    deciderEvents.push({ type: "end-vhold", id: hold_uuid, timestamp: new Date() })
-  }
-} break;
-```
+directly.  Its caller is responsible for emitting the corresponding decision events.
 
 ## Safety Patterns
 
-**Idempotency guards:** Check if an update is actually changing anything before doing work. This
+**Idempotency guards:** Check if an update is actually changing anything before doing work.  This
 prevents unnecessary side effects and makes correctness obvious:
 
 ```typescript
-const book = yield* rx.get.book(e.id);
-if (book.restricted === e.restricted) return [];  // no-op
+const item = yield* rx.get.item(e.id);
+if (item.done === e.done) return [];  // no-op
 ```
 
-**Relevance guards:** When an event might trigger cascading effects, check preconditions explicitly.
-For example, marking a book restricted only affects the unrestricted pool if the book was available:
+**Relevance guards:** When an event might trigger cascading effects, check preconditions
+explicitly — bail out early when the event isn't actually relevant to the cascade.
 
-```typescript
-if (!e.restricted || book.status) return [];  // only available→restricted matters
-```
-
-**Optional fields:** When working with `NoSet<StatusRX|VStatusRX>`, types are the union of both
-stores. For example, `Hold.patron` is always a string, but `VHold.patron` is optional (other
-patrons' holds are anonymous). Guard with `if`, never use `!`:
+**Optional fields under `NoSet<A|B>`:** types become the union of both stores.  Some fields may be
+required in one store and optional in the other (e.g. a `patron` field that's always present in
+admin state but masked in per-user state).  Guard with `if`, never `!`:
 
 ```typescript
 if (hold.patron) {
@@ -183,108 +147,81 @@ if (hold.patron) {
 }
 ```
 
-**Don't rely on object key order.** Copy-on-write proxies and serialization layers may not preserve
-JS insertion order. When ordering matters (e.g. "end the most recently added hold"), use explicit
-data like timestamps.
+**Don't rely on object key order.**  Copy-on-write proxies and serialization layers may not
+preserve JS insertion order.  When ordering matters (e.g. "end the most recently added entry"),
+use explicit data like timestamps.
 
 ## Shared Helpers
 
-When multiple reducers need the same cascading logic, extract a helper. For example,
-`rebalanceEditionHolds` is used by both `reduceUpdateBookRestricted` and `reduceRemoveBook` to end
-excess edition-level holds when the unrestricted book pool shrinks:
-
-```typescript
-type RebalanceRX = BookRX & NoSet<StatusRX|VStatusRX> & PatronRX;
-
-function *rebalanceEditionHolds(
-  rx: RebalanceRX, edition: Edition,
-): Reducer<string[]> {
-  // count available unrestricted books, sort holds by timestamp descending,
-  // end the most recent holds until holds <= available
-}
-```
-
-The caller passes the edition (which it may have already modified, e.g. after deleting a book from
-`edition.books`) and is responsible for calling `rx.set.edition()` afterward.
+When multiple reducers need the same cascading logic, extract a helper.  Pass it the relevant
+`rx` slice (using intersection types and `NoSet<>` as needed) and have it return the IDs of any
+entities the caller needs to clean up or emit events about.
 
 ## Migrations
 
-Migration functions initialize storage with default values. They run once when the framework starts
-with empty storage:
+Migration functions initialize storage with default values.  They run once when the framework
+starts with empty storage:
 
 ```typescript
-export function *userMigrate(rx: UserRX): Reducer<void> {
-  yield* rx.set.editions((yield* rx.get.editions()) ?? {});
-  yield* rx.set.patrons((yield* rx.get.patrons()) ?? {});
-  yield* rx.set.messages([]);
+export function *migrateTodos(rx: TodoRX): Reducer<void> {
+  yield* rx.set.all_lists((yield* rx.get.all_lists()) ?? []);
 }
 ```
 
-The pattern `(yield* rx.get.key()) ?? defaultValue` ensures idempotency - if the key already
+The pattern `(yield* rx.get.key()) ?? defaultValue` ensures idempotency — if the key already
 exists (e.g. after a reconnect), the existing value is preserved.
-
-## Shared Privileged Reducer
-
-The decider and the admin UI both have access to all events and the same store shape (modulo the
-decider's extra `decider_events` key). Their common logic is extracted into `privilegedReducer`,
-which returns `DeciderEvents[]`:
-
-```typescript
-function *privilegedReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<DeciderEvents[]> {
-  const deciderEvents: DeciderEvents[] = [];
-  // ... full business logic, pushes to deciderEvents ...
-  return deciderEvents;
-}
-
-export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer<void> {
-  const deciderEvents = yield* privilegedReducer(rx, events);
-  yield* rx.set.decider_events(deciderEvents);
-}
-
-export function *adminReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<void> {
-  yield* privilegedReducer(rx, events);  // discard decider events
-}
-```
 
 ## Different Reducers for Different Components
 
-The same event types are handled differently by each component:
+When a demo has multiple components consuming the same events differently, each gets its own
+top-level reducer.  Common patterns:
 
-- **Decider / Admin**: Full business logic via `privilegedReducer`. Validates holds/checkouts
-  against all constraints, emits decision events (`new-vhold`, `vhold-rejected`, `end-vhold`,
-  `new-vcheckout`).
-- **User (patron client)**: Applies virtualized decisions. Doesn't see `try-hold` or `try-checkout`
-  directly - instead sees `new-vhold` and `new-vcheckout` after the decider processes them. Returns
-  a `markedSent` array to help the framework discard forecasts.
-- **Relay**: Minimal read model. Only tracks existence of objects for reference validation and
-  hold ownership for authorization checks.
+- **Privileged vs. user-facing**: a privileged component (decider, admin client) sees real
+  events; user-facing clients see only virtualized versions.  The privileged reducer often
+  produces decision events that the decider publishes back to KurrentDB; the user reducer applies
+  the resulting virtualized events.
+- **Shared logic via a helper reducer**: when two components need overlapping business logic
+  (e.g. decider + admin client both validate the same way), factor it into a helper that both
+  top-level reducers call.  The helper returns whatever data the callers need to do their
+  component-specific work.
+- **Minimal relay reducer**: a relay's read model may only track existence of objects for
+  reference validation and authorization, not full state.
+
+The library demo uses all three of these (see its `userReducer`, `adminReducer`, `deciderReducer`,
+`relayReducer`, and the shared `privilegedReducer` helper).  A simple demo (like the todo demo)
+has a single `reduceTodos` used everywhere.
+
+## Forecasting and `markedSent`
+
+When a client sends a command that the server transforms before publishing (e.g. `try-hold` →
+`new-vhold` with a different event ID), the forecaster predicts the post-transform event with
+`forecasted: true`.  When the real event later arrives, the framework needs to discard the
+forecast.
+
+Matching by event ID isn't enough here because the IDs differ.  Top-level reducers can return a
+`markedSent` array of partial command shapes that the framework matches structurally against
+unsent commands.  See `frontend.md` for the forecaster side.
 
 ## Unit Testing with ReducerTester
 
-The code generators produce a `ReducerTester` subclass for each framework. It runs reducers
-synchronously against `InMemStorage`, returning updated keys and markedSent:
+The code generators produce a `ReducerTester` subclass for each framework.  It runs reducers
+synchronously against `InMemStorage`, returning updated keys and `markedSent`:
 
 ```typescript
-import { UserReducerTester } from './library.gen';
-import { userMigrate, userReducer } from './reducers';
+import { TodoReducerTester } from './model.gen';
+import { migrateTodos, reduceTodos } from './reducers';
 
-test("user reducer", () => {
-  const t = new UserReducerTester(userMigrate, userReducer);
-  t.run([
-    { type: "add-edition", isbn: "isbn-1", title: "Title", timestamp: new Date() },
-    { type: "add-book", id: "book-1", isbn: "isbn-1", restricted: false, timestamp: new Date() },
-  ]);
-  expect(t.data.editions()).toStrictEqual({"isbn-1": true});
-
+test("new-list adds to all_lists and creates the list", () => {
+  const t = new TodoReducerTester(migrateTodos, reduceTodos);
   const result = t.run([
-    { type: "new-vhold", id: "hold-1", patron: "p1", target: { edition: "isbn-1" },
-      open: false, timestamp: new Date() },
+    { type: "new-list", id: "list-1", name: "Groceries" },
   ]);
-  expect(result.updates).toStrictEqual(["edition.isbn-1", "hold.hold-1", "patron.p1"]);
-  expect(result.markedSent).toStrictEqual([{ type: "try-hold", id: "hold-1" }]);
+  expect(t.data.all_lists()).toStrictEqual(["list-1"]);
+  expect(t.data.list("list-1")).toMatchObject({ name: "Groceries", items: [] });
+  expect(result.updates).toStrictEqual(["all_lists", "list.list-1"]);
 });
 ```
 
-The constructor accepts either a migrate function or an initial data object (a plain
-`Record<string, any>`). The `t.data` accessor provides typed read access to the store via a
+The constructor accepts either a migrate function or an initial-data object (a plain
+`Record<string, any>`).  The `t.data` accessor provides typed read access to the store via a
 generated `TestData` class.

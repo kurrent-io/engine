@@ -1,135 +1,157 @@
 # Building a Relay
 
-The relay is the server-side gateway between clients and KurrentDB. It validates incoming commands,
-writes them to the database, and streams events back to clients. It runs Python with QuickJS
-embedded for executing the TypeScript business logic.
+The relay is the server-side gateway between clients and KurrentDB.  It accepts WebSocket
+connections, validates incoming commands, writes them to the database, and streams events back to
+clients.
 
-## Architecture
+The relay can be implemented in either Python (using QuickJS via `_quickjs.c`) or Go (using goja).
+Both runtimes execute the same TypeScript business logic.  The library demo uses a Python relay;
+the todo demo uses a Go relay.
 
-The relay has four main components:
+## Responsibilities
 
-- **Subscriber** - Reads from KurrentDB's `$all` stream, updates the relay's read model, and
-  dispatches events to connected clients.
-- **Writer** - Manages the outgoing event stream to a single WebSocket client, handling the
-  transition from catchup (historical events) to live (real-time events).
-- **Reader** - Reads incoming commands from a WebSocket client, validates them, and batches them
-  for appending.
-- **Appender** - Writes validated commands to KurrentDB, using optimistic concurrency on UUID
-  streams to guarantee uniqueness.
+A minimal relay does three things:
+
+1. Accept a WebSocket connection and read a handshake message.
+2. Subscribe to KurrentDB starting from the handshake's `since` checkpoint, stream events to the
+   client (with a `"caughtup"` marker at the catchup→live boundary).
+3. Read commands from the client, validate them, and append accepted ones to KurrentDB.  Drop the
+   connection on invalid input.
+
+A richer relay may also:
+
+- **Run a local read model** via a `RelayFramework`, so it can validate semantically (reference
+  checks, authorization) — not just structurally.  Use `fw.simulate()` to run validation logic
+  against the read model without committing changes.
+- **Partition events across streams** by type (e.g. domain-area streams), so subscriptions can be
+  filtered server-side.
+- **Virtualize / sanitize events per client** before forwarding.  E.g. strip fields that only the
+  owning user should see, or split a `status` stream into a private `status` (admin) and public
+  `vstatus` (sanitized) flow.
 
 ## WebSocket Protocol
 
 Clients connect to `ws://<host>:<port>/ws`.
 
-**Handshake (client -> server):** The first message is JSON:
-```json
-{"patron_id": "some-uuid", "since": 12345}
-```
-- `patron_id`: identifies the user; empty or missing for admin connections
-- `since`: last known commit position, or `null` for a fresh connection
+**Handshake (client → server):** First message is JSON.  Minimum shape:
 
-Admin clients subscribe to the `status` stream directly and see all events. Patron clients subscribe
-to `vstatus` and receive sanitized events.
-
-**Server -> client:** Wrapped event messages:
 ```json
-{"position": 12345, "id": "event-uuid", "data": {"type": "add-edition", ...}}
+{"since": 12345}
 ```
+
+`since` is the last commit position the client has seen, or `null` for a fresh connection.  Add
+identity / auth fields as the demo requires.
+
+**Server → client:** Wrapped event messages:
+
+```json
+{"position": 12345, "id": "event-uuid", "data": {...}}
+```
+
 Plus a bare string `"caughtup"` when the catchup phase completes.
 
-**Client -> server:** Command messages:
+**Client → server:** Command messages, after the handshake:
+
 ```json
-{"id": "command-uuid", "data": {"type": "try-hold", ...}}
+{"id": "command-uuid", "data": {...}}
 ```
 
-## Event Routing
-
-Events are written to different KurrentDB streams based on type:
-
-```python
-def stream_for(event):
-    match event.type:
-        case "add-edition" | "update-edition-title" | "add-book" | ...:
-            return "books"
-        case "add-patron" | "rename-patron" | "assign-patron":
-            return f"patron.{event.id}"
-        case "try-hold" | "cancel-hold" | "try-checkout" | "end-checkout":
-            return "status"
-```
-
-## Event Distribution
-
-The subscriber dispatches events to clients based on stream name:
-
-| Stream | Distribution |
-|--------|-------------|
-| `books` | All connected clients |
-| `patron.{id}` | That patron + all admins |
-| `status` | Subset broadcast globally (`cancel-hold`, `expire-hold`, `end-checkout`); rest admin-only |
-| `vstatus` | Sanitized per-patron (see below); admins do not receive vstatus |
-
-**VStatus sanitization:** Events on the `vstatus` stream contain sensitive patron IDs. Before
-forwarding to patron clients:
-- `new-vhold` and `new-vcheckout`: strip the `patron` field (unless the recipient is the owner)
-- `vhold-rejected`: only forward to the patron whose hold was rejected
-- Admins are excluded from vstatus distribution entirely (they see real status instead)
+The `id` is a client-generated UUID; the relay uses it as the EventID when appending.
 
 ## Validation
 
-The relay validates incoming commands at two levels:
+Two levels, depending on how rich the relay's read model is:
 
-**Structural validation** (before queuing): Checks that the JSON matches the expected schema using
-generated `check*` functions from `model.py`.
+**Structural validation** — Check that the JSON matches the expected schema.  The codegen produces
+`Check*` functions (Python and Go) for each event/command union.  In a Go relay this looks like:
 
-**Semantic validation** (before appending): Uses `fw.simulate()` to run the validation logic
-against the current read model without modifying it. This catches:
-- Broken references (e.g. holding a book that doesn't exist)
-- Authorization failures (e.g. one patron canceling another's hold)
+```go
+value, err := model.JSONToGoja(vm, payload)
+if err != nil { return err }
+return model.CheckTodoEvents(value, "data")
+```
 
-The relay deliberately does NOT validate things that could be caused by race conditions (e.g.
-holding an already-held book). Those are handled by the decider, which operates after global
-ordering is established.
+**Semantic validation** — Run the validation reducer against the relay's read model via
+`fw.simulate()`.  This catches things like broken references and authorization failures.
 
 ```python
-# validation functions run inside fw.simulate()
 new_uuids, errors = self.fw.simulate(self.validator, batch)
 if errors:
     raise UserError(errors)
 ```
 
-## UUID Uniqueness
+The relay deliberately does NOT validate things that could be caused by race conditions (e.g.
+holding an already-held item).  Those belong to the decider, which operates after global ordering
+is established.
 
-Each new entity (hold, checkout, etc.) gets a client-generated UUID. The relay uses KurrentDB's
-optimistic concurrency to guarantee uniqueness: it writes a small event to a `uuid.{id}` stream
-with `current_version=NO_STREAM`, which fails if that UUID was already used.
+## UUID Uniqueness (optional)
+
+When new entities (e.g. holds) are created by clients with client-generated UUIDs, the relay can
+guarantee uniqueness using KurrentDB's optimistic concurrency: write a tiny event to a `uuid.{id}`
+stream with `current_version=NO_STREAM`, which fails if that UUID was already taken.  The library
+demo does this; the todo demo skips it for simplicity.
 
 ## Catchup-to-Live Transition
 
-The `Subscriber.stream()` method handles the tricky transition from reading historical events to
-receiving live events without gaps or duplicates:
+When a relay maintains its own read model, the transition from historical events to live events
+needs care so neither side misses or duplicates events.  Typical sequence:
 
-1. **Cold catchup**: Read historical events from KurrentDB, send to client
-2. **Subscribe to live events**: Start collecting live events in a queue
-3. **Hot catchup**: Read any events that arrived during step 2
-4. **Go live**: Discard duplicate events from the live queue, then switch to the live stream
+1. **Cold catchup**: Read historical events, send to the client.
+2. **Subscribe to live**: Start a live subscription that buffers in a queue.
+3. **Hot catchup**: Read any events that arrived between the cold catchup endpoint and the
+   subscription start.
+4. **Go live**: Discard duplicates from the live queue (events already seen in hot catchup),
+   then switch to streaming the live queue.
 
-## Setting Up the Framework
+If the relay just forwards the KurrentDB subscription directly (no local read model), KurrentDB's
+single `SubscribeToAll` call handles catchup + live in one stream; you just emit `"caughtup"` when
+the subscription reports the catchup→live transition.
 
-The relay creates a `RelayFramework` instance that runs the TypeScript relay logic inside QuickJS:
+## Per-Client Event Distribution
+
+If the demo virtualizes events per user, the subscriber dispatches each event to the right
+subset of connected clients based on stream and event content.  Patterns:
+
+- **Global**: All clients receive it.
+- **Owner-only**: Only the user who owns the entity receives the event.
+- **Sanitized fanout**: All clients receive it, but with sensitive fields stripped for non-owners.
+- **Admin-only / privileged**: Only privileged connections see it.
+
+The library demo's relay implements all four patterns over streams named `books`, `patron.*`,
+`status`, and `vstatus`; see `relay/relay.py` for the full table.  Simpler demos (like todo) skip
+this entirely and broadcast a single stream to all connected clients.
+
+## Framework Setup
+
+The relay creates a framework instance that runs the TypeScript relay logic inside QuickJS or
+goja.  Python:
 
 ```python
 fw = model.RelayFramework(
-    os.path.join(os.path.dirname(__file__), "relay.js"),
-    None,           # storage: None means use InMemStorage from TypeScript
+    "relay.js",      # path to the bundled JS
+    None,            # storage: None means JS-side InMemStorage
+    "relayMigrate",  # name of the migrate export in the bundle
+    "relayReducer",
+)
+```
+
+Go:
+
+```go
+fw, err := model.NewRelayFramework(
+    relayScript,                // embedded JS string
+    model.NewInMemStorage(),
     "relayMigrate",
     "relayReducer",
 )
 ```
 
-The relay's read model is intentionally minimal - it only tracks what's needed for validation.
+The relay's read model should be intentionally minimal — only track what's needed for validation
+or per-client dispatching.
 
-## Sync Utility
+## Sync Utility (round-trip tracking)
 
-The `Sync` class tracks round-trips through the database. After appending commands, the relay
-waits for those events to appear in its own `$all` subscription before responding. This ensures
-the read model is up-to-date before validating the next batch of commands.
+When the relay validates against its own read model, it must wait for newly-appended events to
+flow back through its `$all` subscription before validating the next batch.  The library demo's
+`Sync` class (in `relay.py`) tracks the latest committed position and lets the appender wait for
+the subscriber to catch up before unblocking.  Demos without a local read model don't need this.

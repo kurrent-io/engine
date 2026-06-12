@@ -1,8 +1,8 @@
 # Defining a Data Model
 
-The data model is defined in Python using the type DSL from `tools/protos.py`. This file describes
-the domain types, events, storage layout, and framework compositions. Code generators then produce
-typed code for TypeScript, Python, and Go.
+A demo's data model is defined in Python using the type DSL from `tools/protos.py`.  The model
+file (e.g. `<demo>/model/<demo>.py`) describes the domain types, events, storage layout, and
+framework compositions.  Code generators then produce typed code for TypeScript, Python, and Go.
 
 ## Type Primitives
 
@@ -125,27 +125,35 @@ example, `BookStore` generates:
 ## Defining Frameworks
 
 `Framework` ties together the event type (what comes in), the command type (what goes out), and the
-store (what state is maintained):
+store (what state is maintained).  The three parameters are `(event_type, command_type, store)`.
+
+A simple demo with no per-user variation needs only one framework:
 
 ```python
-UserFramework = Framework(LibraryEvents, UserCommands, UserStore)
-AdminFramework = Framework(LibraryEvents, AdminCommands, AdminStore)
-DeciderFramework = Framework(LibraryEvents, LibraryEvents, DeciderStore)
-RelayFramework = Framework(LibraryEvents, RelayCommands, RelayStore)
+TodoFramework = Framework(TodoEvents, TodoEvents, TodoStore)
 ```
 
-Using typed command types (e.g. `UserCommands` instead of `LibraryEvents`) makes the `forecaster`
-callback type-safe — it receives only the commands that component can send.
+A richer demo may define multiple frameworks — one per system component, with different store
+shapes per component:
 
-The three parameters are: `(event_type, command_type, store)`.
+```python
+# library demo, illustrative
+UserFramework    = Framework(LibraryEvents, UserCommands,    UserStore)
+AdminFramework   = Framework(LibraryEvents, AdminCommands,   AdminStore)
+DeciderFramework = Framework(LibraryEvents, LibraryEvents,   DeciderStore)
+RelayFramework   = Framework(LibraryEvents, RelayCommands,   RelayStore)
+```
+
+Using a narrowed command type (e.g. `UserCommands` instead of all events) makes the `forecaster`
+callback type-safe — it receives only the commands that component can actually send.
+
+Different components may have different stores for the same domain.  E.g. a relay might track only
+existence of objects (for validation), a decider tracks full state (for decisions), and per-user
+clients see virtualized state.
 
 Every `Store` and `Framework` must be assigned to a module-level variable (e.g.
-`MyStore = Store(...)`) so the code generators can discover its name. Unnamed stores or frameworks
-will raise an error at generation time.
-
-Different components may have different stores for the same domain. For example, the relay only
-tracks existence of objects (for validation), the decider tracks full state (for decisions), and
-the admin client sees real status while patron clients see virtualized status.
+`MyStore = Store(...)`) so the code generators can discover its name.  Unnamed stores or
+frameworks raise an error at generation time.
 
 ## Code Generation
 
@@ -153,16 +161,16 @@ Generate typed outputs with:
 
 ```bash
 # TypeScript
-python tools/protos.py -i tools -i model gen_ts library > model/library.gen.ts
+python tools/protos.py -i tools -i <demo>/model gen_ts <demo> > <demo>/model/<demo>.gen.ts
 
-# Python
-python tools/protos.py -i tools -i model gen_py library > relay/model.py
+# Python (for a Python relay)
+python tools/protos.py -i tools -i <demo>/model gen_py <demo> > <demo>/relay/model.py
 
-# Go
-python tools/protos.py -i tools -i model gen_go library -- model > decider/model/model.go
+# Go (for a Go relay or decider)
+python tools/protos.py -i tools -i <demo>/model gen_go <demo> -- model > <demo>/relay/model/model.go
 ```
 
-Or just run `make` to regenerate everything.
+Or just run `make` in the demo directory to regenerate everything.
 
 ## Event Metadata
 
