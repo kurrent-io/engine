@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { Card, Flex, Spin, Switch, Tag, Typography } from 'antd';
+import { useCallback } from 'react';
+import { Card, Flex, Spin, Tag, Typography } from 'antd';
 
 import { TodoQX, QueryGenerator } from './model';
 import { useQuery } from './useQuery';

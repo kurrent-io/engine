@@ -18,25 +18,33 @@ tools/gen_go.py: tools/protos.py tools/skeleton.go
 	@touch $@
 
 .PHONY: model
-model: model/library.gen.ts
+model: model/library.gen.ts model/node_modules
+
+model/node_modules:
+	cd model && pnpm i
 
 model/library.gen.ts: model/library.py tools/gen_ts.py model/reducers.ts model/tsconfig.json
 	python tools/protos.py -i tools -i model gen_ts library > $@
 
 .PHONY: model/check
 model/check: model
-	cd model && tsc
+	cd model && pnpm tsc
 
 .PHONY: relay
 relay: relay/relay.js relay/model.py relay/_quickjs.so
 
-relay/relay.js: model/library.gen.ts model/relay.ts
+relay/relay.js: model/node_modules model/library.gen.ts model/relay.ts
 	cd model && pnpm rollup -m inline --exports named -p typescript relay.ts -o ../relay/relay.js
 
 relay/model.py: model/library.py tools/gen_py.py
 	python tools/protos.py -i tools -i model gen_py library > $@
 
-relay/quickjs/.obj/%.pic.o:
+relay/quickjs:
+	rm -rf quickjs~
+	git clone https://github.com/bellard/quickjs $@~
+	mv $@~ $@
+
+relay/quickjs/.obj/%.pic.o: relay/quickjs
 	cd relay/quickjs && $(MAKE) .obj/$(notdir $@)
 
 relay/_quickjs.so: relay/_quickjs.c $(foreach lib,$(QUICKJS_LIBS),relay/quickjs/.obj/$(lib).pic.o)
@@ -49,7 +57,7 @@ relay/check: relay
 .PHONY: decider
 decider: decider/decider
 
-decider/decider.js: model/library.gen.ts model/decider.ts
+decider/decider.js: model/node_modules model/library.gen.ts model/decider.ts
 	cd model && pnpm rollup -m inline --format=cjs -p typescript decider.ts -o ../decider/decider.js
 
 decider/model/model.go: model/library.py tools/gen_go.py
@@ -60,17 +68,20 @@ decider/decider: decider/decider.js decider/main.go decider/model/model.go
 	cd decider && go build -o decider .
 
 .PHONY: ui
-ui: ui/src/model.js ui/src/model.d.ts
+ui: ui/node_modules ui/src/model.js ui/src/model.d.ts
 
-ui/src/model.js:  model/library.gen.ts model/ui.ts
+ui/node_modules:
+	cd ui && pnpm i
+
+ui/src/model.js:  model/node_modules model/library.gen.ts model/ui.ts
 	cd model && pnpm rollup -m inline --format=esm -p typescript ui.ts -o ../$@
 
-ui/src/model.d.ts: model/library.gen.ts model/ui.ts
+ui/src/model.d.ts: model/node_modules model/library.gen.ts model/ui.ts
 	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
 
 .PHONY: ui/check
 ui/check: ui
-	cd ui && tsc
+	cd ui && pnpm tsc
 
 .PHONY: check
 check: decider/decider model/check relay/_quickjs.so relay/check ui/check
