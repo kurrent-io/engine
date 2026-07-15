@@ -1,0 +1,16 @@
+{
+  "name": "@kurrent/library-tsp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TypeSpec port of the library demo data model (model/library.py)",
+  "scripts": {
+    "gen": "tsp compile ."
+  },
+  "dependencies": {
+    "@kurrent/typespec-engine": "workspace:*",
+    "@kurrent/typespec-engine-ts": "workspace:*",
+    "@kurrent/typespec-engine-py": "workspace:*",
+    "@kurrent/typespec-engine-go": "workspace:*",
+    "@typespec/compiler": "^1.0.0"
+  }
+}

@@ -50,6 +50,9 @@ tools/              Reusable framework + codegen tooling
   protos.py         Type system DSL (Struct, Union, Store, Framework, ...)
   gen_{ts,py,go}.py Code generators
   skeleton.{ts,py,go}  Runtime skeletons compiled into each target language
+  typespec/         Experimental TypeSpec replacement for the Python DSL — read
+                    tools/typespec/CLAUDE.md for status + settled design decisions
+                    before working on it
 
 relay/_quickjs.c    Reusable Python ↔ QuickJS bindings (used by Python relays)
 

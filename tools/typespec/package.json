@@ -1,0 +1,9 @@
+{
+  "name": "@kurrent/typespec-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "gen": "pnpm build && pnpm --filter @kurrent/library-tsp gen"
+  }
+}

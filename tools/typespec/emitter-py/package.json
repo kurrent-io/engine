@@ -1,0 +1,31 @@
+{
+  "name": "@kurrent/typespec-engine-py",
+  "version": "0.1.0",
+  "description": "Python emitter for Kurrent Engine TypeSpec models",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ."
+  },
+  "dependencies": {
+    "@kurrent/typespec-engine": "workspace:*"
+  },
+  "peerDependencies": {
+    "@typespec/compiler": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typespec/compiler": "^1.0.0",
+    "typescript": "^5.6.0"
+  },
+  "files": [
+    "dist/**",
+    "assets/**"
+  ]
+}
