@@ -2,3 +2,5 @@ node_modules/
 dist/
 tsp-output/
 tsp-output-*/
+# generated artifact copied in by the go test harness (see tests/package.json test:go)
+tests/go/model.go

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "build": "pnpm -r build",
-    "gen": "pnpm build && pnpm --filter @kurrent/library-tsp gen"
+    "gen": "pnpm build && pnpm --filter @kurrent/library-tsp gen",
+    "test": "pnpm -r build && pnpm --filter @kurrent/typespec-engine-tests gen && pnpm --filter @kurrent/typespec-engine-tests test"
   }
 }

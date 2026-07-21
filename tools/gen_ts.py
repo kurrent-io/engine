@@ -86,8 +86,12 @@ def decode_solution(d, annos, decoders, solution):
 
     d.print("let x = val;\n")
 
-    # now we can generate the whole solution without any backtracking
-    def visit(solution):
+    # `x` holds the object currently being inspected; only GetIndex descends it (into an array
+    # element).  `subj` is the expression the enclosing switch tests -- `x` itself, or a field of
+    # it (`x.type`) provided by a GetField.  Sub-solutions of a switch navigate from `x` again, so
+    # sibling discriminators like [type, v] each read from the same object rather than from the
+    # previously extracted field.
+    def visit(solution, subj):
         if isinstance(solution, Match):
             if solution.typ is sentinel:
                 d.print("return val;\n")
@@ -95,24 +99,24 @@ def decode_solution(d, annos, decoders, solution):
                 d.print("return " + decoders[solution.typ]("val") + ";\n")
         elif isinstance(solution, CheckJsonType):
             if len(solution.options) == 1:
-                return visit(next(iter(solution.options.values())))
+                return visit(next(iter(solution.options.values())), subj)
             # note that typeof() has some weird behaviors:
             # - typeof([]) = "object"
             # - typeof(null) = "object"
             # so we use a custom helper function specific to handling decoded json
-            d.print("switch(json_typeof(x)){\n")
+            d.print(f"switch(json_typeof({subj})){{\n")
             d.indent("  ")
             for jtyp, subsln in solution.options.items():
                 d.print(f'case "{jtyp}":\n');
                 d.indent("  ")
-                visit(subsln)
+                visit(subsln, "x")
                 d.dedent()
             d.dedent()
             d.print("}\n")
         elif isinstance(solution, CheckLiteral):
             if len(solution.options) == 1:
-                return visit(next(iter(solution.options.values())))
-            d.print("switch(x){\n")
+                return visit(next(iter(solution.options.values())), subj)
+            d.print(f"switch({subj}){{\n")
             d.indent("  ")
             for lit, subsln in solution.options.items():
                 if isinstance(lit, str):
@@ -122,47 +126,46 @@ def decode_solution(d, annos, decoders, solution):
                 else:
                     d.print(f"case {lit}:\n");
                 d.indent("  ")
-                visit(subsln)
+                visit(subsln, "x")
                 d.dedent()
             d.print("default: throw new Error(`unexpected value: ${val}`);\n")
             d.dedent()
             d.print("}\n")
         elif isinstance(solution, CheckLength):
             if len(solution.options) == 1 and solution.default is None:
-                return visit(next(iter(solution.options.values())))
-            d.print("switch(x.length){\n")
+                return visit(next(iter(solution.options.values())), subj)
+            d.print(f"switch({subj}.length){{\n")
             d.indent("  ")
             for length, subsln in solution.options.items():
                 d.print(f"case {length}:\n");
                 d.indent("  ")
-                visit(subsln)
+                visit(subsln, "x")
                 d.dedent()
             # default
             if solution.default is not None:
                 d.print(f"default:\n");
                 d.indent("  ")
-                visit(solution.default)
+                visit(solution.default, "x")
                 d.dedent()
             d.dedent()
             d.print("}\n")
         elif isinstance(solution, GetIndex):
-            d.print(f"x = x[{solution.i}];\n")
-            visit(solution.solution)
+            d.print(f"x = {subj}[{solution.i}];\n")
+            visit(solution.solution, "x")
         elif isinstance(solution, GetField):
-            d.print(f"x = x.{solution.key};\n")
-            visit(solution.solution)
+            visit(solution.solution, f"{subj}.{solution.key}")
         elif isinstance(solution, HasField):
             for field, subsln in solution.solutions:
-                d.print(f'if ("{field}" in x) {{\n')
+                d.print(f'if ("{field}" in {subj}) {{\n')
                 d.indent("  ")
-                visit(subsln)
+                visit(subsln, "x")
                 d.dedent()
                 d.print("}\n")
             d.print("throw new Error(`no matching field: ${JSON.stringify(val)}`);\n")
         else:
             raise ValueError(f"unrecognized solution type: {type(solution).__name__}")
 
-    visit(solution)
+    visit(solution, "x")
 
 
 def generate_decoders(d, annos, decoders, t):

@@ -10,7 +10,7 @@ it for side-by-side comparison testing.
 engine/       @kurrent/typespec-engine — the definition library apps import.
               lib/main.tsp declares the vocabulary (the Store and Framework interface
               templates); src/ holds everything shared by emitters:
-                ir.ts      interned concrete-type IR (port of protos.py's Concrete layer)
+                ktypes.ts  interned concrete-type IR (port of protos.py's Concrete layer)
                 solver.ts  union solver (port of solve_union / remap_and_prune)
                 lower.ts   TypeSpec Program -> IR (replaces protos.py's name harvesting/resolve)
                 denter.ts  indent-aware printer (port of Denter)
@@ -21,6 +21,7 @@ emitter-go/   @kurrent/typespec-engine-go — Go emitter (port of gen_go.py).
               engine and walks the lowered IR.  Each ships its target-language runtime skeleton
               as assets/skeleton.{ts,py,go} and prepends it (override via the `skeleton` option).
 library/      TypeSpec port of the library demo (main.tsp mirrors model/library.py).
+tests/        Vitest suite for the tooling (see "Tests" below).
 compare.sh    Regenerate all three outputs and diff against the Python tooling's output.
 ```
 
@@ -81,6 +82,49 @@ Semantic checks:
 - Python: `python -c "import ast; ast.parse(open(...).read())"` parses.
 - Go: `gofmt -e` parses.  (A full `go build` needs the module's goja/jscan deps and was not
   run here.)
+
+## Tests
+
+```
+pnpm test        # from tools/typespec: build all packages, regenerate fixtures, run the vitest suite
+pnpm --filter @kurrent/typespec-engine-tests test:py   # emitted-Python checker suite (stdlib only)
+```
+
+The `tests/` package has two layers.
+
+**Behavioral** — execute emitted code, one suite per runtime, tested independently (the runtimes
+expose different surfaces: TS emits decoders, Python/Go emit checkers).  All three are driven from
+one shared fixture, `tests/fixtures/main.tsp`, emitted into `tests/tsp-output/` by `pnpm gen`.
+
+- `src/ts/decode.test.ts` — feeds plain JSON to the emitted `DecodeX` functions and checks the
+  typed result: identity/date/optional-date/nested/tuple decode, discriminated (`type`) and
+  sub-discriminated (`[type, v]`) union dispatch, one-of, literal unions, throw paths.
+- `py/test_checkers.py` — feeds native dicts/lists to the emitted `checkX` functions and inspects
+  the returned problem list.  Stdlib only: tests self-register with `@register_test` and a
+  `__main__` runner executes them (no pytest).  Installs a `_quickjs` stub before importing the
+  generated `model.py` (the ext is only used by the Framework runtime, never the checkers).
+  Run with `pnpm --filter @kurrent/typespec-engine-tests test:py` (or `python3 py/test_checkers.py`).
+- `go/` — a self-contained Go module (goja + jscan) whose `model_test.go` parses JSON into a
+  `goja.Value` and calls the emitted `CheckX(vm, value, path)`.  `test:go` copies the generated
+  `model.go` into the package and runs `go test`.  (Go's timestamp check uses the strict
+  `2006-01-02T15:04:05Z` layout — no fractional seconds — so its fixtures omit milliseconds.)
+
+**Solver / lowering / interning unit tests** (`tests/src/`) — no runtime:
+
+- `solver.test.ts` — builds interned KTypes directly and asserts the solution-tree shape
+  `solveUnion()` produces for each strategy (json-type routing, literal buckets, `type`- and
+  `[type, v]`-discriminated structs, one-of `HasField`, tuple length/index discrimination) plus
+  the error paths (no discriminator, non-common discriminator, non-unique sole discriminator,
+  two possibly-empty arrays, non-struct objects).
+- `interning.test.ts` — `KTypeRegistry` identity: primitive singletons, literal-by-value,
+  field-order-independent structs, optional-vs-required, collection interning, and union
+  flatten/dedup/single-collapse/order-independence.
+- `lowering.test.ts` — compiles small TypeSpec programs in-memory (via `@typespec/compiler`'s
+  `createTester` with the engine library) and asserts `lowerProgram()` output: scalar/collection
+  mapping, enum→literal-union, cross-program interning identity, store discovery (names, key
+  templates, dependency inheritance), and framework discovery.
+
+Note: `pnpm approve-builds` (accept `esbuild`) is needed once so vitest's transform can run.
 
 ## Known gaps / first-pass shortcuts
 

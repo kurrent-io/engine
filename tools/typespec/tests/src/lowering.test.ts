@@ -1,0 +1,186 @@
+/**
+ * Lowering unit tests: compile small TypeSpec programs in-memory and assert that lowerProgram()
+ * translates them into the expected interned IR — type mapping, naming, interning identity, and
+ * store/framework discovery.
+ */
+
+import { fileURLToPath } from "node:url";
+import { describe, it, expect } from "vitest";
+import { resolvePath, type Program } from "@typespec/compiler";
+import { createTester } from "@typespec/compiler/testing";
+import {
+  lowerProgram,
+  LoweredProgram,
+  KType,
+  KStruct,
+  KArray,
+  KObject,
+  KTuple,
+  KUnion,
+  KInt,
+  KString,
+  KBool,
+  KDate,
+  KLiteral,
+} from "@kurrent/typespec-engine";
+
+const base = fileURLToPath(new URL("..", import.meta.url));
+const Tester = createTester(resolvePath(base), { libraries: ["@kurrent/typespec-engine"] })
+  .import("@kurrent/typespec-engine")
+  .using("KurrentEngine");
+
+interface Lowered {
+  program: Program;
+  diagnostics: readonly { code: string }[];
+  lowered: LoweredProgram;
+}
+
+async function lower(code: string): Promise<Lowered> {
+  const [result, diagnostics] = await Tester.compileAndDiagnose(code);
+  return { program: result.program, diagnostics, lowered: lowerProgram(result.program) };
+}
+
+/** Find the named root that lowered from a declaration. */
+function root(l: LoweredProgram, name: string): KType {
+  const found = l.roots.find((t) => t.name === name);
+  if (found === undefined) throw new Error(`no root named ${name} in [${l.roots.map((t) => t.name)}]`);
+  return found;
+}
+
+describe("lowerProgram — scalar and builtin mapping", () => {
+  it("maps builtin scalars to their IR primitives", async () => {
+    const { lowered } = await lower(`
+      model Foo {
+        a: int32;
+        b: string;
+        c: boolean;
+        d: utcDateTime;
+      }
+    `);
+    const foo = root(lowered, "Foo") as KStruct;
+    expect(foo).toBeInstanceOf(KStruct);
+    expect(foo.fields.get("a")).toBeInstanceOf(KInt);
+    expect(foo.fields.get("b")).toBeInstanceOf(KString);
+    expect(foo.fields.get("c")).toBeInstanceOf(KBool);
+    expect(foo.fields.get("d")).toBeInstanceOf(KDate);
+  });
+
+  it("records optional fields as maybes", async () => {
+    const { lowered } = await lower(`model Foo { a: int32; b?: string; }`);
+    const foo = root(lowered, "Foo") as KStruct;
+    expect(foo.always.has("a")).toBe(true);
+    expect(foo.maybes.has("b")).toBe(true);
+  });
+});
+
+describe("lowerProgram — collections", () => {
+  it("maps arrays, records, and tuples", async () => {
+    const { lowered } = await lower(`
+      model Foo {
+        xs: string[];
+        m: Record<int32>;
+        pair: [string, int32];
+      }
+    `);
+    const foo = root(lowered, "Foo") as KStruct;
+    const xs = foo.fields.get("xs") as KArray;
+    expect(xs).toBeInstanceOf(KArray);
+    expect(xs.itemType).toBeInstanceOf(KString);
+    const m = foo.fields.get("m") as KObject;
+    expect(m).toBeInstanceOf(KObject);
+    expect(m.valueType).toBeInstanceOf(KInt);
+    const pair = foo.fields.get("pair") as KTuple;
+    expect(pair).toBeInstanceOf(KTuple);
+    expect(pair.itemTypes.map((t) => t.constructor.name)).toEqual(["KString", "KInt"]);
+  });
+});
+
+describe("lowerProgram — unions and enums", () => {
+  it("lowers a named union of literals", async () => {
+    const { lowered } = await lower(`union Color { "red", "green", "blue" }`);
+    const color = root(lowered, "Color") as KUnion;
+    expect(color).toBeInstanceOf(KUnion);
+    expect(color.types.every((t) => t instanceof KLiteral)).toBe(true);
+    expect(color.types.map((t) => (t as KLiteral).value).sort()).toEqual(["blue", "green", "red"]);
+  });
+
+  it("lowers an enum to a union of its member-name literals", async () => {
+    const { lowered } = await lower(`enum Suit { hearts, spades }`);
+    const suit = root(lowered, "Suit") as KUnion;
+    expect(suit).toBeInstanceOf(KUnion);
+    expect(suit.types.map((t) => (t as KLiteral).value).sort()).toEqual(["hearts", "spades"]);
+  });
+});
+
+describe("lowerProgram — interning across a program", () => {
+  it("gives repeated references to a model the same IR object", async () => {
+    const { lowered } = await lower(`
+      model A { n: int32; }
+      model Wrap { x: A; y: A; }
+    `);
+    const a = root(lowered, "A");
+    const wrap = root(lowered, "Wrap") as KStruct;
+    expect(wrap.fields.get("x")).toBe(a);
+    expect(wrap.fields.get("y")).toBe(a);
+  });
+
+  it("reports two names that resolve to the same structural type", async () => {
+    const { diagnostics } = await lower(`
+      model A { n: int32; }
+      model B { n: int32; }
+    `);
+    expect(diagnostics.some((d) => d.code.endsWith("/duplicate-name"))).toBe(true);
+  });
+});
+
+describe("lowerProgram — stores", () => {
+  it("discovers a store, its name, and its key templates", async () => {
+    const { lowered } = await lower(`
+      model Book { id: string; }
+      model BookSpec { \`book.{id}\`: Book; }
+      interface BookStore extends Store<BookSpec> {}
+    `);
+    expect(lowered.stores).toHaveLength(1);
+    const store = lowered.stores[0];
+    expect(store.name).toBe("BookStore");
+    expect(store.items.map((i) => i.name)).toEqual(["book"]);
+    expect(store.items[0].tpl).toBe("book.{id}");
+  });
+
+  it("inherits items from dependency stores", async () => {
+    const { lowered } = await lower(`
+      model Book { id: string; }
+      model Patron { id: string; }
+      model BookSpec { \`book.{id}\`: Book; }
+      model PatronSpec { \`patron.{id}\`: Patron; }
+      interface BookStore extends Store<BookSpec> {}
+      interface BigStore extends Store<PatronSpec, [BookStore]> {}
+    `);
+    const big = lowered.stores.find((s) => s.name === "BigStore")!;
+    expect(big.items.map((i) => i.name).sort()).toEqual(["book", "patron"]);
+    expect(big.originalItems.map((i) => i.name)).toEqual(["patron"]);
+  });
+});
+
+describe("lowerProgram — frameworks", () => {
+  it("discovers a framework and its event, command, and store types", async () => {
+    const { lowered } = await lower(`
+      model E1 { type: "e1"; }
+      model E2 { type: "e2"; }
+      model C1 { type: "c1"; }
+      model C2 { type: "c2"; }
+      union Events { E1, E2 }
+      union Commands { C1, C2 }
+      model Book { id: string; }
+      model BookSpec { \`book.{id}\`: Book; }
+      interface BookStore extends Store<BookSpec> {}
+      interface MyFramework extends Framework<Events, Commands, BookStore> {}
+    `);
+    expect(lowered.frameworks).toHaveLength(1);
+    const fw = lowered.frameworks[0];
+    expect(fw.name).toBe("MyFramework");
+    expect(fw.eventType.name).toBe("Events");
+    expect(fw.commandType.name).toBe("Commands");
+    expect(fw.store.name).toBe("BookStore");
+  });
+});

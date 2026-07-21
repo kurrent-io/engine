@@ -318,24 +318,59 @@ def generate_types(d, imports, annos, converters, t):
         elif isinstance(t, ConcreteUnion):
             for i, ut in enumerate(t.types):
                 visit(ut, path + str(i))
-            # define the interface
             name = Pascal(t.name or path)
-            d.print(f"\ntype {name} interface {{\n")
-            d.indent("\t")
-            d.print(f"json.Marshaler\n")
-            d.print(f"json.Unmarshaler\n")
-            d.print(f"Is{name}()\n")
-            d.dedent()
-            d.print(f"}}\n")
-            # create a union converter, using the union solver
-            converter = convert_union(d, name, t, annos, converters)
-            # implement the interface for all member types
-            d.print("\n")
-            for ut in t.types:
-                # interfaces are always nullable
-                if ut is Null: continue
-                # TODO: we should handle non-struct member types too, when we encounter them
-                d.print(f"func (x {annos[ut]}) Is{name}() {{}}\n")
+            non_null = [ut for ut in t.types if ut is not Null]
+            all_structs = len(non_null) > 0 and all(isinstance(ut, ConcreteStruct) for ut in non_null)
+
+            def literal_base(lit):
+                if isinstance(lit.value, bool):
+                    return "bool"
+                elif isinstance(lit.value, str):
+                    return "string"
+                else:
+                    return "int64"
+
+            all_literals = all(isinstance(ut, Literal) for ut in t.types)
+            bases = set(literal_base(ut) for ut in t.types) if all_literals else set()
+            uniform_literal = all_literals and len(bases) == 1
+
+            if all_structs:
+                # union of named struct types: an interface each member opts into
+                d.print(f"\ntype {name} interface {{\n")
+                d.indent("\t")
+                d.print(f"json.Marshaler\n")
+                d.print(f"json.Unmarshaler\n")
+                d.print(f"Is{name}()\n")
+                d.dedent()
+                d.print(f"}}\n")
+                converter = convert_union(d, name, t, annos, converters)
+                d.print("\n")
+                for ut in t.types:
+                    # interfaces are always nullable
+                    if ut is Null: continue
+                    d.print(f"func (x {annos[ut]}) Is{name}() {{}}\n")
+            elif uniform_literal:
+                # union of literals sharing one base type (e.g. an enum): a defined type over that
+                # base.  The checker enforces which values are allowed, so no interface or marker
+                # methods are needed (there is only one underlying type, nothing to dispatch between).
+                base = next(iter(bases))
+                d.print(f"\ntype {name} {base}\n")
+                d.print(f"\nfunc To{name}(vm *goja.Runtime, value goja.Value) {name} {{\n")
+                d.indent("\t")
+                d.print(f"return {name}(value.Export().({base}))\n")
+                d.dedent()
+                d.print(f"}}\n")
+                converter = lambda v, _name=name: f"To{_name}(vm, {v})"
+            else:
+                # heterogeneous union (mixed literal types, or literals mixed with structs): no
+                # single Go type, so fall back to any.  The checker enforces membership.
+                d.print(f"\ntype {name} = any\n")
+                d.print(f"\nfunc To{name}(vm *goja.Runtime, value goja.Value) {name} {{\n")
+                d.indent("\t")
+                d.print(f"return value.Export()\n")
+                d.dedent()
+                d.print(f"}}\n")
+                converter = lambda v, _name=name: f"To{_name}(vm, {v})"
             anno = name
         elif isinstance(t, ConcreteStruct):
             for fn, ft in t.fields.items():
@@ -418,8 +453,8 @@ json_type_to_reflect_type = {
 }
 
 def check_solution(d, annos, checkers, solution):
-    d.print("x := value\n")
-    d.print("xpath := path\n")
+    d.print("x0 := value\n")
+    d.print("xpath0 := path\n")
 
     # first find out what declarations we need by walking the whole solution tree
     decls = set()
@@ -466,20 +501,29 @@ def check_solution(d, annos, checkers, solution):
         else:
             raise ValueError(f"unexpected solution {solution} of type: {type(solution).__name}")
 
-    def visit(solution):
+    # `obj` names the value/path currently being navigated; `subj` names the value/path the
+    # enclosing check tests.  GetField mints a fresh, uniquely-numbered subject variable from
+    # `obj` but leaves `obj` unchanged, so sibling discriminators like [type, v] both read from
+    # the same object (`x0.(*goja.Object).Get("type")`, then `x0.(*goja.Object).Get("v")`); only
+    # GetIndex descends `obj` into an array element.
+    counter = [0]
+
+    def visit(solution, obj, subj):
+        objvar, objpath = obj
+        subjvar, subjpath = subj
         if isinstance(solution, Match):
             d.print(checkers[solution.typ]("value", "path"))
             d.print('return errs\n')
         elif isinstance(solution, CheckJsonType):
-            d.print(f"switch x.ExportType() {{\n")
+            d.print(f"switch {subjvar}.ExportType() {{\n")
             for jtyp, sln in sorted(solution.options.items()):
                 d.print(f"case {json_type_to_reflect_type[jtyp]}:\n")
                 d.indent("\t")
-                visit(sln)
+                visit(sln, obj, obj)
                 d.dedent()
             d.print(f'default:\n')
             d.indent('\t')
-            d.print(f'errs = append(errs, fmt.Errorf("unexpected export type: %v", x.ExportType()))\n')
+            d.print(f'errs = append(errs, fmt.Errorf("unexpected export type: %v", {subjvar}.ExportType()))\n')
             d.print(f'return errs\n')
             d.dedent()
             d.print(f'}}\n')
@@ -488,26 +532,26 @@ def check_solution(d, annos, checkers, solution):
             if typeset == {bool}:
                 # only bool literals; use an if statement
                 assert set(solution.options) == {True, False}, "non-exhaustive bool CheckLiteral"
-                d.print(f'b, ok = x.Export().(bool)\n')
+                d.print(f'b, ok = {subjvar}.Export().(bool)\n')
                 d.print(f'if !ok {{\n')
                 d.indent('\t')
-                d.print(f'errs = append(errs, fmt.Errorf("%v: not a bool", xpath))\n')
+                d.print(f'errs = append(errs, fmt.Errorf("%v: not a bool", {subjpath}))\n')
                 d.print(f'return errs\n')
                 d.dedent()
                 d.print(f'}} else if b {{\n')
                 d.indent('\t')
-                visit(solution.options[True])
+                visit(solution.options[True], obj, obj)
                 d.dedent()
                 d.print(f'}} else {{\n')
                 d.indent('\t')
-                visit(solution.options[False])
+                visit(solution.options[False], obj, obj)
                 d.dedent()
                 d.print(f'}}\n')
             elif typeset == {str}:
-                d.print(f's, ok = x.Export().(string)\n')
+                d.print(f's, ok = {subjvar}.Export().(string)\n')
                 d.print(f'if !ok {{\n')
                 d.indent('\t')
-                d.print(f'errs = append(errs, fmt.Errorf("%v: not a string", xpath))\n')
+                d.print(f'errs = append(errs, fmt.Errorf("%v: not a string", {subjpath}))\n')
                 d.print(f'return errs\n')
                 d.dedent()
                 d.print(f'}}\n')
@@ -515,19 +559,19 @@ def check_solution(d, annos, checkers, solution):
                 for value, sln in sorted(solution.options.items()):
                     d.print(f'case "{value}":\n')
                     d.indent("\t")
-                    visit(sln)
+                    visit(sln, obj, obj)
                     d.dedent()
                 d.print(f"default:\n")
                 d.indent("\t")
-                d.print(f'errs = append(errs, fmt.Errorf("%v: unexpected literal", xpath))\n')
+                d.print(f'errs = append(errs, fmt.Errorf("%v: unexpected literal", {subjpath}))\n')
                 d.print(f'return errs\n')
                 d.dedent()
                 d.print(f'}}\n')
             elif typeset == {int}:
-                d.print(f'n, ok = x.Export().(int64)\n')
+                d.print(f'n, ok = {subjvar}.Export().(int64)\n')
                 d.print(f'if !ok {{\n')
                 d.indent('\t')
-                d.print(f'errs = append(errs, fmt.Errorf("%v: not an int", xpath))\n')
+                d.print(f'errs = append(errs, fmt.Errorf("%v: not an int", {subjpath}))\n')
                 d.print(f'return errs\n')
                 d.dedent()
                 d.print(f'}}\n')
@@ -535,11 +579,11 @@ def check_solution(d, annos, checkers, solution):
                 for value, sln in sorted(solution.options.items()):
                     d.print(f'case {value}:\n')
                     d.indent("\t")
-                    visit(sln)
+                    visit(sln, obj, obj)
                     d.dedent()
                 d.print(f"default:\n")
                 d.indent("\t")
-                d.print(f'errs = append(errs, fmt.Errorf("%v: unexpected literal", xpath))\n')
+                d.print(f'errs = append(errs, fmt.Errorf("%v: unexpected literal", {subjpath}))\n')
                 d.print(f'return errs\n')
                 d.dedent()
                 d.print(f'}}\n')
@@ -555,21 +599,21 @@ def check_solution(d, annos, checkers, solution):
                         govalue = f'"int64({value})"'
                     else:
                         raise ValueError(f"unexpected literal: {value} if type {type(value).__name__}")
-                    d.print(f'case x.StrictEquals(vm.ToValue({govalue})):\n')
+                    d.print(f'case {subjvar}.StrictEquals(vm.ToValue({govalue})):\n')
                     d.indent("\t")
-                    visit(sln)
+                    visit(sln, obj, obj)
                     d.dedent()
                 d.print(f"default:\n")
                 d.indent("\t")
-                d.print(f'panic(fmt.Sprintf("unexpected literal: %v", x))\n')
+                d.print(f'panic(fmt.Sprintf("unexpected literal: %v", {subjvar}))\n')
                 d.dedent()
                 d.print(f'}}\n')
         elif isinstance(solution, CheckLength):
             # make sure it's an array
-            d.print(f'obj, ok := x.(*goja.Object)\n')
+            d.print(f'obj, ok := {subjvar}.(*goja.Object)\n')
             d.print(f'if !ok {{\n')
             d.indent('\t')
-            d.print(f'errs = append(errs, fmt.Errorf("%v: not an array", xpath))\n')
+            d.print(f'errs = append(errs, fmt.Errorf("%v: not an array", {subjpath}))\n')
             d.print(f'return errs\n')
             d.dedent()
             # get its .length method
@@ -577,15 +621,15 @@ def check_solution(d, annos, checkers, solution):
             d.print(f'fn, ok = goja.AssertFunction(obj.Get("length"))\n')
             d.print(f'if !ok {{\n')
             d.indent("\t")
-            d.print(f'errs = append(errs, fmt.Errorf("%v: no .length() method", xpath))\n')
+            d.print(f'errs = append(errs, fmt.Errorf("%v: no .length() method", {subjpath}))\n')
             d.print(f'return errs\n')
             d.dedent()
             d.print(f'}}\n')
             # call .length
-            d.print(f'length, err = fn(x)\n')
+            d.print(f'length, err = fn({subjvar})\n')
             d.print(f'if err != nil {{\n')
             d.indent("\t")
-            d.print(f'errs = append(errs, fmt.Errorf("%v: .length(): %w", xpath, err))\n')
+            d.print(f'errs = append(errs, fmt.Errorf("%v: .length(): %w", {subjpath}, err))\n')
             d.print(f'return errs\n')
             d.dedent()
             d.print(f'}}\n')
@@ -594,37 +638,40 @@ def check_solution(d, annos, checkers, solution):
             for l, sln in sorted(solution.options.items()):
                 d.print(f'case {l}:\n')
                 d.indent("\t")
-                visit(sln)
+                visit(sln, obj, obj)
                 d.dedent()
             d.print(f"default:\n")
             d.indent("\t")
             if solution.default is not None:
-                visit(solution.default)
+                visit(solution.default, obj, obj)
             else:
-                d.print(f'errs = append(errs, fmt.Errorf("%v: unexpected length", xpath))\n')
+                d.print(f'errs = append(errs, fmt.Errorf("%v: unexpected length", {subjpath}))\n')
                 d.print(f'return errs\n')
             d.dedent()
             d.print(f'}}\n')
         elif isinstance(solution, GetIndex):
             # CheckLength should already protect us; no need to re-check
-            d.print(f'x = x.(*goja.Object).Get("{solution.i}")\n')
-            d.print(f'xpath += "[{solution.i}]"\n')
-            visit(solution.solution)
+            counter[0] += 1; i = counter[0]
+            d.print(f'x{i} := {objvar}.(*goja.Object).Get("{solution.i}")\n')
+            d.print(f'xpath{i} := {objpath} + "[{solution.i}]"\n')
+            nxt = (f"x{i}", f"xpath{i}")
+            visit(solution.solution, nxt, nxt)
         elif isinstance(solution, GetField):
-            d.print(f'x = x.(*goja.Object).Get("{solution.key}")\n')
-            d.print(f'xpath += ".{solution.key}"\n')
-            d.print(f'if x == nil {{\n')
+            counter[0] += 1; i = counter[0]
+            d.print(f'x{i} := {objvar}.(*goja.Object).Get("{solution.key}")\n')
+            d.print(f'xpath{i} := {objpath} + ".{solution.key}"\n')
+            d.print(f'if x{i} == nil {{\n')
             d.indent('\t')
-            d.print(f'errs = append(errs, fmt.Errorf("%v: missing discriminator \\"{solution.key}\\"", xpath))\n')
+            d.print(f'errs = append(errs, fmt.Errorf("%v: missing discriminator \\"{solution.key}\\"", xpath{i}))\n')
             d.print(f'return errs\n')
             d.dedent()
             d.print(f'}}\n')
-            visit(solution.solution)
+            visit(solution.solution, obj, (f"x{i}", f"xpath{i}"))
         elif isinstance(solution, HasField):
-            d.print(f'obj, ok = x.(*goja.Object)\n')
+            d.print(f'obj, ok = {subjvar}.(*goja.Object)\n')
             d.print(f'if !ok {{\n')
             d.indent('\t')
-            d.print(f'errs = append(errs, fmt.Errorf("%v: not an object", xpath))\n')
+            d.print(f'errs = append(errs, fmt.Errorf("%v: not an object", {subjpath}))\n')
             d.print(f'return errs\n')
             d.dedent()
             d.print(f'}}\n')
@@ -632,11 +679,11 @@ def check_solution(d, annos, checkers, solution):
             for key, sln in solution.solutions:
                 d.print(f'case obj.Get("{key}") != nil:\n')
                 d.indent("\t")
-                visit(sln)
+                visit(sln, obj, obj)
                 d.dedent()
             d.print(f"default:\n")
             d.indent("\t")
-            d.print(f'errs = append(errs, fmt.Errorf("%v: no matching fields", xpath))\n')
+            d.print(f'errs = append(errs, fmt.Errorf("%v: no matching fields", {subjpath}))\n')
             d.print(f'return errs\n')
             d.dedent()
             d.print(f'}}\n')
@@ -644,7 +691,7 @@ def check_solution(d, annos, checkers, solution):
             raise ValueError(f"unrecognized solution type: {type(solution).__name__}")
 
     visit_decls(solution)
-    visit(solution)
+    visit(solution, ("x0", "xpath0"), ("x0", "xpath0"))
 
 
 def generate_checkers(d, annos, checkers, t):
@@ -724,7 +771,7 @@ def generate_checkers(d, annos, checkers, t):
                 )
             elif isinstance(t.value, int):
                 checkers[t] = lambda var, path: (
-                    f'if lit, ok := {var}.Export().(int); !ok || lit != {t.value} {{\n'
+                    f'if lit, ok := {var}.Export().(int64); !ok || lit != {t.value} {{\n'
                     f'\terrs = append(errs, fmt.Errorf("%v: is not {t.value}", {path}))\n'
                     f'}}\n'
                 )

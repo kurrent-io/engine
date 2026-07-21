@@ -1,0 +1,24 @@
+{
+  "name": "@kurrent/typespec-engine-tests",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Test suite for the Kurrent Engine TypeSpec tooling",
+  "scripts": {
+    "gen": "tsp compile fixtures",
+    "test": "vitest run",
+    "test:py": "python3 py/test_checkers.py",
+    "test:go": "cp 'tsp-output/@kurrent/typespec-engine-go/model.go' go/model.go && cd go && go test ./...",
+    "watch": "vitest"
+  },
+  "dependencies": {
+    "@kurrent/typespec-engine": "workspace:*",
+    "@kurrent/typespec-engine-ts": "workspace:*",
+    "@kurrent/typespec-engine-py": "workspace:*",
+    "@kurrent/typespec-engine-go": "workspace:*",
+    "@typespec/compiler": "^1.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

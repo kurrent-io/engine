@@ -120,67 +120,82 @@ const PYTYPS: Record<string, string> = {
 
 function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void {
   d.print("problems = []\n");
-  d.print("x = val\n");
-  d.print("xpath = path\n");
+  d.print("x0 = val\n");
+  d.print("xpath0 = path\n");
 
-  const visit = (solution: Solution): void => {
+  // `obj` names the value/path currently being navigated; `subj` names the value/path the
+  // enclosing check tests.  GetField mints a fresh, uniquely-numbered subject variable from `obj`
+  // but leaves `obj` unchanged, so sibling discriminators like [type, v] both read from the same
+  // object rather than from a previously extracted field.  Only GetIndex descends `obj` (into an
+  // array element).
+  let counter = 1;
+  const visit = (
+    solution: Solution,
+    obj: readonly [string, string],
+    subj: readonly [string, string],
+  ): void => {
+    const [objVar, objPath] = obj;
+    const [subjVar, subjPath] = subj;
     if (solution instanceof Match) {
       d.print(checkers.get(solution.typ)!("val", "path"));
       d.print("return problems\n");
     } else if (solution instanceof CheckJsonType) {
       for (const [jtyp, subsln] of solution.options) {
-        if (jtyp === "null") d.print(`if x is None:\n`);
-        else d.print(`if isinstance(x, ${PYTYPS[jtyp]}):\n`);
+        if (jtyp === "null") d.print(`if ${subjVar} is None:\n`);
+        else d.print(`if isinstance(${subjVar}, ${PYTYPS[jtyp]}):\n`);
         d.indent("    ");
-        visit(subsln);
+        visit(subsln, obj, obj);
         d.dedent();
       }
-      d.print("problems += [f'{xpath}: type {type(x).__name__} not allowed here']\n");
+      d.print(`problems += [f'{${subjPath}}: type {type(${subjVar}).__name__} not allowed here']\n`);
       d.print("return problems\n");
     } else if (solution instanceof CheckLiteral) {
       for (const [lit, subsln] of solution.options) {
-        if (typeof lit === "string") d.print(`if x == "${lit}":\n`);
-        else if (typeof lit === "boolean") d.print(`if x == ${lit ? "True" : "False"}:\n`);
-        else d.print(`if x == ${lit}:\n`);
+        if (typeof lit === "string") d.print(`if ${subjVar} == "${lit}":\n`);
+        else if (typeof lit === "boolean") d.print(`if ${subjVar} == ${lit ? "True" : "False"}:\n`);
+        else d.print(`if ${subjVar} == ${lit}:\n`);
         d.indent("    ");
-        visit(subsln);
+        visit(subsln, obj, obj);
         d.dedent();
       }
-      d.print("problems += [f'{xpath}: unexpected value']\n");
+      d.print(`problems += [f'{${subjPath}}: unexpected value']\n`);
       d.print("return problems\n");
     } else if (solution instanceof CheckLength) {
       for (const [length, subsln] of solution.options) {
-        d.print(`if len(x) == ${length}:\n`);
+        d.print(`if len(${subjVar}) == ${length}:\n`);
         d.indent("    ");
-        visit(subsln);
+        visit(subsln, obj, obj);
         d.dedent();
       }
-      if (solution.default !== null) visit(solution.default);
+      if (solution.default !== null) visit(solution.default, obj, obj);
     } else if (solution instanceof GetIndex) {
-      d.print(`x = x[${solution.i}]\n`);
-      d.print(`xpath += '[${solution.i}]'\n`);
-      visit(solution.solution);
+      const i = counter++;
+      d.print(`x${i} = ${objVar}[${solution.i}]\n`);
+      d.print(`xpath${i} = ${objPath} + '[${solution.i}]'\n`);
+      const next = [`x${i}`, `xpath${i}`] as const;
+      visit(solution.solution, next, next);
     } else if (solution instanceof GetField) {
-      d.print(`if '${solution.key}' not in x:\n`);
-      d.print(`    problems += [xpath + f': missing discriminator "${solution.key}"']\n`);
+      const i = counter++;
+      d.print(`if '${solution.key}' not in ${objVar}:\n`);
+      d.print(`    problems += [${objPath} + f': missing discriminator "${solution.key}"']\n`);
       d.print(`    return problems\n`);
-      d.print(`x = x["${solution.key}"]\n`);
-      d.print(`xpath += ".${solution.key}"\n`);
-      visit(solution.solution);
+      d.print(`x${i} = ${objVar}["${solution.key}"]\n`);
+      d.print(`xpath${i} = ${objPath} + ".${solution.key}"\n`);
+      visit(solution.solution, obj, [`x${i}`, `xpath${i}`]);
     } else if (solution instanceof HasField) {
       for (const [field, subsln] of solution.solutions) {
-        d.print(`if "${field}" in x:\n`);
+        d.print(`if "${field}" in ${objVar}:\n`);
         d.indent("    ");
-        visit(subsln);
+        visit(subsln, obj, obj);
         d.dedent();
       }
-      d.print("problems += [f'{xpath}: no matching keys found']\n");
+      d.print(`problems += [f'{${subjPath}}: no matching keys found']\n`);
       d.print("return problems\n");
     } else {
       throw new Error(`unrecognized solution type: ${(solution as Solution).constructor.name}`);
     }
   };
-  visit(solution);
+  visit(solution, ["x0", "xpath0"], ["x0", "xpath0"]);
 }
 
 function generateCheckers(
@@ -328,7 +343,7 @@ function generateCheckers(
           d.print(`    problems += [path + ': missing required key ${fn}']\n`);
         }
       }
-      d.print(`if ${keys}.difference(${keys}):\n`);
+      d.print(`if set(val).difference(${keys}):\n`);
       d.print(`    problems += [path + ': contains extra keys']\n`);
       d.print("return problems\n");
       d.dedent();

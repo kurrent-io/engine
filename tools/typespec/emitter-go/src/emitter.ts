@@ -368,18 +368,52 @@ function generateTypes(
     } else if (t instanceof KUnion) {
       t.types.forEach((ut, i) => visit(ut, path + String(i)));
       const name = pascal(t.name ?? path);
-      d.print(`\ntype ${name} interface {\n`);
-      d.indent("\t");
-      d.print(`json.Marshaler\n`);
-      d.print(`json.Unmarshaler\n`);
-      d.print(`Is${name}()\n`);
-      d.dedent();
-      d.print(`}\n`);
-      converter = convertUnion(d, name, t, registry, converters);
-      d.print("\n");
-      for (const ut of t.types) {
-        if (ut instanceof KNull) continue;
-        d.print(`func (x ${annos.get(ut)}) Is${name}() {}\n`);
+      const nonNull = t.types.filter((ut) => !(ut instanceof KNull));
+      const allStructs = nonNull.length > 0 && nonNull.every((ut) => ut instanceof KStruct);
+      const literalBase = (lit: KLiteral): string =>
+        typeof lit.value === "string" ? "string" : typeof lit.value === "boolean" ? "bool" : "int64";
+      const bases = new Set(
+        t.types.map((ut) => (ut instanceof KLiteral ? literalBase(ut) : null)),
+      );
+      const uniformLiteral = t.types.every((ut) => ut instanceof KLiteral) && bases.size === 1;
+
+      if (allStructs) {
+        // union of named struct types: an interface each member opts into
+        d.print(`\ntype ${name} interface {\n`);
+        d.indent("\t");
+        d.print(`json.Marshaler\n`);
+        d.print(`json.Unmarshaler\n`);
+        d.print(`Is${name}()\n`);
+        d.dedent();
+        d.print(`}\n`);
+        converter = convertUnion(d, name, t, registry, converters);
+        d.print("\n");
+        for (const ut of t.types) {
+          if (ut instanceof KNull) continue;
+          d.print(`func (x ${annos.get(ut)}) Is${name}() {}\n`);
+        }
+      } else if (uniformLiteral) {
+        // union of literals sharing one base type (e.g. an enum): a defined type over that base.
+        // The checker enforces which values are allowed, so no interface or marker methods are
+        // needed (there is only one underlying type, nothing to dispatch between).
+        const base = [...bases][0]!;
+        d.print(`\ntype ${name} ${base}\n`);
+        d.print(`\nfunc To${name}(vm *goja.Runtime, value goja.Value) ${name} {\n`);
+        d.indent("\t");
+        d.print(`return ${name}(value.Export().(${base}))\n`);
+        d.dedent();
+        d.print(`}\n`);
+        converter = (v) => `To${name}(vm, ${v})`;
+      } else {
+        // heterogeneous union (mixed literal types, or literals mixed with structs): no single Go
+        // type, so fall back to any.  The checker enforces membership.
+        d.print(`\ntype ${name} = any\n`);
+        d.print(`\nfunc To${name}(vm *goja.Runtime, value goja.Value) ${name} {\n`);
+        d.indent("\t");
+        d.print(`return value.Export()\n`);
+        d.dedent();
+        d.print(`}\n`);
+        converter = (v) => `To${name}(vm, ${v})`;
       }
       anno = name;
     } else if (t instanceof KStruct) {
@@ -449,8 +483,8 @@ function generateTypes(
 const NOOP: Checker = () => "";
 
 function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void {
-  d.print("x := value\n");
-  d.print("xpath := path\n");
+  d.print("x0 := value\n");
+  d.print("xpath0 := path\n");
 
   const decls = new Set<string>();
   const declare = (code: string): void => {
@@ -496,47 +530,59 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
     }
   };
 
-  const visit = (solution: Solution): void => {
+  // `obj` names the value/path currently being navigated; `subj` names the value/path the
+  // enclosing check tests.  GetField mints a fresh, uniquely-numbered subject variable from
+  // `obj` but leaves `obj` unchanged, so sibling discriminators like [type, v] both read from the
+  // same object (`x0.(*goja.Object).Get("type")`, then `x0.(*goja.Object).Get("v")`); only
+  // GetIndex descends `obj` into an array element.
+  let counter = 0;
+  const visit = (
+    solution: Solution,
+    obj: readonly [string, string],
+    subj: readonly [string, string],
+  ): void => {
+    const [objVar, objPath] = obj;
+    const [subjVar, subjPath] = subj;
     if (solution instanceof Match) {
       d.print(checkers.get(solution.typ)!("value", "path"));
       d.print("return errs\n");
     } else if (solution instanceof CheckJsonType) {
-      d.print(`switch x.ExportType() {\n`);
+      d.print(`switch ${subjVar}.ExportType() {\n`);
       for (const [jtyp, sln] of sortedEntries(solution.options)) {
         d.print(`case ${JSON_TYPE_TO_REFLECT_TYPE[jtyp]}:\n`);
         d.indent("\t");
-        visit(sln);
+        visit(sln, obj, obj);
         d.dedent();
       }
       d.print(`default:\n`);
       d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("unexpected export type: %v", x.ExportType()))\n`);
+      d.print(`errs = append(errs, fmt.Errorf("unexpected export type: %v", ${subjVar}.ExportType()))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
     } else if (solution instanceof CheckLiteral) {
       const typeset = new Set([...solution.options.keys()].map((v) => typeof v));
       if (typeset.size === 1 && typeset.has("boolean")) {
-        d.print(`b, ok = x.Export().(bool)\n`);
+        d.print(`b, ok = ${subjVar}.Export().(bool)\n`);
         d.print(`if !ok {\n`);
         d.indent("\t");
-        d.print(`errs = append(errs, fmt.Errorf("%v: not a bool", xpath))\n`);
+        d.print(`errs = append(errs, fmt.Errorf("%v: not a bool", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
         d.print(`} else if b {\n`);
         d.indent("\t");
-        visit(solution.options.get(true as any)!);
+        visit(solution.options.get(true as any)!, obj, obj);
         d.dedent();
         d.print(`} else {\n`);
         d.indent("\t");
-        visit(solution.options.get(false as any)!);
+        visit(solution.options.get(false as any)!, obj, obj);
         d.dedent();
         d.print(`}\n`);
       } else if (typeset.size === 1 && typeset.has("string")) {
-        d.print(`s, ok = x.Export().(string)\n`);
+        d.print(`s, ok = ${subjVar}.Export().(string)\n`);
         d.print(`if !ok {\n`);
         d.indent("\t");
-        d.print(`errs = append(errs, fmt.Errorf("%v: not a string", xpath))\n`);
+        d.print(`errs = append(errs, fmt.Errorf("%v: not a string", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
         d.print(`}\n`);
@@ -544,20 +590,20 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
         for (const [value, sln] of sortedEntries(solution.options)) {
           d.print(`case "${value}":\n`);
           d.indent("\t");
-          visit(sln);
+          visit(sln, obj, obj);
           d.dedent();
         }
         d.print(`default:\n`);
         d.indent("\t");
-        d.print(`errs = append(errs, fmt.Errorf("%v: unexpected literal", xpath))\n`);
+        d.print(`errs = append(errs, fmt.Errorf("%v: unexpected literal", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
         d.print(`}\n`);
       } else if (typeset.size === 1 && typeset.has("number")) {
-        d.print(`n, ok = x.Export().(int64)\n`);
+        d.print(`n, ok = ${subjVar}.Export().(int64)\n`);
         d.print(`if !ok {\n`);
         d.indent("\t");
-        d.print(`errs = append(errs, fmt.Errorf("%v: not an int", xpath))\n`);
+        d.print(`errs = append(errs, fmt.Errorf("%v: not an int", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
         d.print(`}\n`);
@@ -565,12 +611,12 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
         for (const [value, sln] of sortedEntries(solution.options)) {
           d.print(`case ${value}:\n`);
           d.indent("\t");
-          visit(sln);
+          visit(sln, obj, obj);
           d.dedent();
         }
         d.print(`default:\n`);
         d.indent("\t");
-        d.print(`errs = append(errs, fmt.Errorf("%v: unexpected literal", xpath))\n`);
+        d.print(`errs = append(errs, fmt.Errorf("%v: unexpected literal", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
         d.print(`}\n`);
@@ -581,36 +627,36 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
           if (typeof value === "string") govalue = `"${value}"`;
           else if (typeof value === "boolean") govalue = String(value);
           else govalue = `"int64(${value})"`;
-          d.print(`case x.StrictEquals(vm.ToValue(${govalue})):\n`);
+          d.print(`case ${subjVar}.StrictEquals(vm.ToValue(${govalue})):\n`);
           d.indent("\t");
-          visit(sln);
+          visit(sln, obj, obj);
           d.dedent();
         }
         d.print(`default:\n`);
         d.indent("\t");
-        d.print(`panic(fmt.Sprintf("unexpected literal: %v", x))\n`);
+        d.print(`panic(fmt.Sprintf("unexpected literal: %v", ${subjVar}))\n`);
         d.dedent();
         d.print(`}\n`);
       }
     } else if (solution instanceof CheckLength) {
-      d.print(`obj, ok := x.(*goja.Object)\n`);
+      d.print(`obj, ok := ${subjVar}.(*goja.Object)\n`);
       d.print(`if !ok {\n`);
       d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("%v: not an array", xpath))\n`);
+      d.print(`errs = append(errs, fmt.Errorf("%v: not an array", ${subjPath}))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
       d.print(`fn, ok = goja.AssertFunction(obj.Get("length"))\n`);
       d.print(`if !ok {\n`);
       d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("%v: no .length() method", xpath))\n`);
+      d.print(`errs = append(errs, fmt.Errorf("%v: no .length() method", ${subjPath}))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
-      d.print(`length, err = fn(x)\n`);
+      d.print(`length, err = fn(${subjVar})\n`);
       d.print(`if err != nil {\n`);
       d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("%v: .length(): %w", xpath, err))\n`);
+      d.print(`errs = append(errs, fmt.Errorf("%v: .length(): %w", ${subjPath}, err))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
@@ -618,38 +664,41 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       for (const [l, sln] of sortedEntries(solution.options)) {
         d.print(`case ${l}:\n`);
         d.indent("\t");
-        visit(sln);
+        visit(sln, obj, obj);
         d.dedent();
       }
       d.print(`default:\n`);
       d.indent("\t");
       if (solution.default !== null) {
-        visit(solution.default);
+        visit(solution.default, obj, obj);
       } else {
-        d.print(`errs = append(errs, fmt.Errorf("%v: unexpected length", xpath))\n`);
+        d.print(`errs = append(errs, fmt.Errorf("%v: unexpected length", ${subjPath}))\n`);
         d.print(`return errs\n`);
       }
       d.dedent();
       d.print(`}\n`);
     } else if (solution instanceof GetIndex) {
-      d.print(`x = x.(*goja.Object).Get("${solution.i}")\n`);
-      d.print(`xpath += "[${solution.i}]"\n`);
-      visit(solution.solution);
+      const i = ++counter;
+      d.print(`x${i} := ${objVar}.(*goja.Object).Get("${solution.i}")\n`);
+      d.print(`xpath${i} := ${objPath} + "[${solution.i}]"\n`);
+      const next = [`x${i}`, `xpath${i}`] as const;
+      visit(solution.solution, next, next);
     } else if (solution instanceof GetField) {
-      d.print(`x = x.(*goja.Object).Get("${solution.key}")\n`);
-      d.print(`xpath += ".${solution.key}"\n`);
-      d.print(`if x == nil {\n`);
+      const i = ++counter;
+      d.print(`x${i} := ${objVar}.(*goja.Object).Get("${solution.key}")\n`);
+      d.print(`xpath${i} := ${objPath} + ".${solution.key}"\n`);
+      d.print(`if x${i} == nil {\n`);
       d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("%v: missing discriminator \\"${solution.key}\\"", xpath))\n`);
+      d.print(`errs = append(errs, fmt.Errorf("%v: missing discriminator \\"${solution.key}\\"", xpath${i}))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
-      visit(solution.solution);
+      visit(solution.solution, obj, [`x${i}`, `xpath${i}`]);
     } else if (solution instanceof HasField) {
-      d.print(`obj, ok = x.(*goja.Object)\n`);
+      d.print(`obj, ok = ${subjVar}.(*goja.Object)\n`);
       d.print(`if !ok {\n`);
       d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("%v: not an object", xpath))\n`);
+      d.print(`errs = append(errs, fmt.Errorf("%v: not an object", ${subjPath}))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
@@ -657,12 +706,12 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       for (const [key, sln] of solution.solutions) {
         d.print(`case obj.Get("${key}") != nil:\n`);
         d.indent("\t");
-        visit(sln);
+        visit(sln, obj, obj);
         d.dedent();
       }
       d.print(`default:\n`);
       d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("%v: no matching fields", xpath))\n`);
+      d.print(`errs = append(errs, fmt.Errorf("%v: no matching fields", ${subjPath}))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
@@ -672,7 +721,7 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
   };
 
   visitDecls(solution);
-  visit(solution);
+  visit(solution, ["x0", "xpath0"], ["x0", "xpath0"]);
 }
 
 function generateCheckers(
@@ -740,7 +789,7 @@ function generateCheckers(
           `}\n`);
       } else {
         checkers.set(t, (v, path) =>
-          `if lit, ok := ${v}.Export().(int); !ok || lit != ${t.value} {\n` +
+          `if lit, ok := ${v}.Export().(int64); !ok || lit != ${t.value} {\n` +
           `\terrs = append(errs, fmt.Errorf("%v: is not ${t.value}", ${path}))\n` +
           `}\n`);
       }

@@ -97,36 +97,40 @@ function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
 function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void {
   d.print("let x = val;\n");
 
-  // now we can generate the whole solution without any backtracking
-  const visit = (solution: Solution): void => {
+  // `x` holds the object currently being inspected; only GetIndex descends it (into an array
+  // element).  `subj` is the expression the enclosing switch tests — `x` itself, or a field of it
+  // (`x.type`) provided by a GetField.  Sub-solutions of a switch navigate from `x` again, so
+  // sibling discriminators like [type, v] each read from the same object rather than from the
+  // previously extracted field.
+  const visit = (solution: Solution, subj: string): void => {
     if (solution instanceof Match) {
       const decoder = decoders.get(solution.typ) ?? null;
       d.print("return " + (decoder === null ? "val" : decoder("val")) + ";\n");
     } else if (solution instanceof CheckJsonType) {
       if (solution.options.size === 1) {
-        visit(solution.options.values().next().value!);
+        visit(solution.options.values().next().value!, subj);
         return;
       }
       // note that typeof() has some weird behaviors:
       // - typeof([]) = "object"
       // - typeof(null) = "object"
       // so we use a custom helper function specific to handling decoded json
-      d.print("switch(json_typeof(x)){\n");
+      d.print(`switch(json_typeof(${subj})){\n`);
       d.indent("  ");
       for (const [jtyp, subsln] of solution.options) {
         d.print(`case "${jtyp}":\n`);
         d.indent("  ");
-        visit(subsln);
+        visit(subsln, "x");
         d.dedent();
       }
       d.dedent();
       d.print("}\n");
     } else if (solution instanceof CheckLiteral) {
       if (solution.options.size === 1) {
-        visit(solution.options.values().next().value!);
+        visit(solution.options.values().next().value!, subj);
         return;
       }
-      d.print("switch(x){\n");
+      d.print(`switch(${subj}){\n`);
       d.indent("  ");
       for (const [lit, subsln] of solution.options) {
         if (typeof lit === "string") {
@@ -135,7 +139,7 @@ function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void
           d.print(`case ${lit}:\n`);
         }
         d.indent("  ");
-        visit(subsln);
+        visit(subsln, "x");
         d.dedent();
       }
       d.print("default: throw new Error(`unexpected value: ${val}`);\n");
@@ -143,36 +147,35 @@ function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void
       d.print("}\n");
     } else if (solution instanceof CheckLength) {
       if (solution.options.size === 1 && solution.default === null) {
-        visit(solution.options.values().next().value!);
+        visit(solution.options.values().next().value!, subj);
         return;
       }
-      d.print("switch(x.length){\n");
+      d.print(`switch(${subj}.length){\n`);
       d.indent("  ");
       for (const [length, subsln] of solution.options) {
         d.print(`case ${length}:\n`);
         d.indent("  ");
-        visit(subsln);
+        visit(subsln, "x");
         d.dedent();
       }
       if (solution.default !== null) {
         d.print(`default:\n`);
         d.indent("  ");
-        visit(solution.default);
+        visit(solution.default, "x");
         d.dedent();
       }
       d.dedent();
       d.print("}\n");
     } else if (solution instanceof GetIndex) {
-      d.print(`x = x[${solution.i}];\n`);
-      visit(solution.solution);
+      d.print(`x = ${subj}[${solution.i}];\n`);
+      visit(solution.solution, "x");
     } else if (solution instanceof GetField) {
-      d.print(`x = x.${solution.key};\n`);
-      visit(solution.solution);
+      visit(solution.solution, `${subj}.${solution.key}`);
     } else if (solution instanceof HasField) {
       for (const [field, subsln] of solution.solutions) {
-        d.print(`if ("${field}" in x) {\n`);
+        d.print(`if ("${field}" in ${subj}) {\n`);
         d.indent("  ");
-        visit(subsln);
+        visit(subsln, "x");
         d.dedent();
         d.print("}\n");
       }
@@ -182,7 +185,7 @@ function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void
     }
   };
 
-  visit(solution);
+  visit(solution, "x");
 }
 
 function generateDecoders(

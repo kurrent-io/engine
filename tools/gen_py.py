@@ -104,74 +104,86 @@ pytyps = {
 
 def check_solution(d, annos, checkers, solution):
     d.print("problems = []\n")
-    d.print("x = val\n")
-    d.print("xpath = path\n")
+    d.print("x0 = val\n")
+    d.print("xpath0 = path\n")
 
-    def visit(solution):
+    # `obj` names the value/path currently being navigated; `subj` names the value/path the
+    # enclosing check tests.  GetField mints a fresh, uniquely-numbered subject variable from
+    # `obj` but leaves `obj` unchanged, so sibling discriminators like [type, v] both read from
+    # the same object rather than from a previously extracted field.  Only GetIndex descends
+    # `obj` (into an array element).
+    counter = [1]
+
+    def visit(solution, obj, subj):
+        objvar, objpath = obj
+        subjvar, subjpath = subj
         if isinstance(solution, Match):
             d.print(checkers[solution.typ]("val", "path"))
             d.print("return problems\n")
         elif isinstance(solution, CheckJsonType):
             for jtyp, subsln in solution.options.items():
                 if jtyp == "null":
-                    d.print(f"if x is None:\n")
+                    d.print(f"if {subjvar} is None:\n")
                 else:
-                    d.print(f"if isinstance(x, {pytyps[jtyp]}):\n")
+                    d.print(f"if isinstance({subjvar}, {pytyps[jtyp]}):\n")
                 d.indent("    ")
-                visit(subsln)
+                visit(subsln, obj, obj)
                 d.dedent()
             # handle no match
-            d.print("problems += [f'{xpath}: type {type(x).__name__} not allowed here']\n")
+            d.print(f"problems += [f'{{{subjpath}}}: type {{type({subjvar}).__name__}} not allowed here']\n")
             d.print("return problems\n")
         elif isinstance(solution, CheckLiteral):
             for lit, subsln in solution.options.items():
                 if lit is None:
-                    d.print(f'if x is None:\n')
+                    d.print(f'if {subjvar} is None:\n')
                 if isinstance(lit, str):
-                    d.print(f'if x == "{lit}":\n')
+                    d.print(f'if {subjvar} == "{lit}":\n')
                 elif isinstance(lit, (bool, int)):
-                    d.print(f"if x == {lit}:\n")
+                    d.print(f"if {subjvar} == {lit}:\n")
                 else:
                     raise ValueError("unexepected Literal type")
                 d.indent("    ")
-                visit(subsln)
+                visit(subsln, obj, obj)
                 d.dedent()
             # handle no match
-            d.print("problems += [f'{xpath}: unexpected value']\n")
+            d.print(f"problems += [f'{{{subjpath}}}: unexpected value']\n")
             d.print("return problems\n")
         elif isinstance(solution, CheckLength):
             for length, subsln in solution.options.items():
-                d.print(f"if len(x) == {length}:\n")
+                d.print(f"if len({subjvar}) == {length}:\n")
                 d.indent("    ")
-                visit(subsln)
+                visit(subsln, obj, obj)
                 d.dedent()
             # default
             if solution.default is not None:
-                visit(solution.default)
+                visit(solution.default, obj, obj)
         elif isinstance(solution, GetIndex):
             # CheckLength should already protect us; no need to re-check
-            d.print(f"x = x[{solution.i}]\n")
-            d.print(f"xpath += '[{solution.i}]'\n")
-            visit(solution.solution)
+            i = counter[0]; counter[0] += 1
+            d.print(f"x{i} = {objvar}[{solution.i}]\n")
+            d.print(f"xpath{i} = {objpath} + '[{solution.i}]'\n")
+            nxt = (f"x{i}", f"xpath{i}")
+            visit(solution.solution, nxt, nxt)
         elif isinstance(solution, GetField):
-            d.print(f"if '{solution.key}' not in x:\n")
-            d.print(f"    problems += [xpath + f': missing discriminator \"{solution.key}\"']\n")
+            i = counter[0]; counter[0] += 1
+            d.print(f"if '{solution.key}' not in {objvar}:\n")
+            d.print(f"    problems += [{objpath} + f': missing discriminator \"{solution.key}\"']\n")
             d.print(f"    return problems\n")
-            d.print(f'x = x["{solution.key}"]\n')
-            d.print(f'xpath += ".{solution.key}"\n')
-            visit(solution.solution)
+            d.print(f'x{i} = {objvar}["{solution.key}"]\n')
+            d.print(f'xpath{i} = {objpath} + ".{solution.key}"\n')
+            visit(solution.solution, obj, (f"x{i}", f"xpath{i}"))
         elif isinstance(solution, HasField):
             for field, subsln in solution.solutions:
-                d.print(f'if "{field}" in x:\n')
+                d.print(f'if "{field}" in {objvar}:\n')
                 d.indent("    ")
-                visit(subsln)
+                visit(subsln, obj, obj)
                 d.dedent()
-            d.print("problems += [f'{xpath}: no matching keys found']\n")
+            d.print(f"problems += [f'{{{subjpath}}}: no matching keys found']\n")
             d.print("return problems\n")
         else:
             raise ValueError(f"unrecognized solution type: {type(solution).__name__}")
 
-    visit(solution)
+    visit(solution, ("x0", "xpath0"), ("x0", "xpath0"))
 
 
 def generate_checkers(d, annos, checkers, t):
@@ -345,7 +357,7 @@ def generate_checkers(d, annos, checkers, t):
                     d.print("else:\n")
                     d.print(f"    problems += [path + ': missing required key {fn}']\n")
             # check for extra fields
-            d.print(f"if {keys}.difference({keys}):\n")
+            d.print(f"if set(val).difference({keys}):\n")
             d.print(f"    problems += [path + ': contains extra keys']\n")
             d.print("return problems\n")
             d.dedent()
