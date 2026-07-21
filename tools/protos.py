@@ -1,6 +1,7 @@
 import abc
 import os
 import re
+import sys
 
 
 class Resolvable(metaclass=abc.ABCMeta):
@@ -414,10 +415,10 @@ def solve_union(types):
         if len(matches) == 1:
             # only one option for this json type
             out[jt] = Match(matches[0])
-        elif jt in ["string", "boolean", "integer"]:
+        elif jt in ["string", "boolean", "int"]:
             # union of multiple literals
-            if not all(isinstance(t, Literal) for t in types):
-                raise ValueError(f"unable to solve union between {types}")
+            if not all(isinstance(t, Literal) for t in matches):
+                raise ValueError(f"unable to solve union between {matches}")
             out[jt] = solve_union_literals(matches)
         elif jt == "object":
             # union of multiple structs
@@ -508,8 +509,9 @@ def solve_union_structs(types):
 
     # if there was only one option, it should have uniquely identified all types
     if len(keys_on_all_types) == 1:
+        only = next(iter(keys_on_all_types))
         raise ValueError(
-            f"union's only discriminator ({k}) does not uniquely identify all options: {types}"
+            f"union's only discriminator ({only}) does not uniquely identify all options: {types}"
         )
 
     # at this point, we'll assume the only valid case is a set of discriminators like [.type, .v],
@@ -565,8 +567,8 @@ def solve_union_arrays(types):
             if detect_union_overlap(subtypes):
                 continue
             try:
-                union = Union.of(subtypes)
-                solution = solve_union(union)
+                # flatten any maybe-unions into a single list of concrete members
+                solution = solve_union([m for st in subtypes for m in st])
             except ValueError:
                 continue
             else:
@@ -589,9 +591,8 @@ def solve_union_arrays(types):
     # all tuples should be distinguished, we should be left with only arrays; they must be solvable
     # according to their first element (and we already uniquely identified any incoming empty array)
     subtypes = [t.typeat(0) for t in types]
-    union = Union.of(subtypes)
-    solution = solve_union(union)
-    remap_and_prune(solution, subtypes, types)
+    solution = solve_union([m for st in subtypes for m in st])
+    solution = remap_and_prune(solution, subtypes, types)
     return CheckLength(out, solution)
 
 
@@ -726,9 +727,9 @@ def print_solution(solution, file=None, indent=0):
             for length, sln in solution.options.items():
                 dump(f"  {length}: ")
                 visit(sln, indent + 4)
-            if soultion.default:
+            if solution.default:
                 dump(f" default: ")
-                visit(soultion.default, indent + 4)
+                visit(solution.default, indent + 4)
         elif isinstance(solution, GetIndex):
             dump(f"\nget_index({solution.i}):")
             visit(solution.solution, indent + 2)
@@ -840,14 +841,8 @@ class Store:
                 match_si, match_i = names[si.name]
                 raise ValueError(
                     f"unable to add store template '{si.tpl}' in spec[{i}], which collides with "
-                    f"template '{match_si.si.tpl}' from spec[{match_i}]"
+                    f"template '{match_si.tpl}' from spec[{match_i}]"
                 )
-                if key in seen:
-                    match_i, match_tpl = seen[key]
-                    raise ValueError(
-                        f"unable to add store template '{si.tpl}' in spec[{i}], which overlaps with "
-                        f"template '{match_tpl}' from spec[{match_i}]"
-                    )
             items.append(si)
             names[si.name] = (si, i)
 
@@ -1072,7 +1067,7 @@ def _main():
                 roots.append(roots_available[r])
             elif r in stores_available:
                 stores.append(stores_available[r])
-            elif r in stores_available:
+            elif r in frameworks_available:
                 frameworks.append(frameworks_available[r])
             else:
                 raise ValueError(
@@ -1087,8 +1082,8 @@ def _main():
     generator_module = importlib.import_module(args.generator)
     if not hasattr(generator_module, "generate"):
         raise ValueError(
-            "unable to locate generate() function in generator module ({args.generator})"
-       )
+            f"unable to locate generate() function in generator module ({args.generator})"
+        )
 
     # make sure everything we're going to pass in was named
     for s in stores:

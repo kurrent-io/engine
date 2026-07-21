@@ -86,10 +86,18 @@ def noop_checker(val):
 
 _anon = 0
 
+_loopvar = 0
+def get_loopvar():
+    # a unique loop variable name, so nested array checkers don't shadow each other's index
+    global _loopvar
+    v = f"i{_loopvar}"
+    _loopvar += 1
+    return v
+
 pytyps = {
     "string": "str",
     "boolean": "bool",
-    "integer": "int",
+    "int": "int",
     "object": "dict",
     "array": "(list, tuple)",
 }
@@ -138,7 +146,8 @@ def check_solution(d, annos, checkers, solution):
                 visit(subsln)
                 d.dedent()
             # default
-            visit(solution.default)
+            if solution.default is not None:
+                visit(solution.default)
         elif isinstance(solution, GetIndex):
             # CheckLength should already protect us; no need to re-check
             d.print(f"x = x[{solution.i}]\n")
@@ -266,10 +275,39 @@ def generate_checkers(d, annos, checkers, t):
                     return d.getvalue()
                 d.print("else:\n")
                 d.indent("    ")
-                d.print(f"for i, x in enumerate({val}):\n")
+                iv = get_loopvar()
+                d.print(f"for {iv} in range(len({val})):\n")
                 d.indent("    ")
-                d.print(f"xpath = {path} + f'[{{i}}]")
-                d.print(checkers[t.item_type]("x", "xpath"))
+                # index the element and build its path off the original expressions, so nothing
+                # is clobbered when this checker is inlined inside another
+                d.print(checkers[t.item_type](f"({val})[{iv}]", f"{path} + f'[{{{iv}}}]'"))
+                return d.getvalue()
+
+        elif isinstance(t, ConcreteTuple):
+            for it in t.item_types:
+                visit(it)
+
+            def checker(val, path):
+                d = Denter()
+                n = len(t.item_types)
+                d.print(
+                    f"if not isinstance({val}, (list, tuple)):\n"
+                    f"    problems += [{path} + f': is a {{type({val}).__name__}}, not json array']\n"
+                )
+                d.print(f"elif len({val}) != {n}:\n")
+                d.print(f"    problems += [{path} + f': expected {n} items, not {{len({val})}}']\n")
+                # index each element off the original value/path expressions, so nothing is
+                # clobbered even when this checker is inlined inside another (e.g. a struct field)
+                parts = [
+                    checkers[it](f"({val})[{i}]", f"{path} + '[{i}]'")
+                    for i, it in enumerate(t.item_types)
+                ]
+                parts = [p for p in parts if p]
+                if parts:
+                    d.print("else:\n")
+                    d.indent("    ")
+                    for p in parts:
+                        d.print(p)
                 return d.getvalue()
 
         elif isinstance(t, ConcreteStruct):
@@ -416,7 +454,7 @@ def generate_framework(d, annos, f):
     """
     QX = f"{context_name(f.store.name)}QueryContext"
     E = annos[f.event_type]
-    C = annos[f.event_type]
+    C = annos[f.command_type]
     d.print("\n")
     d.print("\n")
     d.print(f"class {framework_name(f.name)}(Framework[\n")

@@ -25,7 +25,7 @@ def camel(s):
 json_type_to_reflect_type = {
     "string": "reflectTypeString",
     "boolean": "reflectTypeBool",
-    "iteger": "reflectTypeInt",
+    "int": "reflectTypeInt",
     "object": "reflectTypeMap",
     "array": "reflectTypeArray",
 }
@@ -159,7 +159,7 @@ def convert_union(d, name, t, annos, converters):
             d.dedent()
             d.print(f'}}\n')
             d.print(f'switch length.Export().(int64) {{\n')
-            for l, sln in sorted(solution.items()):
+            for l, sln in sorted(solution.options.items()):
                 d.print(f'case {l}:\n')
                 d.indent("\t")
                 visit(sln)
@@ -380,10 +380,10 @@ def generate_types(d, imports, annos, converters, t):
             # like struct, define the type as a wrapper around goja.Object
             d.print(f"\ntype {name} goja.Object\n")
             # define the converter, same as struct
-            d.print(f"\nfunc To{name}(value goja.Value) {{\n")
+            d.print(f"\nfunc To{name}(vm *goja.Runtime, value goja.Value) *{name} {{\n")
             d.indent("\t")
             d.print(f"out := value.(*goja.Object)\n")
-            d.print(f"return {name}(out)\n")
+            d.print(f"return (*{name})(out)\n")
             d.dedent()
             d.print(f"}}\n")
             converter = lambda var: f"To{name}(vm, {var})"
@@ -396,7 +396,7 @@ def generate_types(d, imports, annos, converters, t):
                 d.print(f"return out\n")
                 d.dedent()
                 d.print(f"}}\n")
-            anno = name
+            anno = f"*{name}"
         else:
             raise ValueError(f"unhandled type in generate_types: {type(t).__name__}")
 
@@ -412,7 +412,7 @@ def noop_checker(val):
 json_type_to_reflect_type = {
     "string": "reflectTypeString",
     "boolean": "reflectTypeBool",
-    "iteger": "reflectTypeInt",
+    "int": "reflectTypeInt",
     "object": "reflectTypeMap",
     "array": "reflectTypeArray",
 }
@@ -488,7 +488,7 @@ def check_solution(d, annos, checkers, solution):
             if typeset == {bool}:
                 # only bool literals; use an if statement
                 assert set(solution.options) == {True, False}, "non-exhaustive bool CheckLiteral"
-                d.print(f'v, ok = x.Export().(bool)\n')
+                d.print(f'b, ok = x.Export().(bool)\n')
                 d.print(f'if !ok {{\n')
                 d.indent('\t')
                 d.print(f'errs = append(errs, fmt.Errorf("%v: not a bool", xpath))\n')
@@ -591,7 +591,7 @@ def check_solution(d, annos, checkers, solution):
             d.print(f'}}\n')
             # do the check
             d.print(f'switch length.Export().(int64) {{\n')
-            for l, sln in sorted(solution.items()):
+            for l, sln in sorted(solution.options.items()):
                 d.print(f'case {l}:\n')
                 d.indent("\t")
                 visit(sln)
@@ -760,6 +760,42 @@ def generate_checkers(d, annos, checkers, t):
                     d.print(f'\terrs = append(errs, fmt.Errorf("%v: ForOf: %w", {path}, err))\n')
                     d.print(f'}}\n')
                     d.dedent()
+                d.print(f'}}\n')
+                return d.getvalue()
+
+        elif isinstance(t, ConcreteTuple):
+            for it in t.item_types:
+                visit(it)
+
+            def checker(var, path):
+                d = Denter()
+                n = len(t.item_types)
+                d.print(
+                    f'if typ := {var}.ExportType(); typ != reflectTypeArray {{\n'
+                    f'\terrs = append(errs, fmt.Errorf("%v: is a %v, not json array", {path}, typ))\n'
+                )
+                d.print(f'}} else {{\n')
+                d.indent("\t")
+                # a distinct name from the struct checker's `obj`, so an inlined tuple field
+                # does not shadow it
+                d.print(f'arr := {var}.(*goja.Object)\n')
+                d.print(f'if length := arr.Get("length").ToInteger(); length != {n} {{\n')
+                d.print(f'\terrs = append(errs, fmt.Errorf("%v: expected {n} items, not %v", {path}, length))\n')
+                d.print(f'}} else {{\n')
+                d.indent("\t")
+                # Go block scoping gives each element a fresh item/xpath, so nested tuples and
+                # arrays can't shadow each other's variables
+                for i, it in enumerate(t.item_types):
+                    d.print("{\n")
+                    d.indent("\t")
+                    d.print(f'item := arr.Get("{i}")\n')
+                    d.print(f'xpath := {path} + "[{i}]"\n')
+                    d.print(checkers[it]("item", "xpath"))
+                    d.dedent()
+                    d.print("}\n")
+                d.dedent()
+                d.print(f'}}\n')
+                d.dedent()
                 d.print(f'}}\n')
                 return d.getvalue()
 

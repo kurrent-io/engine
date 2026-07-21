@@ -76,7 +76,7 @@ function camel(s: string): string {
 const JSON_TYPE_TO_REFLECT_TYPE: Record<string, string> = {
   string: "reflectTypeString",
   boolean: "reflectTypeBool",
-  iteger: "reflectTypeInt",
+  int: "reflectTypeInt",
   object: "reflectTypeMap",
   array: "reflectTypeArray",
 };
@@ -417,10 +417,10 @@ function generateTypes(
       t.itemTypes.forEach((it, i) => visit(it, path + String(i)));
       const name = pascal(t.name ?? path);
       d.print(`\ntype ${name} goja.Object\n`);
-      d.print(`\nfunc To${name}(value goja.Value) {\n`);
+      d.print(`\nfunc To${name}(vm *goja.Runtime, value goja.Value) *${name} {\n`);
       d.indent("\t");
       d.print(`out := value.(*goja.Object)\n`);
-      d.print(`return ${name}(out)\n`);
+      d.print(`return (*${name})(out)\n`);
       d.dedent();
       d.print(`}\n`);
       converter = (v) => `To${name}(vm, ${v})`;
@@ -433,7 +433,7 @@ function generateTypes(
         d.dedent();
         d.print(`}\n`);
       });
-      anno = name;
+      anno = `*${name}`;
     } else {
       throw new Error(`unhandled type in generateTypes: ${t.constructor.name}`);
     }
@@ -517,7 +517,7 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
     } else if (solution instanceof CheckLiteral) {
       const typeset = new Set([...solution.options.keys()].map((v) => typeof v));
       if (typeset.size === 1 && typeset.has("boolean")) {
-        d.print(`v, ok = x.Export().(bool)\n`);
+        d.print(`b, ok = x.Export().(bool)\n`);
         d.print(`if !ok {\n`);
         d.indent("\t");
         d.print(`errs = append(errs, fmt.Errorf("%v: not a bool", xpath))\n`);
@@ -772,6 +772,40 @@ function generateCheckers(
           dd.print(`}\n`);
           dd.dedent();
         }
+        dd.print(`}\n`);
+        return dd.getvalue();
+      };
+    } else if (t instanceof KTuple) {
+      for (const it of t.itemTypes) visit(it);
+      checker = (v, path) => {
+        const dd = new Denter();
+        const n = t.itemTypes.length;
+        dd.print(
+          `if typ := ${v}.ExportType(); typ != reflectTypeArray {\n` +
+          `\terrs = append(errs, fmt.Errorf("%v: is a %v, not json array", ${path}, typ))\n`);
+        dd.print(`} else {\n`);
+        dd.indent("\t");
+        // a distinct name from the struct checker's `obj`, so an inlined tuple field does not
+        // shadow it
+        dd.print(`arr := ${v}.(*goja.Object)\n`);
+        dd.print(`if length := arr.Get("length").ToInteger(); length != ${n} {\n`);
+        dd.print(`\terrs = append(errs, fmt.Errorf("%v: expected ${n} items, not %v", ${path}, length))\n`);
+        dd.print(`} else {\n`);
+        dd.indent("\t");
+        // Go block scoping gives each element a fresh item/xpath, so nested tuples and arrays
+        // can't shadow each other's variables
+        t.itemTypes.forEach((it, i) => {
+          dd.print("{\n");
+          dd.indent("\t");
+          dd.print(`item := arr.Get("${i}")\n`);
+          dd.print(`xpath := ${path} + "[${i}]"\n`);
+          dd.print(checkers.get(it)!("item", "xpath"));
+          dd.dedent();
+          dd.print("}\n");
+        });
+        dd.dedent();
+        dd.print(`}\n`);
+        dd.dedent();
         dd.print(`}\n`);
         return dd.getvalue();
       };

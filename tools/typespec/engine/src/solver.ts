@@ -81,7 +81,7 @@ export function solveUnion(registry: KTypeRegistry, types: Iterable<KType>): Che
     if (matches.length === 1) {
       // only one option for this json type
       out.set(jt, new Match(matches[0]));
-    } else if (jt === "string" || jt === "boolean" || jt === "integer") {
+    } else if (jt === "string" || jt === "boolean" || jt === "int") {
       // union of multiple literals
       if (!matches.every((t) => t instanceof KLiteral)) {
         throw new Error(`unable to solve union between ${matches.join(", ")}`);

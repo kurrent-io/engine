@@ -113,7 +113,7 @@ function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
 const PYTYPS: Record<string, string> = {
   string: "str",
   boolean: "bool",
-  integer: "int",
+  int: "int",
   object: "dict",
   array: "(list, tuple)",
 };
@@ -190,6 +190,7 @@ function generateCheckers(
   checkers: Checkers,
   t: KType,
   anon: { n: number },
+  loop: { n: number },
 ): void {
   const visit = (t: KType): void => {
     if (checkers.has(t)) return;
@@ -267,10 +268,34 @@ function generateCheckers(
         if (checkers.get(t.itemType) === NOOP) return dd.getvalue();
         dd.print("else:\n");
         dd.indent("    ");
-        dd.print(`for i, x in enumerate(${val}):\n`);
+        const iv = `i${loop.n++}`;
+        dd.print(`for ${iv} in range(len(${val})):\n`);
         dd.indent("    ");
-        dd.print(`xpath = ${path} + f'[{i}]`);
-        dd.print(checkers.get(t.itemType)!("x", "xpath"));
+        // index the element and build its path off the original expressions, so nothing is
+        // clobbered when this checker is inlined inside another
+        dd.print(checkers.get(t.itemType)!(`(${val})[${iv}]`, `${path} + f'[{${iv}}]'`));
+        return dd.getvalue();
+      };
+    } else if (t instanceof KTuple) {
+      for (const it of t.itemTypes) visit(it);
+      checker = (val, path) => {
+        const dd = new Denter();
+        const n = t.itemTypes.length;
+        dd.print(
+          `if not isinstance(${val}, (list, tuple)):\n` +
+          `    problems += [${path} + f': is a {type(${val}).__name__}, not json array']\n`);
+        dd.print(`elif len(${val}) != ${n}:\n`);
+        dd.print(`    problems += [${path} + f': expected ${n} items, not {len(${val})}']\n`);
+        // index each element off the original value/path expressions, so nothing is clobbered
+        // even when this checker is inlined inside another (e.g. a struct field)
+        const parts = t.itemTypes
+          .map((it, i) => checkers.get(it)!(`${val}[${i}]`, `${path} + '[${i}]'`))
+          .filter((p) => p);
+        if (parts.length) {
+          dd.print("else:\n");
+          dd.indent("    ");
+          for (const p of parts) dd.print(p);
+        }
         return dd.getvalue();
       };
     } else if (t instanceof KStruct) {
@@ -382,7 +407,7 @@ function frameworkName(name: string): string {
 function generateFramework(d: Denter, annos: Annos, f: KFramework): void {
   const QX = `${contextName(f.store.name!)}QueryContext`;
   const E = annos.get(f.eventType);
-  const C = annos.get(f.eventType);
+  const C = annos.get(f.commandType);
   d.print("\n");
   d.print("\n");
   d.print(`class ${frameworkName(f.name!)}(Framework[\n`);
@@ -427,7 +452,8 @@ export function generatePy(lowered: LoweredProgram, skeleton: string): string {
 
   const checkers: Checkers = new Map();
   const anon = { n: 0 };
-  for (const t of typesToVisit) generateCheckers(d, registry, annos, checkers, t, anon);
+  const loop = { n: 0 };
+  for (const t of typesToVisit) generateCheckers(d, registry, annos, checkers, t, anon, loop);
 
   for (const s of stores) generateStore(d, annos, s);
   for (const f of frameworks) generateFramework(d, annos, f);

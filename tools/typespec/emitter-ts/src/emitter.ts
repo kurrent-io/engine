@@ -168,8 +168,17 @@ function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void
     } else if (solution instanceof GetField) {
       d.print(`x = x.${solution.key};\n`);
       visit(solution.solution);
+    } else if (solution instanceof HasField) {
+      for (const [field, subsln] of solution.solutions) {
+        d.print(`if ("${field}" in x) {\n`);
+        d.indent("  ");
+        visit(subsln);
+        d.dedent();
+        d.print("}\n");
+      }
+      d.print("throw new Error(`no matching field: ${JSON.stringify(val)}`);\n");
     } else {
-      throw new Error(`unrecognized solution type: ${solution.constructor.name}`);
+      throw new Error(`unrecognized solution type: ${(solution as Solution).constructor.name}`);
     }
   };
 

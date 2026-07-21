@@ -117,6 +117,8 @@ def decode_solution(d, annos, decoders, solution):
             for lit, subsln in solution.options.items():
                 if isinstance(lit, str):
                     d.print(f'case "{lit}":\n');
+                elif isinstance(lit, bool):
+                    d.print(f"case {str(lit).lower()}:\n");
                 else:
                     d.print(f"case {lit}:\n");
                 d.indent("  ")
@@ -126,7 +128,7 @@ def decode_solution(d, annos, decoders, solution):
             d.dedent()
             d.print("}\n")
         elif isinstance(solution, CheckLength):
-            if len(solution.options) == 1:
+            if len(solution.options) == 1 and solution.default is None:
                 return visit(next(iter(solution.options.values())))
             d.print("switch(x.length){\n")
             d.indent("  ")
@@ -136,10 +138,11 @@ def decode_solution(d, annos, decoders, solution):
                 visit(subsln)
                 d.dedent()
             # default
-            d.print(f"default:\n");
-            d.indent("  ")
-            visit(solution.default)
-            d.dedent()
+            if solution.default is not None:
+                d.print(f"default:\n");
+                d.indent("  ")
+                visit(solution.default)
+                d.dedent()
             d.dedent()
             d.print("}\n")
         elif isinstance(solution, GetIndex):
@@ -148,6 +151,14 @@ def decode_solution(d, annos, decoders, solution):
         elif isinstance(solution, GetField):
             d.print(f"x = x.{solution.key};\n")
             visit(solution.solution)
+        elif isinstance(solution, HasField):
+            for field, subsln in solution.solutions:
+                d.print(f'if ("{field}" in x) {{\n')
+                d.indent("  ")
+                visit(subsln)
+                d.dedent()
+                d.print("}\n")
+            d.print("throw new Error(`no matching field: ${JSON.stringify(val)}`);\n")
         else:
             raise ValueError(f"unrecognized solution type: {type(solution).__name__}")
 
