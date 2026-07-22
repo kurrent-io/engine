@@ -48,8 +48,25 @@ ui/src/model.d.ts: model/node_modules model/model.gen.ts model/ui.ts
 ui/check: ui
 	cd ui && pnpm tsc
 
+.PHONY: rsc
+rsc: rsc/node_modules rsc/src/model.js rsc/src/model.d.ts
+	cd rsc && pnpm build
+
+rsc/node_modules:
+	cd rsc && pnpm i
+
+rsc/src/model.js: model/node_modules model/model.gen.ts model/ui.ts
+	cd model && pnpm rollup -m inline --format=esm -p typescript ui.ts -o ../$@
+
+rsc/src/model.d.ts: model/node_modules model/model.gen.ts model/ui.ts
+	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
+
+.PHONY: rsc/check
+rsc/check: rsc
+	cd rsc && pnpm tsc
+
 .PHONY: check
-check: relay/relay model/check ui/check
+check: relay/relay model/check ui/check rsc/check
 
 .PHONY: serve
 serve: ui
@@ -58,4 +75,6 @@ serve: ui
 clean:
 	@rm -f model/mode.gen.ts \
 		relay/relay relay/model/model.go \
-		ui/src/model.js ui/src/model.d.ts
+		ui/src/model.js ui/src/model.d.ts \
+		rsc/src/model.js rsc/src/model.d.ts
+	@rm -rf rsc/dist
