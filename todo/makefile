@@ -82,8 +82,25 @@ kesq/src/model.d.ts: model/node_modules model/model.gen.ts model/ui.ts
 kesq/check: kesq
 	cd kesq && pnpm tsc
 
+.PHONY: kesq2
+kesq2: kesq2/node_modules kesq2/src/model.js kesq2/src/model.d.ts
+	cd kesq2 && pnpm build
+
+kesq2/node_modules:
+	cd kesq2 && pnpm i
+
+kesq2/src/model.js: model/node_modules model/model.gen.ts model/ui.ts
+	cd model && pnpm rollup -m inline --format=esm -p typescript ui.ts -o ../$@
+
+kesq2/src/model.d.ts: model/node_modules model/model.gen.ts model/ui.ts
+	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
+
+.PHONY: kesq2/check
+kesq2/check: kesq2
+	cd kesq2 && pnpm tsc
+
 .PHONY: check
-check: relay/relay model/check ui/check rsc/check kesq/check
+check: relay/relay model/check ui/check rsc/check kesq/check kesq2/check
 
 .PHONY: serve
 serve: ui
@@ -94,5 +111,6 @@ clean:
 		relay/relay relay/model/model.go \
 		ui/src/model.js ui/src/model.d.ts \
 		rsc/src/model.js rsc/src/model.d.ts \
-		kesq/src/model.js kesq/src/model.d.ts
-	@rm -rf rsc/dist kesq/dist
+		kesq/src/model.js kesq/src/model.d.ts \
+		kesq2/src/model.js kesq2/src/model.d.ts
+	@rm -rf rsc/dist kesq/dist kesq2/dist
