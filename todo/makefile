@@ -65,8 +65,25 @@ rsc/src/model.d.ts: model/node_modules model/model.gen.ts model/ui.ts
 rsc/check: rsc
 	cd rsc && pnpm tsc
 
+.PHONY: kesq
+kesq: kesq/node_modules kesq/src/model.js kesq/src/model.d.ts
+	cd kesq && pnpm build
+
+kesq/node_modules:
+	cd kesq && pnpm i
+
+kesq/src/model.js: model/node_modules model/model.gen.ts model/ui.ts
+	cd model && pnpm rollup -m inline --format=esm -p typescript ui.ts -o ../$@
+
+kesq/src/model.d.ts: model/node_modules model/model.gen.ts model/ui.ts
+	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
+
+.PHONY: kesq/check
+kesq/check: kesq
+	cd kesq && pnpm tsc
+
 .PHONY: check
-check: relay/relay model/check ui/check rsc/check
+check: relay/relay model/check ui/check rsc/check kesq/check
 
 .PHONY: serve
 serve: ui
@@ -76,5 +93,6 @@ clean:
 	@rm -f model/mode.gen.ts \
 		relay/relay relay/model/model.go \
 		ui/src/model.js ui/src/model.d.ts \
-		rsc/src/model.js rsc/src/model.d.ts
-	@rm -rf rsc/dist
+		rsc/src/model.js rsc/src/model.d.ts \
+		kesq/src/model.js kesq/src/model.d.ts
+	@rm -rf rsc/dist kesq/dist
