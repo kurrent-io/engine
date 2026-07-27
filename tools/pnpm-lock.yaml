@@ -65,24 +65,6 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
-  library:
-    dependencies:
-      '@kurrent/typespec-engine':
-        specifier: workspace:*
-        version: link:../engine
-      '@kurrent/typespec-engine-go':
-        specifier: workspace:*
-        version: link:../emitter-go
-      '@kurrent/typespec-engine-py':
-        specifier: workspace:*
-        version: link:../emitter-py
-      '@kurrent/typespec-engine-ts':
-        specifier: workspace:*
-        version: link:../emitter-ts
-      '@typespec/compiler':
-        specifier: ^1.0.0
-        version: 1.13.0(@types/node@22.20.1)
-
   tests:
     dependencies:
       '@kurrent/typespec-engine':

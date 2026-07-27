@@ -46,18 +46,17 @@ materialized views — not event storage.
 ## Repo Layout
 
 ```
-tools/              Reusable framework + codegen tooling
-  protos.py         Type system DSL (Struct, Union, Store, Framework, ...)
-  gen_{ts,py,go}.py Code generators
-  skeleton.{ts,py,go}  Runtime skeletons compiled into each target language
-  typespec/         Experimental TypeSpec replacement for the Python DSL — read
-                    tools/typespec/CLAUDE.md for status + settled design decisions
-                    before working on it
+tools/     Reusable framework + codegen tooling — read tools/CLAUDE.md
+                    for settled design decisions before working on it
+  engine/           @kurrent/typespec-engine — the TypeSpec vocabulary (Store, Framework)
+                    plus the lowering/solver IR shared by all emitters
+  emitter-{ts,py,go}/  Code emitters; each ships its runtime skeleton in assets/
+  tests/            Emitter/solver/lowering test suites
 
 relay/_quickjs.c    Reusable Python ↔ QuickJS bindings (used by Python relays)
 
 skill/              Developer skill files for building apps on the framework
-  data-model.md     Python DSL for defining types, events, stores, frameworks
+  data-model.md     TypeSpec DSL for defining types, events, stores, frameworks
   reducers.md       Generator-based reducers, rx contexts, composition
   relay.md          Relay architecture, websocket protocol, validation
   decider.md        Go+goja decider, decision events, at-most-one semantics
@@ -66,7 +65,7 @@ skill/              Developer skill files for building apps on the framework
 
 # Library demo (full architecture: Python relay + Go decider + forecasting UI)
 model/              Shared business logic
-  library.py        Data model (Python DSL)
+  library.tsp       Data model (TypeSpec); tspconfig.yaml declares the emitters
   library.gen.ts    GENERATED — do not edit
   reducers.ts       Hand-written reducer functions
   reducers.test.ts  Jest tests (using generated ReducerTester)
@@ -80,7 +79,7 @@ devcluster.yaml     Local KurrentDB config
 
 # Todo demo (minimal: Go relay only, single stream, no decider)
 todo/
-  model/            model.py, reducers.ts, relay.ts, ui.ts
+  model/            model.tsp, reducers.ts, relay.ts, ui.ts
   relay/            Go relay + generated model.go
   ui/               React frontend
   makefile          Demo-local build
@@ -91,7 +90,7 @@ todo/
 Each demo has its own makefile (root for library, `todo/makefile` for todo) with the same target
 shape:
 
-- `make model` — Regenerate `*.gen.ts` from the Python DSL
+- `make model` — Regenerate `*.gen.ts` from the TypeSpec model
 - `make relay` — Bundle relay JS, generate relay-side model bindings (Python or Go), build the
   relay binary
 - `make decider` — (Library only) Bundle decider JS, generate Go model, build the decider binary
@@ -101,7 +100,8 @@ shape:
 
 Prerequisites: `cd model && pnpm i` and `cd ui && pnpm i` (per demo).
 
-When changing the demo's `.py` data model or any codegen in `tools/`, run `make` to regenerate.
+When changing the demo's `.tsp` data model or any codegen in `tools/`, run `make` to
+regenerate.
 
 ## Key Patterns
 
@@ -156,8 +156,8 @@ the demo distinguishes user types.  Prioritize clarity over generality.
 
 - Do not commit or manage git history; the user handles all source control.
 - Generated files (`*.gen.ts`, generated `model.py`, `model.go`, `ui/src/model.*`) should not be
-  hand-edited except for throwaway experiments.  Change the demo's `.py` and regenerate instead.
-- The user typically drives `make` themselves after editing `.py` — read the regenerated files
+  hand-edited except for throwaway experiments.  Change the demo's `.tsp` and regenerate instead.
+- The user typically drives `make` themselves after editing `.tsp` — read the regenerated files
   rather than re-running codegen unprompted.
 - Prefer larger changes; the user will ask to slow down if needed.
 - Reducer tests use the generated `ReducerTester` class.  `cd <demo>/model && pnpm test`.

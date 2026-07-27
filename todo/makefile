@@ -1,19 +1,26 @@
 all: model
 
-../tools/gen_ts.py: ../tools/protos.py ../tools/skeleton.ts
-	@touch $@
+# The TypeSpec tooling (engine + emitters); one tsp compile of the todo model
+# produces both generated files.
+TSP_SRCS := $(wildcard ../tools/engine/src/*.ts ../tools/engine/lib/*.tsp \
+	../tools/emitter-ts/src/*.ts ../tools/emitter-ts/assets/* \
+	../tools/emitter-go/src/*.ts ../tools/emitter-go/assets/*)
 
-../tools/gen_go.py: ../tools/protos.py ../tools/skeleton.go
-	@touch $@
+.PHONY: typespec-tools
+typespec-tools:
+	@cd ../tools && pnpm -s i && pnpm -rs build
+
+model/model.gen.ts relay/model/model.go &: model/model.tsp model/node_modules $(TSP_SRCS) | typespec-tools
+	cd model && pnpm exec tsp compile model.tsp
+	cp model/tsp-output/@kurrent/typespec-engine-ts/model.gen.ts model/model.gen.ts
+	mkdir -p relay/model
+	cp model/tsp-output/@kurrent/typespec-engine-go/model.go relay/model/model.go
 
 .PHONY: model
 model: model/node_modules model/model.gen.ts
 
 model/node_modules:
 	cd model && pnpm i
-
-model/model.gen.ts: model/model.py ../tools/gen_ts.py model/reducers.ts model/tsconfig.json
-	python ../tools/protos.py -i ../tools -i model gen_ts model > $@
 
 .PHONY: model/check
 model/check: model
@@ -24,10 +31,6 @@ relay: relay/relay
 
 relay/relay.js: model/node_modules model/model.gen.ts model/relay.ts
 	cd model && pnpm rollup -m inline --format=cjs -p typescript relay.ts -o ../relay/relay.js
-
-relay/model/model.go: model/model.py ../tools/gen_go.py
-	mkdir -p relay/model
-	python ../tools/protos.py -i ../tools -i model gen_go model -- model > $@
 
 relay/relay: relay/relay.js relay/main.go relay/model/model.go
 	cd relay && go build -o relay .
@@ -107,10 +110,10 @@ serve: ui
 	cd ui && pnpm serve
 
 clean:
-	@rm -f model/mode.gen.ts \
+	@rm -f model/model.gen.ts \
 		relay/relay relay/model/model.go \
 		ui/src/model.js ui/src/model.d.ts \
 		rsc/src/model.js rsc/src/model.d.ts \
 		kesq/src/model.js kesq/src/model.d.ts \
 		kesq2/src/model.js kesq2/src/model.d.ts
-	@rm -rf rsc/dist kesq/dist kesq2/dist kesq2/gen
+	@rm -rf rsc/dist kesq/dist kesq2/dist kesq2/gen model/tsp-output

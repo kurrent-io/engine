@@ -172,23 +172,24 @@ with a mutex.
 
 ## Code Generation
 
-| Generator | Input | Output | Generates |
-|-----------|-------|--------|-----------|
-| `gen_ts.py` | `<demo>.py` | `<demo>.gen.ts` | Types, decoders, store accessors, framework subclasses |
-| `gen_py.py` | `<demo>.py` | `model.py` | Protocol types, checkers, query contexts, framework subclass |
-| `gen_go.py` | `<demo>.py` | `model.go` | Go types, converters, query contexts, framework subclass, `Check*` validators |
+| Emitter | Input | Output | Generates |
+|---------|-------|--------|-----------|
+| `@kurrent/typespec-engine-ts` | `main.tsp` | `<demo>.gen.ts` | Types, decoders, store accessors, framework subclasses |
+| `@kurrent/typespec-engine-py` | `main.tsp` | `model.py` | Protocol types, checkers, query contexts, framework subclass |
+| `@kurrent/typespec-engine-go` | `main.tsp` | `model.go` | Go types, converters, query contexts, framework subclass, `Check*` validators |
 
-Run `make` in the demo directory to regenerate everything.  The generators read the demo's `.py`
-file and the shared skeleton files (`tools/skeleton.{ts,py,go}`) which contain the runtime
-framework code.
+Run `make` in the demo directory to regenerate everything.  The emitters read the demo's model
+file (e.g. `model/library.tsp`) and prepend their runtime skeleton
+(`tools/emitter-{ts,py,go}/assets/skeleton.*`), which contains the runtime framework
+code.
 
 ## Environment Setup
 
 Each runtime needs `generateUuid()` available as a global.  The skeleton handles this:
 
-- **Browser**: defined in `skeleton.ts`, uses `crypto.getRandomValues()`.
+- **Browser**: defined in the TS skeleton, uses `crypto.getRandomValues()`.
 - **QuickJS**: injected by `_quickjs.c` from Python's `uuid.uuid4()`.
-- **goja**: injected in `skeleton.go` using `crypto/rand`.
+- **goja**: injected in the Go skeleton using `crypto/rand`.
 
 If `generateUuid` is already defined in `globalThis` (e.g. injected by the host), the browser
 version defers to it.

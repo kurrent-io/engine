@@ -1,8 +1,8 @@
-# TypeSpec-based model tooling (experimental)
+# TypeSpec model tooling
 
-An experimental replacement for the Python proto DSL (`tools/protos.py` + `tools/gen_*.py`) built
-on [TypeSpec](https://typespec.io).  The existing Python tooling is untouched; this lives alongside
-it for side-by-side comparison testing.
+The model tooling for Kurrent Engine, built on [TypeSpec](https://typespec.io).  Demo data models
+are written in TypeSpec against the `@kurrent/typespec-engine` vocabulary; emitters produce the
+typed TypeScript, Python, and Go model code the demos build on.
 
 ## Layout
 
@@ -10,24 +10,25 @@ it for side-by-side comparison testing.
 engine/       @kurrent/typespec-engine — the definition library apps import.
               lib/main.tsp declares the vocabulary (the Store and Framework interface
               templates); src/ holds everything shared by emitters:
-                ktypes.ts  interned concrete-type IR (port of protos.py's Concrete layer)
-                solver.ts  union solver (port of solve_union / remap_and_prune)
-                lower.ts   TypeSpec Program -> IR (replaces protos.py's name harvesting/resolve)
-                denter.ts  indent-aware printer (port of Denter)
-emitter-ts/   @kurrent/typespec-engine-ts — TypeScript emitter (port of gen_ts.py).
-emitter-py/   @kurrent/typespec-engine-py — Python emitter (port of gen_py.py).
-emitter-go/   @kurrent/typespec-engine-go — Go emitter (port of gen_go.py).
+                ktypes.ts  interned concrete-type IR
+                solver.ts  union solver
+                lower.ts   TypeSpec Program -> IR
+                denter.ts  indent-aware printer
+emitter-ts/   @kurrent/typespec-engine-ts — TypeScript emitter.
+emitter-py/   @kurrent/typespec-engine-py — Python emitter.
+emitter-go/   @kurrent/typespec-engine-go — Go emitter.
               Each emitter is a package exporting $onEmit; it calls lowerProgram() from the
               engine and walks the lowered IR.  Each ships its target-language runtime skeleton
-              as assets/skeleton.{ts,py,go} and prepends it (override via the `skeleton` option).
-library/      TypeSpec port of the library demo (main.tsp mirrors model/library.py).
+              as assets/skeleton.{ts,py,go} (the canonical copy) and prepends it (override via
+              the `skeleton` option).
 tests/        Vitest suite for the tooling (see "Tests" below).
-compare.sh    Regenerate all three outputs and diff against the Python tooling's output.
 ```
 
-## Vocabulary mapping
+## Vocabulary mapping (from the retired Python DSL)
 
-| protos.py                              | TypeSpec                                        |
+The tooling replaced an in-repo Python DSL (`protos.py`); for readers who knew it, the mapping:
+
+| protos.py (retired)                    | TypeSpec                                        |
 |----------------------------------------|-------------------------------------------------|
 | `Struct(a=String, b=Maybe(Int))`       | `model X { a: string; b?: int32; }`             |
 | `Literal("x")` / `Literal(True)`       | `"x"` / `true` literal types                    |
@@ -47,47 +48,23 @@ as ops in the framework interface body instead.
 ## Build and generate
 
 ```
-cd tools/typespec
+cd tools
 pnpm install
-pnpm -r build                          # tsc for engine + all three emitters
-cd library && pnpm exec tsp compile .  # runs all three emitters (see tspconfig.yaml)
-# outputs under library/tsp-output/@kurrent/{typespec-engine-ts,-py,-go}/
+pnpm -r build       # tsc for engine + all three emitters
 ```
 
-or just `./compare.sh`, which builds, emits all three, generates the Python tooling's output
-fresh from `model/library.py`, and reports the difference for each.
-
-## Comparison status
-
-All three outputs have the same line count as the Python tooling's, define the same set of
-top-level symbols, and (Python/Go) pass a structural parse.  The differences are all one family,
-rooted in the Python DSL storing union members in frozensets (hash order) where the TypeSpec
-pipeline preserves declaration order:
-
-- union member order, and the switch-case order that follows from it;
-- the position of the `DeciderEvents` block (library.py forward-declares it in the storage
-  section, so Python resolves its members early);
-- which anonymous struct gets which path-derived number when a union has two structurally
-  similar members (`{hold} | {checkout}` -> `BookStatus0`/`BookStatus1` bind to opposite
-  structs between the two pipelines);
-- anonymous slice/record converter numbering in Go.
-
-Measured by `compare.sh` as "changed lines after sorting" — a few lines each (the anon-struct
-swaps), confirming the rest is pure reordering.
-
-Semantic checks:
-
-- TypeScript: swap the emitted file into `model/library.gen.ts`, then
-  `cd model && pnpm exec tsc --noEmit -p . && pnpm exec jest` (both pass).
-- Python: `python -c "import ast; ast.parse(open(...).read())"` parses.
-- Go: `gofmt -e` parses.  (A full `go build` needs the module's goja/jscan deps and was not
-  run here.)
+Demo data models live with the demos (`model/library.tsp`, `todo/model/model.tsp`); each demo's
+model package depends on the engine and emitters via `link:` entries and declares its outputs in
+`tspconfig.yaml`, so `pnpm exec tsp compile <model>.tsp` there emits under `tsp-output/@kurrent/`.
+The demo makefiles drive this (build the tooling, compile the demo's model, copy outputs into
+place) — `make model` from a demo directory is the normal entry point.
 
 ## Tests
 
 ```
-pnpm test        # from tools/typespec: build all packages, regenerate fixtures, run the vitest suite
+pnpm test        # from tools: build all packages, regenerate fixtures, run the vitest suite
 pnpm --filter @kurrent/typespec-engine-tests test:py   # emitted-Python checker suite (stdlib only)
+pnpm --filter @kurrent/typespec-engine-tests test:go   # emitted-Go checker suite
 ```
 
 The `tests/` package has two layers.
@@ -126,15 +103,10 @@ one shared fixture, `tests/fixtures/main.tsp`, emitted into `tests/tsp-output/` 
 
 Note: `pnpm approve-builds` (accept `esbuild`) is needed once so vitest's transform can run.
 
-## Known gaps / first-pass shortcuts
+## Known gaps / shortcuts
 
-- The Go emitter names slice/record converters after a builtin item type by convention
-  (`sliceOfString`), where the Python tooling derives that name from whichever builtins the
-  model's Python module happened to `import` — an implementation detail with no TypeSpec analog.
-  Output is valid and internally consistent either way; this is one source of the anon-numbering
-  differences above.
-- The solver's array/tuple-union paths are ported but unexercised by the demos (they were
-  actually unreachable in Python: `solve_union_arrays` calls a nonexistent `Union.of` and drops
-  one `remap_and_prune` result — both fixed in the port).
+- The Go emitter names slice/record converters after their builtin item type (`sliceOfString`);
+  anonymous non-builtin converters get path-derived numbers.
+- The solver's array/tuple-union paths are unexercised by the demos.
 - Scalars that extend builtins (`scalar Uuid extends string`) lower to the plain builtin rather
-  than emitting a named alias; use `alias Uuid = string;` for Python-`Alias` parity.
+  than emitting a named alias; use `alias Uuid = string;` to name one.

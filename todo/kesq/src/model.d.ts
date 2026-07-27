@@ -145,7 +145,7 @@ export type ArchiveItem = {
 	type: "archive-item";
 	id: string;
 };
-export type TodoEvents = EditItem | MarkItem | ArchiveList | NewList | NewItem | ArchiveItem | RenameList;
+export type TodoEvents = NewList | RenameList | ArchiveList | NewItem | EditItem | MarkItem | ArchiveItem;
 export declare function DecodeTodoEvents(val: any): TodoEvents;
 declare const TodoQueryContext: {
 	get: {

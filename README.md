@@ -8,18 +8,20 @@ by both backend and frontend services.
 
 ## Repo Layout (wip)
 
-The tooling for defining types and generating code is in `tools/`:
+The tooling for defining types and generating code is in `tools/` (see its README):
 
-- `tools/protos.py` defines the available types
-- `tools/skeleton.{ts,py,go}` are starting points for the code generators
-- `tools/gen_{ts,py,go}.py` are the code generators themselves
+- `tools/engine` defines the available types (the TypeSpec vocabulary + lowering IR)
+- `tools/emitter-{ts,py,go}` are the code emitters; each ships its runtime skeleton
+  in `assets/`
+- each demo's data model is a `.tsp` file in its model directory (e.g. `model/library.tsp`),
+  which depends on the engine and emitters via `link:` entries in its package.json
 
-The data model is defined in `model/`.  The basic idea is that a bundler (`rollup`, in this case) is
+The business logic lives in `model/`.  The basic idea is that a bundler (`rollup`, in this case) is
 used to capture the all the business logic in `model/` and expose it to one of the system components
 (the `ui`, the `relay`, or the `decider`):
 
-- `model/library.py` defines the data types using types from `tools/protos.py`
-- `model/library.gen.ts` is the output of running `tools/gen_ts.py` to `model/library.py`
+- `model/library.tsp` defines the data types (see `skill/data-model.md`)
+- `model/library.gen.ts` is the TypeScript emitter's output for `model/library.tsp`
 - `model/reducers.ts` contains the business logic for compiling snapshots from events
 - `model/{ui,relay,decider}.ts` are the stubs that export names for use in each system component.
 

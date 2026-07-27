@@ -1,0 +1,9 @@
+emit:
+  - "@kurrent/typespec-engine-ts"
+  - "@kurrent/typespec-engine-go"
+options:
+  "@kurrent/typespec-engine-ts":
+    out-file: "model.gen.ts"
+  "@kurrent/typespec-engine-go":
+    package: "model"
+    out-file: "model.go"

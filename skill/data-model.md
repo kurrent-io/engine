@@ -1,122 +1,119 @@
 # Defining a Data Model
 
-A demo's data model is defined in Python using the type DSL from `tools/protos.py`.  The model
-file (e.g. `<demo>/model/<demo>.py`) describes the domain types, events, storage layout, and
-framework compositions.  Code generators then produce typed code for TypeScript, Python, and Go.
+A demo's data model is defined in [TypeSpec](https://typespec.io) using the vocabulary from
+`@kurrent/typespec-engine` (`tools/engine`).  The model file lives in the demo's model directory
+next to the reducers (e.g. `model/library.tsp`, `todo/model/model.tsp`) and describes the domain
+types, events, storage layout, and framework compositions.  Emitters then produce typed code for
+TypeScript, Python, and Go.
 
 ## Type Primitives
 
-```python
-from protos import (
-    String, Int, Bool, Null,  # scalar types
-    Literal,                   # literal value, e.g. Literal("add-book")
-    Maybe,                     # optional: Maybe(String) -> string | undefined
-    Array,                     # Array(String) -> string[]
-    Object,                    # Object(ValueType) -> Record<string, ValueType>
-    Struct,                    # named product type with fields
-    Union,                     # discriminated union
-    Alias,                     # type alias (for readability)
-    Store,                     # key-value storage layout
-    Framework,                 # ties events, commands, and stores together
-)
-```
+| concept        | TypeSpec                                             |
+|----------------|------------------------------------------------------|
+| scalars        | `string`, `int32`, `boolean`, `null`                 |
+| literal        | `"add-book"`, `true` (literal types)                 |
+| optional       | `expires?: utcDateTime` (optional field)             |
+| array          | `string[]`                                           |
+| record         | `Record<T>` (`model Setx is Record<true>;` to name one) |
+| struct         | `model X { a: string; b?: int32; }`                  |
+| union          | `union X { A, B }` or `A \| B` expressions           |
+| alias          | `alias Uuid = string;` (erased)                      |
+| date           | `utcDateTime`                                        |
+| storage layout | `interface S extends Store<{...}> {}`                |
+| framework      | `interface F extends Framework<E, C, S> {}`          |
 
 ## Defining Structures
 
-```python
-# A struct is a product type with named fields
-Book = Struct(
-    id=String,
-    isbn=String,
-    restricted=Bool,
-    status=Maybe(Struct(hold=String) | Struct(checkout=String)),
-)
+```typespec
+model Book {
+  id: Uuid;
+  isbn: Isbn;
+  restricted: boolean;
+  status?: { hold: Uuid } | { checkout: Uuid };
+}
 ```
 
-Use `Maybe(T)` for optional fields. Use `|` to create inline unions (e.g. a status that is either
-a hold or a checkout).
+Use `?` for optional fields.  Use `|` for inline unions (e.g. a status that is either a hold or a
+checkout).
 
-## Built-in Date Type
+## Dates
 
-`Date` is a built-in type that maps to `Date` in TypeScript, `datetime.datetime` in Python, and
-`time.Time` in Go. It serializes as an ISO 8601 string on the wire. The QuickJS bindings
-(`_quickjs.c`) handle JS `Date` ↔ Python `datetime.datetime` conversion natively (UTC only).
+`utcDateTime` maps to `Date` in TypeScript, `datetime.datetime` in Python, and `time.Time` in Go.
+It serializes as an ISO 8601 string on the wire.  The QuickJS bindings (`relay/_quickjs.c`) handle
+JS `Date` ↔ Python `datetime.datetime` conversion natively (UTC only).
 
-```python
-expires = Maybe(Date),
-timestamp = Date,
+```typespec
+timestamp: utcDateTime;
+expires?: utcDateTime;
 ```
-
-## Custom Concrete Types
-
-For types that need custom encoding/decoding across languages, subclass `Concrete` and implement
-static methods for each target language. (The built-in `Date` type used to be implemented this way
-as `Timestamp` but was promoted to a first-class type.)
 
 ## Defining Events
 
-Events use discriminated unions. Create a `Union()` and call `.add()` to register each variant.
-The `type` field (a `Literal`) acts as the discriminator.
+Events are discriminated unions of models.  The `type` field (a string literal) acts as the
+discriminator.
 
-```python
-BookEvents = Union()
+```typespec
+model AddEdition {
+  type: "add-edition";
+  isbn: Isbn;
+  title: string;
+  timestamp: utcDateTime;
+}
 
-AddEdition = BookEvents.add(Struct(
-    type=Literal("add-edition"),
-    isbn=String,
-    title=String,
-    timestamp=Timestamp,
-))
+model RemoveBook {
+  type: "remove-book";
+  id: Uuid;
+  timestamp: utcDateTime;
+}
 
-RemoveBook = BookEvents.add(Struct(
-    type=Literal("remove-book"),
-    id=String,
-    timestamp=Timestamp,
-))
+union BookEvents {
+  AddEdition,
+  RemoveBook,
+}
 ```
 
-You can combine unions with `|`:
+Unions compose by naming other unions as members (they flatten):
 
-```python
-LibraryEvents = BookEvents | PatronEvents | StatusEvents | DeciderEvents
+```typespec
+union LibraryEvents {
+  BookEvents,
+  PatronEvents,
+  StatusEvents,
+  DeciderEvents,
+}
 ```
 
-## Enum Helper
+For string enums, a union of string literals works directly:
 
-For string enums, use a helper:
-
-```python
-def Enum(*strings):
-    return Union(*(Literal(s) for s in strings))
-
-Role = Enum("admin", "patron", "researcher")
+```typespec
+union Role { "admin", "patron", "researcher" }
 ```
 
 ## Defining Storage
 
-`Store` defines the key-value layout for materialized views. Keys use `{param}` for parameterized
-lookups.
+`Store` defines the key-value layout for materialized views.  Keys use `{param}` for parameterized
+lookups, carried by the spec model's quoted property names.
 
-```python
-BookStore = Store({
-    "edition.{edition_isbn}": Edition,
-    "editions": Setx,          # Setx = Object(Literal(True)), i.e. Record<string, true>
-    "book.{book_uuid}": Book,
-})
+```typespec
+interface BookStore extends Store<{
+  "edition.{edition_isbn}": Edition;
+  "editions": Setx;
+  "book.{book_uuid}": Book;
+}> {}
 ```
 
-Stores compose by passing multiple stores or dicts:
+Stores compose through the second template parameter, a tuple of dependency stores:
 
-```python
-DeciderStore = Store(
-    BookStore,
-    PatronStore,
-    StatusStore,
-    {"decider_events": Array(DeciderEvents)},
-)
+```typespec
+interface DeciderStore extends Store<{
+  "decider_events": DeciderEvents[];
+}, [BookStore, PatronStore, StatusStore]> {}
 ```
 
-The generated code produces typed `get`/`set`/`update`/`del` accessors for each key pattern. For
+Stores and frameworks are declared as interfaces (not models) on purpose: interfaces are not data
+types, so they cannot leak into the model space.
+
+The generated code produces typed `get`/`set`/`update`/`del` accessors for each key pattern.  For
 example, `BookStore` generates:
 - `rx.get.edition(isbn)` / `rx.set.edition(isbn, value)`
 - `rx.get.editions()` / `rx.set.editions(value)`
@@ -124,24 +121,25 @@ example, `BookStore` generates:
 
 ## Defining Frameworks
 
-`Framework` ties together the event type (what comes in), the command type (what goes out), and the
-store (what state is maintained).  The three parameters are `(event_type, command_type, store)`.
+`Framework` ties together the event type (what comes in), the command type (what goes out), and
+the store (what state is maintained).  The three template parameters are
+`Framework<Events, Commands, Store>`.
 
 A simple demo with no per-user variation needs only one framework:
 
-```python
-TodoFramework = Framework(TodoEvents, TodoEvents, TodoStore)
+```typespec
+interface TodoFramework extends Framework<TodoEvents, TodoEvents, TodoStore> {}
 ```
 
 A richer demo may define multiple frameworks — one per system component, with different store
 shapes per component:
 
-```python
-# library demo, illustrative
-UserFramework    = Framework(LibraryEvents, UserCommands,    UserStore)
-AdminFramework   = Framework(LibraryEvents, AdminCommands,   AdminStore)
-DeciderFramework = Framework(LibraryEvents, LibraryEvents,   DeciderStore)
-RelayFramework   = Framework(LibraryEvents, RelayCommands,   RelayStore)
+```typespec
+// library demo, illustrative
+interface UserFramework extends Framework<LibraryEvents, UserCommands, UserStore> {}
+interface AdminFramework extends Framework<LibraryEvents, AdminCommands, AdminStore> {}
+interface DeciderFramework extends Framework<LibraryEvents, LibraryEvents, DeciderStore> {}
+interface RelayFramework extends Framework<LibraryEvents, RelayCommands, RelayStore> {}
 ```
 
 Using a narrowed command type (e.g. `UserCommands` instead of all events) makes the `forecaster`
@@ -151,26 +149,29 @@ Different components may have different stores for the same domain.  E.g. a rela
 existence of objects (for validation), a decider tracks full state (for decisions), and per-user
 clients see virtualized state.
 
-Every `Store` and `Framework` must be assigned to a module-level variable (e.g.
-`MyStore = Store(...)`) so the code generators can discover its name.  Unnamed stores or
-frameworks raise an error at generation time.
-
 ## Code Generation
 
-Generate typed outputs with:
+Each demo's model directory declares its emitters and output files in `tspconfig.yaml` (and
+depends on the engine and emitter packages via `link:` entries in its package.json):
 
-```bash
-# TypeScript
-python tools/protos.py -i tools -i <demo>/model gen_ts <demo> > <demo>/model/<demo>.gen.ts
-
-# Python (for a Python relay)
-python tools/protos.py -i tools -i <demo>/model gen_py <demo> > <demo>/relay/model.py
-
-# Go (for a Go relay or decider)
-python tools/protos.py -i tools -i <demo>/model gen_go <demo> -- model > <demo>/relay/model/model.go
+```yaml
+emit:
+  - "@kurrent/typespec-engine-ts"
+  - "@kurrent/typespec-engine-go"
+options:
+  "@kurrent/typespec-engine-ts":
+    out-file: "model.gen.ts"
+  "@kurrent/typespec-engine-go":
+    package: "model"
+    out-file: "model.go"
 ```
 
-Or just run `make` in the demo directory to regenerate everything.
+`tsp compile .` in that directory emits everything under `tsp-output/@kurrent/`.  Demo makefiles
+build the tooling, compile, and copy outputs into place — just run `make` in the demo directory to
+regenerate everything.
+
+Constraint decorators (`@minLength`, `@pattern`, ...) from the TypeSpec standard library are
+JS-only and enforced at relay command ingress — write-time policy, not read-time type invariants.
 
 ## Event Metadata
 
@@ -179,6 +180,6 @@ All events are wrapped in metadata at the framework level:
 - `Event<T> = {id: string, data: T}` - base wrapper for commands and forecasts
 - `RealEvent<T> = Event<T> & {position: number}` - adds KurrentDB commit position
 
-The framework handles wrapping/unwrapping internally. When defining your data model, you only
-define the inner `data` type. The `id` is a UUID assigned by the framework (for outgoing commands)
+The framework handles wrapping/unwrapping internally.  When defining your data model, you only
+define the inner `data` type.  The `id` is a UUID assigned by the framework (for outgoing commands)
 or by KurrentDB (for incoming events).

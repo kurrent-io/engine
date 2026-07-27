@@ -3,5 +3,4 @@ packages:
   - emitter-ts
   - emitter-py
   - emitter-go
-  - library
   - tests
