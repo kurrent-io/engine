@@ -59,6 +59,14 @@ describe("nested and collection decode", () => {
     expect(out.pair[1]).toBeInstanceOf(Date);
     expect(out.pair[1].getTime()).toBe(ms(ISO));
   });
+
+  it("decodes record values that need transformation", () => {
+    const out = M.DecodeWithDateRecord({ stamps: { a: ISO, b: ISO2 } });
+    expect(out.stamps.a).toBeInstanceOf(Date);
+    expect(out.stamps.a.getTime()).toBe(ms(ISO));
+    expect(out.stamps.b).toBeInstanceOf(Date);
+    expect(out.stamps.b.getTime()).toBe(ms(ISO2));
+  });
 });
 
 describe("discriminated-union decode (by `type`)", () => {

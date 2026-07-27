@@ -1,6 +1,6 @@
 /**
- * TypeScript code generator: emits type aliases, decoders, typed store contexts, and Framework
- * classes from the lowered IR.
+ * TypeScript code generator: emits type aliases, decoders, JSON structural checkers, typed store
+ * contexts, and Framework classes from the lowered IR.
  */
 
 import {
@@ -37,6 +37,11 @@ type Annos = Map<KType, string>;
 /** a decoder maps a value expression to a decoding expression; null is the identity decoder */
 type Decoder = ((val: string) => string) | null;
 type Decoders = Map<KType, Decoder>;
+/** a checker maps (valueExpr, pathExpr) to TS statements appending to `problems`; noop → "" */
+type Checker = (val: string, path: string) => string;
+type Checkers = Map<KType, Checker>;
+
+const NOOP: Checker = () => "";
 
 function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
   const visit = (t: KType): void => {
@@ -308,9 +313,7 @@ function generateDecoders(
         anon.n += 1;
         d.print(`\nfunction decodeAnon${n}(val: any): ${annos.get(t)} {\n`);
         d.indent("  ");
-        d.print("return Object.fromEntries(Object.entries(val).map(");
-        d.print(`([k, v]) => [k, ${vd("v")}]`);
-        d.print(");");
+        d.print(`return Object.fromEntries(Object.entries(val).map(([k, v]) => [k, ${vd("v")}])) as ${annos.get(t)};\n`);
         d.dedent();
         d.print(`}\n`);
         decoder = (val) => `decodeAnon${n}(${val})`;
@@ -338,6 +341,313 @@ function generateDecoders(
     }
   };
 
+  visit(t);
+}
+
+// checkers
+
+/** an expression testing that `subj` is of the given json type */
+function jsonTypeCond(jtyp: string, subj: string): string {
+  switch (jtyp) {
+    case "null": return `${subj} === null`;
+    case "string": return `typeof ${subj} === "string"`;
+    case "boolean": return `typeof ${subj} === "boolean"`;
+    case "int": return `Number.isInteger(${subj})`;
+    case "object": return `json_typeof(${subj}) === "object"`;
+    case "array": return `Array.isArray(${subj})`;
+    default:
+      throw new Error(`json type not checkable in a union: ${jtyp}`);
+  }
+}
+
+const TIMESTAMP_RE = String.raw`/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/`;
+
+function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void {
+  d.print("const problems: string[] = [];\n");
+  d.print("const x0 = val;\n");
+  d.print("const xpath0 = path;\n");
+
+  // `obj` names the value/path currently being navigated; `subj` names the value/path the
+  // enclosing check tests.  GetField mints a fresh, uniquely-numbered subject variable from `obj`
+  // but leaves `obj` unchanged, so sibling discriminators like [type, v] both read from the same
+  // object rather than from a previously extracted field.  Only GetIndex descends `obj` (into an
+  // array element).
+  let counter = 1;
+  const visit = (
+    solution: Solution,
+    obj: readonly [string, string],
+    subj: readonly [string, string],
+  ): void => {
+    const [objVar, objPath] = obj;
+    const [subjVar, subjPath] = subj;
+    if (solution instanceof Match) {
+      d.print(checkers.get(solution.typ)!("val", "path"));
+      d.print("return problems;\n");
+    } else if (solution instanceof CheckJsonType) {
+      for (const [jtyp, subsln] of solution.options) {
+        d.print(`if (${jsonTypeCond(jtyp, subjVar)}) {\n`);
+        d.indent("  ");
+        visit(subsln, obj, obj);
+        d.dedent();
+        d.print("}\n");
+      }
+      d.print(`problems.push(${subjPath} + ": type " + json_typeof(${subjVar}) + " not allowed here");\n`);
+      d.print("return problems;\n");
+    } else if (solution instanceof CheckLiteral) {
+      for (const [lit, subsln] of solution.options) {
+        const jslit = typeof lit === "string" ? `"${lit}"` : String(lit);
+        d.print(`if (${subjVar} === ${jslit}) {\n`);
+        d.indent("  ");
+        visit(subsln, obj, obj);
+        d.dedent();
+        d.print("}\n");
+      }
+      d.print(`problems.push(${subjPath} + ": unexpected value");\n`);
+      d.print("return problems;\n");
+    } else if (solution instanceof CheckLength) {
+      for (const [length, subsln] of solution.options) {
+        d.print(`if (${subjVar}.length === ${length}) {\n`);
+        d.indent("  ");
+        visit(subsln, obj, obj);
+        d.dedent();
+        d.print("}\n");
+      }
+      if (solution.default !== null) visit(solution.default, obj, obj);
+    } else if (solution instanceof GetIndex) {
+      const i = counter++;
+      d.print(`const x${i} = ${objVar}[${solution.i}];\n`);
+      d.print(`const xpath${i} = ${objPath} + "[${solution.i}]";\n`);
+      const next = [`x${i}`, `xpath${i}`] as const;
+      visit(solution.solution, next, next);
+    } else if (solution instanceof GetField) {
+      const i = counter++;
+      d.print(`if (!("${solution.key}" in ${objVar})) {\n`);
+      d.print(`  problems.push(${objPath} + ': missing discriminator "${solution.key}"');\n`);
+      d.print(`  return problems;\n`);
+      d.print(`}\n`);
+      d.print(`const x${i} = ${objVar}["${solution.key}"];\n`);
+      d.print(`const xpath${i} = ${objPath} + ".${solution.key}";\n`);
+      visit(solution.solution, obj, [`x${i}`, `xpath${i}`]);
+    } else if (solution instanceof HasField) {
+      for (const [field, subsln] of solution.solutions) {
+        d.print(`if ("${field}" in ${objVar}) {\n`);
+        d.indent("  ");
+        visit(subsln, obj, obj);
+        d.dedent();
+        d.print("}\n");
+      }
+      d.print(`problems.push(${subjPath} + ": no matching keys found");\n`);
+      d.print("return problems;\n");
+    } else {
+      throw new Error(`unrecognized solution type: ${(solution as Solution).constructor.name}`);
+    }
+  };
+  visit(solution, ["x0", "xpath0"], ["x0", "xpath0"]);
+}
+
+function generateCheckers(
+  d: Denter,
+  registry: KTypeRegistry,
+  checkers: Checkers,
+  t: KType,
+  anon: { n: number },
+  loop: { n: number },
+): void {
+  const visit = (t: KType): void => {
+    if (checkers.has(t)) return;
+
+    if (t instanceof KJson) {
+      checkers.set(t, NOOP);
+      return;
+    }
+    if (t instanceof KString) {
+      checkers.set(t, (val, path) =>
+        `if (typeof ${val} !== "string") {\n` +
+        `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not string");\n` +
+        `}\n`);
+      return;
+    }
+    if (t instanceof KInt) {
+      checkers.set(t, (val, path) =>
+        `if (!Number.isInteger(${val})) {\n` +
+        `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not int");\n` +
+        `}\n`);
+      return;
+    }
+    if (t instanceof KBool) {
+      checkers.set(t, (val, path) =>
+        `if (typeof ${val} !== "boolean") {\n` +
+        `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not bool");\n` +
+        `}\n`);
+      return;
+    }
+    if (t instanceof KNull || (t instanceof KLiteral && t.value === null)) {
+      checkers.set(t, (val, path) =>
+        `if (${val} !== null) {\n` +
+        `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not null");\n` +
+        `}\n`);
+      return;
+    }
+    if (t instanceof KDate) {
+      checkers.set(t, (val, path) =>
+        `if (typeof ${val} !== "string" || !${TIMESTAMP_RE}.test(${val}) || isNaN(Date.parse(${val}))) {\n` +
+        `  problems.push(${path} + ": invalid timestamp");\n` +
+        `}\n`);
+      return;
+    }
+    if (t instanceof KLiteral) {
+      if (typeof t.value === "string") {
+        checkers.set(t, (val, path) =>
+          `if (${val} !== "${t.value}") {\n` +
+          `  problems.push(${path} + ': is not "${t.value}"');\n` +
+          `}\n`);
+      } else {
+        const jslit = String(t.value);
+        checkers.set(t, (val, path) =>
+          `if (${val} !== ${jslit}) {\n` +
+          `  problems.push(${path} + ": is not ${jslit}");\n` +
+          `}\n`);
+      }
+      return;
+    }
+
+    let checker: Checker;
+    if (t instanceof KUnion) {
+      for (const ut of t.types) visit(ut);
+      const solution = solveUnion(registry, t.types);
+      const name = t.name ? `check${t.name}` : `checkAnon${anon.n++}`;
+      d.print(`\n${t.name ? "export " : ""}function ${name}(val: any, path: string = "<root>"): string[] {\n`);
+      d.indent("  ");
+      checkSolution(d, checkers, solution);
+      d.dedent();
+      d.print("}\n");
+      checker = (val, path) => `problems.push(...${name}(${val}, ${path}));\n`;
+    } else if (t instanceof KArray) {
+      visit(t.itemType);
+      checker = (val, path) => {
+        const dd = new Denter();
+        dd.print(`if (!Array.isArray(${val})) {\n`);
+        dd.print(`  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json array");\n`);
+        if (checkers.get(t.itemType) === NOOP) {
+          dd.print("}\n");
+          return dd.getvalue();
+        }
+        dd.print("} else {\n");
+        dd.indent("  ");
+        const iv = `i${loop.n++}`;
+        dd.print(`for (let ${iv} = 0; ${iv} < ${val}.length; ${iv}++) {\n`);
+        dd.indent("  ");
+        // index the element and build its path off the original expressions, so nothing is
+        // clobbered when this checker is inlined inside another
+        dd.print(checkers.get(t.itemType)!(`(${val})[${iv}]`, `${path} + "[" + ${iv} + "]"`));
+        dd.dedent();
+        dd.print("}\n");
+        dd.dedent();
+        dd.print("}\n");
+        return dd.getvalue();
+      };
+    } else if (t instanceof KTuple) {
+      for (const it of t.itemTypes) visit(it);
+      checker = (val, path) => {
+        const dd = new Denter();
+        const n = t.itemTypes.length;
+        dd.print(`if (!Array.isArray(${val})) {\n`);
+        dd.print(`  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json array");\n`);
+        dd.print(`} else if (${val}.length !== ${n}) {\n`);
+        dd.print(`  problems.push(${path} + ": expected ${n} items, not " + ${val}.length);\n`);
+        // index each element off the original value/path expressions, so nothing is clobbered
+        // even when this checker is inlined inside another (e.g. a struct field)
+        const parts = t.itemTypes
+          .map((it, i) => checkers.get(it)!(`${val}[${i}]`, `${path} + "[${i}]"`))
+          .filter((p) => p);
+        if (parts.length) {
+          dd.print("} else {\n");
+          dd.indent("  ");
+          for (const p of parts) dd.print(p);
+          dd.dedent();
+        }
+        dd.print("}\n");
+        return dd.getvalue();
+      };
+    } else if (t instanceof KStruct) {
+      for (const ft of t.fields.values()) visit(ft);
+      let keys: string, func: string;
+      if (t.name) {
+        keys = `_${t.name}_ALLOWED_KEYS`;
+        func = `check${t.name}`;
+      } else {
+        const n = anon.n++;
+        keys = `_Anon${n}_ALLOWED_KEYS`;
+        func = `checkAnon${n}`;
+      }
+      const keyset = "[" + [...t.fields.keys()].map((fn) => `"${fn}"`).join(", ") + "]";
+      d.print(`\nconst ${keys} = new Set(${keyset});\n`);
+      d.print(`\n${t.name ? "export " : ""}function ${func}(val: any, path: string = "<root>"): string[] {\n`);
+      d.indent("  ");
+      d.print(`if (json_typeof(val) !== "object") {\n`);
+      d.print(`  return [path + ": is a " + json_typeof(val) + ", not json object"];\n`);
+      d.print("}\n");
+      d.print("const problems: string[] = [];\n");
+      for (const [fn, ft] of t.fields) {
+        d.print(`if ("${fn}" in val) {\n`);
+        d.indent("  ");
+        d.print(`const x = val["${fn}"];\n`);
+        d.print(`const xpath = path + ".${fn}";\n`);
+        d.print(checkers.get(ft)!("x", "xpath"));
+        d.dedent();
+        if (!t.maybes.has(fn)) {
+          d.print("} else {\n");
+          d.print(`  problems.push(path + ": missing required key ${fn}");\n`);
+        }
+        d.print("}\n");
+      }
+      d.print(`if (Object.keys(val).some((k) => !${keys}.has(k))) {\n`);
+      d.print(`  problems.push(path + ": contains extra keys");\n`);
+      d.print("}\n");
+      d.print("return problems;\n");
+      d.dedent();
+      d.print("}\n");
+      checker = (val, path) => `problems.push(...${func}(${val}, ${path}));\n`;
+    } else if (t instanceof KObject) {
+      visit(t.valueType);
+      checker = (val, path) => {
+        const dd = new Denter();
+        dd.print(`if (json_typeof(${val}) !== "object") {\n`);
+        dd.print(`  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json object");\n`);
+        if (checkers.get(t.valueType) === NOOP) {
+          dd.print("}\n");
+          return dd.getvalue();
+        }
+        dd.print("} else {\n");
+        dd.indent("  ");
+        const kv = `k${loop.n++}`;
+        dd.print(`for (const ${kv} of Object.keys(${val})) {\n`);
+        dd.indent("  ");
+        // index the value and build its path off the original expressions, so nothing is
+        // clobbered when this checker is inlined inside another
+        dd.print(checkers.get(t.valueType)!(`(${val})[${kv}]`, `${path} + "." + ${kv}`));
+        dd.dedent();
+        dd.print("}\n");
+        dd.dedent();
+        dd.print("}\n");
+        return dd.getvalue();
+      };
+    } else {
+      throw new Error(`unhandled type in generateCheckers: ${t}`);
+    }
+
+    // named types without a function already defined get a wrapper now
+    if (t.name && !(t instanceof KUnion) && !(t instanceof KStruct)) {
+      d.print(`\nexport function check${t.name}(val: any, path: string = "<root>"): string[] {\n`);
+      d.indent("  ");
+      d.print("const problems: string[] = [];\n");
+      d.print(checker("val", "path"));
+      d.print("return problems;\n");
+      d.dedent();
+      d.print("}\n");
+    }
+    checkers.set(t, checker);
+  };
   visit(t);
 }
 
@@ -653,6 +963,11 @@ export function generateTs(lowered: LoweredProgram, skeleton: string): string {
   const decoders: Decoders = new Map();
   const anon = { n: 0 };
   for (const t of typesToVisit) generateDecoders(d, registry, annos, decoders, t, anon);
+
+  // Generate structural checkers and pick checking statements.
+  const checkers: Checkers = new Map();
+  const loop = { n: 0 };
+  for (const t of typesToVisit) generateCheckers(d, registry, checkers, t, anon, loop);
 
   // Generate stores
   if (stores.length) generateStorePrereqs(d);

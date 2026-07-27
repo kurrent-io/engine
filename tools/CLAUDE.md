@@ -53,9 +53,9 @@ depend on the engine and emitter packages via `link:` entries; demo makefiles dr
 
 ## Behavior notes / gaps
 
-- The py/go emitters also generate the structural *checkers* (`checkUserCommands` etc.) the relays
-  use; semantic validation (`validateUserCommands` in model/reducers.ts) is hand-written and
-  separate.
+- All three emitters generate the structural *checkers* (`checkUserCommands` etc.) the relays
+  use (ts checkers target node-hosted relays); semantic validation (`validateUserCommands` in
+  model/reducers.ts) is hand-written and separate.
 - The Go emitter names slice/record converters after their builtin item type by convention
   (`sliceOfString`); anonymous non-builtin converters get path-derived numbers.
 - `$onValidate` (`engine/src/validate.ts`) runs `lowerProgram()` (store collisions, not-a-store,

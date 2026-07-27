@@ -141,7 +141,9 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       d.print("return problems\n");
     } else if (solution instanceof CheckJsonType) {
       for (const [jtyp, subsln] of solution.options) {
+        // bool is a subclass of int in Python, so int checks must exclude it explicitly
         if (jtyp === "null") d.print(`if ${subjVar} is None:\n`);
+        else if (jtyp === "int") d.print(`if isinstance(${subjVar}, int) and not isinstance(${subjVar}, bool):\n`);
         else d.print(`if isinstance(${subjVar}, ${PYTYPS[jtyp]}):\n`);
         d.indent("    ");
         visit(subsln, obj, obj);
@@ -151,9 +153,10 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       d.print("return problems\n");
     } else if (solution instanceof CheckLiteral) {
       for (const [lit, subsln] of solution.options) {
+        // `is` / the bool exclusion keep bools and ints apart (True == 1 in Python)
         if (typeof lit === "string") d.print(`if ${subjVar} == "${lit}":\n`);
-        else if (typeof lit === "boolean") d.print(`if ${subjVar} == ${lit ? "True" : "False"}:\n`);
-        else d.print(`if ${subjVar} == ${lit}:\n`);
+        else if (typeof lit === "boolean") d.print(`if ${subjVar} is ${lit ? "True" : "False"}:\n`);
+        else d.print(`if ${subjVar} == ${lit} and not isinstance(${subjVar}, bool):\n`);
         d.indent("    ");
         visit(subsln, obj, obj);
         d.dedent();
@@ -221,8 +224,9 @@ function generateCheckers(
       return;
     }
     if (t instanceof KInt) {
+      // bool is a subclass of int in Python, so the check must exclude it explicitly
       checkers.set(t, (val, path) =>
-        `if not isinstance(${val}, int):\n` +
+        `if not isinstance(${val}, int) or isinstance(${val}, bool):\n` +
         `    problems += [${path} + f': is of type {type(${val}).__name__}, not int']\n`);
       return;
     }
@@ -239,13 +243,14 @@ function generateCheckers(
       return;
     }
     if (t instanceof KDate) {
+      // TypeError covers non-string values, which strptime rejects with the wrong exception
       checkers.set(t, (val, path) =>
         "try:\n" +
         `    datetime.datetime.strptime(${val}, '%Y-%m-%dT%H:%M:%SZ')\n` +
-        "except ValueError:\n" +
+        "except (ValueError, TypeError):\n" +
         "    try:\n" +
         `        datetime.datetime.strptime(${val}, '%Y-%m-%dT%H:%M:%S.%fZ')\n` +
-        "    except ValueError:\n" +
+        "    except (ValueError, TypeError):\n" +
         `        problems += [${path} + ': invalid timestamp']\n`);
       return;
     }
@@ -254,11 +259,16 @@ function generateCheckers(
         checkers.set(t, (val, path) =>
           `if ${val} != '${t.value}':\n` +
           `    problems += [${path} + f': is not "${t.value}"']\n`);
-      } else {
-        const pyval = typeof t.value === "boolean" ? (t.value ? "True" : "False") : t.value;
+      } else if (typeof t.value === "boolean") {
+        // `is` keeps bools and ints apart (True == 1 in Python)
+        const pyval = t.value ? "True" : "False";
         checkers.set(t, (val, path) =>
-          `if ${val} != ${pyval}:\n` +
+          `if ${val} is not ${pyval}:\n` +
           `    problems += [${path} + f': is not ${pyval}']\n`);
+      } else {
+        checkers.set(t, (val, path) =>
+          `if ${val} != ${t.value} or isinstance(${val}, bool):\n` +
+          `    problems += [${path} + f': is not ${t.value}']\n`);
       }
       return;
     }

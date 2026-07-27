@@ -1,7 +1,7 @@
 all: model
 
-# The TypeSpec tooling (engine + emitters); one tsp compile of the todo model
-# produces both generated files.
+# The TypeSpec tooling (engine + emitters); one tsp compile of the todo model emits
+# both generated files directly to their destinations (see model/tspconfig.yaml).
 TSP_SRCS := $(wildcard ../tools/engine/src/*.ts ../tools/engine/lib/*.tsp \
 	../tools/emitter-ts/src/*.ts ../tools/emitter-ts/assets/* \
 	../tools/emitter-go/src/*.ts ../tools/emitter-go/assets/*)
@@ -10,11 +10,8 @@ TSP_SRCS := $(wildcard ../tools/engine/src/*.ts ../tools/engine/lib/*.tsp \
 typespec-tools:
 	@cd ../tools && pnpm -s i && pnpm -rs build
 
-model/model.gen.ts relay/model/model.go &: model/model.tsp model/node_modules $(TSP_SRCS) | typespec-tools
+model/model.gen.ts relay/model/model.go &: model/model.tsp model/tspconfig.yaml model/node_modules $(TSP_SRCS) | typespec-tools
 	cd model && pnpm exec tsp compile model.tsp
-	cp model/tsp-output/@kurrent/typespec-engine-ts/model.gen.ts model/model.gen.ts
-	mkdir -p relay/model
-	cp model/tsp-output/@kurrent/typespec-engine-go/model.go relay/model/model.go
 
 .PHONY: model
 model: model/node_modules model/model.gen.ts
@@ -116,4 +113,4 @@ clean:
 		rsc/src/model.js rsc/src/model.d.ts \
 		kesq/src/model.js kesq/src/model.d.ts \
 		kesq2/src/model.js kesq2/src/model.d.ts
-	@rm -rf rsc/dist kesq/dist kesq2/dist kesq2/gen model/tsp-output
+	@rm -rf rsc/dist kesq/dist kesq2/dist kesq2/gen

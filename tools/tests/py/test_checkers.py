@@ -113,6 +113,7 @@ def test_timed_optional_note_absent_is_ok():
 @register_test
 def test_timed_bad_and_missing_dates():
     fails(model.checkTimed, {"at": "nope"}, needle="invalid timestamp")
+    fails(model.checkTimed, {"at": 123}, needle="invalid timestamp")
     fails(model.checkTimed, {"note": ISO}, needle="missing required key at")
 
 
@@ -129,6 +130,13 @@ def test_nested_recurses_into_inner_struct():
 def test_with_record_ok_and_bad_value():
     ok(model.checkWithRecord, {"meta": {"a": 1, "b": 2}})
     fails(model.checkWithRecord, {"meta": {"a": "one"}}, needle="not int")
+
+
+@register_test
+def test_with_date_record_checks_values():
+    ok(model.checkWithDateRecord, {"stamps": {"a": ISO, "b": ISO_MS}})
+    fails(model.checkWithDateRecord, {"stamps": {"a": "nope"}}, needle="invalid timestamp")
+    fails(model.checkWithDateRecord, {"stamps": {"a": 123}}, needle="invalid timestamp")
 
 
 @register_test
@@ -200,6 +208,24 @@ def test_literal_unions():
     ok(model.checkLevel, 2)
     fails(model.checkLevel, 9, needle="unexpected value")
     fails(model.checkLevel, "2", needle="not allowed here")
+
+
+# --- bool/int strictness (bool is a subclass of int in Python; json keeps them apart) --------
+
+
+@register_test
+def test_bools_are_not_ints():
+    fails(model.checkPlain, {"id": "x", "n": True, "flag": True}, needle="not int")
+    fails(model.checkPlain, {"id": "x", "n": 7, "flag": 1}, needle="not bool")
+    fails(model.checkLevel, True, needle="not allowed here")
+    fails(model.checkVersioned, {"type": "va", "v": True, "a": 1}, needle="unexpected value")
+
+
+@register_test
+def test_bool_literals_are_exact():
+    ok(model.checkToggled, {"on": True})
+    fails(model.checkToggled, {"on": 1}, needle="is not True")
+    fails(model.checkToggled, {"on": False}, needle="is not True")
 
 
 # --- framework event / command unions --------------------------------------------------------

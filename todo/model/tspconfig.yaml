@@ -3,7 +3,9 @@ emit:
   - "@kurrent/typespec-engine-go"
 options:
   "@kurrent/typespec-engine-ts":
+    emitter-output-dir: "{project-root}"
     out-file: "model.gen.ts"
   "@kurrent/typespec-engine-go":
+    emitter-output-dir: "{project-root}/../relay/model"
     package: "model"
     out-file: "model.go"

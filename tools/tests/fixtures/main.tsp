@@ -1,4 +1,4 @@
-// Shared fixture model for the emitter behavioral tests (TS decoders, Py/Go checkers).
+// Shared fixture model for the emitter behavioral tests (TS decoders, TS/Py/Go checkers).
 //
 // The models here are chosen to exercise every solver / codegen branch independently of the
 // demos: plain identity decode, date decode (required + optional), nested-struct recursion,
@@ -39,6 +39,11 @@ model WithTuple {
 
 model WithRecord {
   meta: Record<int32>;
+}
+
+// record whose values need real decoding -> a decodeAnonN function (not the identity spread)
+model WithDateRecord {
+  stamps: Record<utcDateTime>;
 }
 
 // --- discriminated union by `type` -----------------------------------------
@@ -122,6 +127,11 @@ union Level {
   1,
   2,
   3,
+}
+
+// bool-literal field -> exact check (in Python, True == 1 must not leak through)
+model Toggled {
+  on: true;
 }
 
 // --- framework events / commands --------------------------------------------

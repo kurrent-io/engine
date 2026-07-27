@@ -8,8 +8,8 @@ QUICKJS_LIBS=quickjs quickjs-libc libregexp libunicode cutils dtoa
 
 all: model relay decider ui
 
-# The TypeSpec tooling (engine + emitters); one tsp compile of the library
-# model produces all three generated files.
+# The TypeSpec tooling (engine + emitters); one tsp compile of the library model emits
+# all three generated files directly to their destinations (see model/tspconfig.yaml).
 TSP_SRCS := $(wildcard tools/engine/src/*.ts tools/engine/lib/*.tsp \
 	tools/emitter-ts/src/*.ts tools/emitter-ts/assets/* \
 	tools/emitter-py/src/*.ts tools/emitter-py/assets/* \
@@ -19,12 +19,8 @@ TSP_SRCS := $(wildcard tools/engine/src/*.ts tools/engine/lib/*.tsp \
 typespec-tools:
 	@cd tools && pnpm -s i && pnpm -rs build
 
-model/library.gen.ts relay/model.py decider/model/model.go &: model/library.tsp model/node_modules $(TSP_SRCS) | typespec-tools
+model/library.gen.ts relay/model.py decider/model/model.go &: model/library.tsp model/tspconfig.yaml model/node_modules $(TSP_SRCS) | typespec-tools
 	cd model && pnpm exec tsp compile library.tsp
-	cp model/tsp-output/@kurrent/typespec-engine-ts/library.gen.ts model/library.gen.ts
-	cp model/tsp-output/@kurrent/typespec-engine-py/model.py relay/model.py
-	mkdir -p decider/model
-	cp model/tsp-output/@kurrent/typespec-engine-go/model.go decider/model/model.go
 
 .PHONY: model
 model: model/library.gen.ts model/node_modules
@@ -94,4 +90,3 @@ clean:
 		relay/relay.js relay/model.py relay/_quickjs.so \
 		decider/decider decider/model/model.go \
 		ui/src/model.js ui/src/model.d.ts
-	@rm -rf model/tsp-output
