@@ -113,4 +113,4 @@ clean:
 		rsc/src/model.js rsc/src/model.d.ts \
 		kesq/src/model.js kesq/src/model.d.ts \
 		kesq2/src/model.js kesq2/src/model.d.ts
-	@rm -rf rsc/dist kesq/dist kesq2/dist
+	@rm -rf rsc/dist kesq/dist kesq2/dist kesq2/gen

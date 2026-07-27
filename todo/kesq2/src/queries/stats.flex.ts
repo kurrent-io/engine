@@ -1,13 +1,12 @@
-'use server';
-
 import type { QueryFunction, TodoQX } from '../model';
 import type { BoardStats, ListStats } from '../types';
 
-/* Flexible queries: the directive above registers these factories on the
-   query server, and the client bundle carries both the real implementation
-   and its wire reference — so each call site picks at runtime whether the
-   query executes locally or on the server.  The factory arguments must be
-   serializable either way, since they may cross the wire. */
+/* Flexible queries: the `.flex.ts` suffix opts this module into codegen
+   (gen-queries.mjs), which registers these factories on the query server and
+   re-exports them to the client wrapped with their wire references — so each
+   call site picks at runtime whether the query executes locally or on the
+   server.  The factory arguments must be serializable either way, since they
+   may cross the wire. */
 
 export function boardStats(): QueryFunction<TodoQX, BoardStats> {
   return function* (qx) {

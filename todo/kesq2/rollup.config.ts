@@ -8,8 +8,6 @@ import serve from 'rollup-plugin-serve';
 import livereload from 'rollup-plugin-livereload';
 import type { RollupOptions, WarningHandlerWithDefault } from 'rollup';
 
-import kesq2 from './kesq2-plugin';
-
 const isDev = process.env.ROLLUP_WATCH === 'true' || process.env.BUILD_MODE === 'dev';
 
 const onwarn: WarningHandlerWithDefault = (warning, warn) => {
@@ -18,8 +16,9 @@ const onwarn: WarningHandlerWithDefault = (warning, warn) => {
   warn(warning);
 };
 
-// The query server: runs in Node with the real 'use server' modules bundled
-// in.  Bare imports stay external and resolve from node_modules at runtime.
+// The query server: bundles the generated registry (gen/server) with the
+// real query implementations.  Bare imports stay external and resolve from
+// node_modules at runtime.
 const server: RollupOptions = {
   input: 'src/server/main.ts',
   output: {
@@ -30,7 +29,7 @@ const server: RollupOptions = {
   external: (id, importer) =>
     importer !== undefined &&
     !id.startsWith('.') &&
-    !id.startsWith('kesq:') &&
+    !id.startsWith('#') &&
     !path.isAbsolute(id),
   plugins: [
     resolve({
@@ -39,13 +38,14 @@ const server: RollupOptions = {
     typescript({
       tsconfig: './tsconfig.json',
     }),
-    kesq2({ side: 'server', queryDir: 'src/queries' }),
   ],
   onwarn,
 };
 
-// The browser bundle: 'use server' modules ship as-is, wrapped so each
-// factory carries both its local query function and its wire reference.
+// The browser bundle.  The 'browser' condition routes #queries/* imports to
+// the client mirrors (gen/client), where flexible queries carry both a wire
+// reference and their local implementation, and server-only queries are bare
+// wire references.
 const client: RollupOptions = {
   input: 'src/client/index.tsx',
   output: {
@@ -60,6 +60,7 @@ const client: RollupOptions = {
     }),
     resolve({
       browser: true,
+      exportConditions: ['browser'],
       extensions: ['.js', '.jsx', '.ts', '.tsx'],
     }),
     commonjs(),
@@ -67,7 +68,6 @@ const client: RollupOptions = {
     typescript({
       tsconfig: './tsconfig.json',
     }),
-    kesq2({ side: 'client' }),
     isDev &&
       serve({
         open: true,

@@ -7,8 +7,12 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
 
-    /* Bundler mode */
+    /* Bundler mode.  customConditions makes tsc resolve #queries/* imports
+       to the client mirrors (gen/client), matching the browser bundle — so
+       client code typechecks against the client view of each query, where
+       server-only queries have no local implementation. */
     "moduleResolution": "bundler",
+    "customConditions": ["browser"],
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
@@ -20,5 +24,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["./src", "./kesq2-plugin.ts", "./rollup.config.ts"]
+  "include": ["./src", "./gen", "./rollup.config.ts"]
 }

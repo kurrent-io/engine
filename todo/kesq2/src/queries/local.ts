@@ -1,10 +1,11 @@
 import type { QueryFunction, TodoQX } from '../model';
 import type { ListData } from '../types';
 
-/* Local queries: factories returning a query function that runs in the
+/* Local queries: plain factories returning a query function that runs in the
    browser, against the state synced by the client's own framework instance.
-   Note the shape is identical to ../queries/server.ts — the directive at the
-   top of that file is the only difference. */
+   This is the zero-setup tier — no codegen, no wire id, no registration.
+   The factory shape is identical to ./stats.flex.ts; the filename suffix is
+   the only difference. */
 
 export function allLists(): QueryFunction<TodoQX, ListData[]> {
   return function* (qx) {

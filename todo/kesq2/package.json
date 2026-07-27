@@ -1,8 +1,15 @@
 {
     "type": "module",
+    "imports": {
+        "#queries/*": {
+            "browser": "./gen/client/*.ts",
+            "default": "./gen/server/*.ts"
+        }
+    },
     "scripts": {
-        "build": "rollup --config rollup.config.ts --configPlugin typescript",
-        "serve": "rollup --config rollup.config.ts --configPlugin typescript --watch",
+        "gen": "node gen-queries.mjs",
+        "build": "node gen-queries.mjs && rollup --config rollup.config.ts --configPlugin typescript",
+        "serve": "node gen-queries.mjs && rollup --config rollup.config.ts --configPlugin typescript --watch",
         "server": "node dist/server.js"
     },
     "devDependencies": {

@@ -3,7 +3,7 @@ import type { RawData } from 'ws';
 
 import { TodoFramework, InMemStorage, migrateTodos, reduceTodos } from '../model';
 import type { Query } from '../model';
-import { queries } from 'kesq:queries';
+import { queries } from '../../gen/server/registry';
 
 /* The query server.  It runs its own framework instance as an ordinary relay
    client — the same code path the browser uses, just in Node — and executes
@@ -18,6 +18,7 @@ import { queries } from 'kesq:queries';
      server → client   {type: "event", event: {position, id, data}}
                        {type: "caughtup"}
                        {type: "result", sub, value}
+                       {type: "error", sub, reason}
 
    Events and commands are proxied through a per-connection upstream relay
    socket (each browser has its own catchup position), so local queries in the
@@ -123,6 +124,7 @@ wss.on('connection', (ws) => {
         const factory = queries[msg.query];
         if (!factory) {
           console.error(`unknown server query: ${msg.query}`);
+          ws.send(JSON.stringify({ type: 'error', sub: msg.sub, reason: `unknown query: ${msg.query}` }));
           break;
         }
         const query = fw.newQuery(factory(...msg.args));

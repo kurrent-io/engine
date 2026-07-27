@@ -85,6 +85,9 @@ export function useFramework(serverUrl: string): [KesqClient, ConnectionState] {
             case 'result':
               client.remote.deliver(msg.sub, msg.value);
               break;
+            case 'error':
+              client.remote.deliverError(msg.sub, msg.reason);
+              break;
             default:
               console.error('unknown message type:', msg.type);
           }

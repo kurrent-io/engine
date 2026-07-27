@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 
 import type { KesqClient } from './useFramework';
 import { useQuery } from './useQuery';
-import { listStats } from '../queries/server';
+import { listStats } from '#queries/stats';
 import { generateUuid } from '../util';
 import type { ItemView, ListData } from '../types';
 

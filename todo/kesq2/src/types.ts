@@ -24,3 +24,8 @@ export type ListStats = {
   total: number;
   done: number;
 };
+
+export type ArchiveStats = {
+  lists: number;
+  items: number;
+};

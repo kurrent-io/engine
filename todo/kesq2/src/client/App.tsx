@@ -4,7 +4,8 @@ import { useFramework } from './useFramework';
 import { useQuery } from './useQuery';
 import type { Placement } from './useQuery';
 import { allLists } from '../queries/local';
-import { boardStats } from '../queries/server';
+import { archiveStats } from '#queries/archive';
+import { boardStats } from '#queries/stats';
 import { generateUuid } from '../util';
 import ListView, { InlineAdd } from './ListView';
 
@@ -19,6 +20,8 @@ export default function App() {
 
   const lists = useQuery(client, useMemo(() => allLists(), []));
   const stats = useQuery(client, useMemo(() => boardStats(), []), statsPlacement);
+  // server-only: no placement to choose — always runs on the query server
+  const archived = useQuery(client, useMemo(() => archiveStats(), []));
 
   return (
     <div className="board">
@@ -37,6 +40,11 @@ export default function App() {
         >
           @{statsPlacement} ⇄
         </button>
+        {archived && (archived.lists > 0 || archived.items > 0) && (
+          <span className="badge" title="server-only query">
+            {archived.lists + archived.items} archived @server
+          </span>
+        )}
       </p>
       {lists === undefined ? (
         <p>loading…</p>
