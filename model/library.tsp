@@ -466,7 +466,7 @@ model AdminEditionInfo {
 
 // admin queries can run against the relay, or against a local AdminStore
 interface AdminQueries extends Queries {
-  allPatronIds(): AllPatronIds[];
+  allPatronIds(): Uuid[];
   allPatrons(): AdminPatronInfo[];
   allEditions(): AdminEditionInfo[];
 }
@@ -475,7 +475,7 @@ interface AdminQueries extends Queries {
 model UserBookInfo {
   isbn: string;
   title: string;
-  availableNormal: number;
+  availableNormal: int32;
   availableRestricted: string[];
   hold: VHold | null;
 }

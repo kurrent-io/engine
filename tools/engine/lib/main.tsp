@@ -42,3 +42,20 @@ interface Store<Spec extends {} = {}, Deps extends unknown[] = []> {}
  * `Events` and `Commands` are named unions; `S` is a Store interface.
  */
 interface Framework<Events, Commands, S> {}
+
+/**
+ * A Queries interface declares a typed query contract: each operation names a query, with its
+ * argument types and result type:
+ *
+ * ```typespec
+ * interface AdminQueries extends Queries {
+ *   allPatrons(): AdminPatronInfo[];
+ *   patronsNamed(name: string, limit?: int32): AdminPatronInfo[];
+ * }
+ * ```
+ *
+ * Argument and result types are ordinary data types.  In the case of server-side queries, they will
+ * cross the wire, so code generation produces structural checkers and decoders for them alongside
+ * the typed query interfaces.
+ */
+interface Queries {}

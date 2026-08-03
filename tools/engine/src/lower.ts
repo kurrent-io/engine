@@ -9,9 +9,11 @@
  *     model's property names are the key templates, Deps is a tuple of other Store interfaces
  *   - frameworks: interfaces extending `KurrentEngine.Framework<Events, Commands, S>` become
  *     KFramework
+ *   - queries: interfaces extending `KurrentEngine.Queries` become KQueries; each operation
+ *     becomes a KQuery carrying its name, arguments, and result type
  *
- * Interfaces are deliberately the carrier for stores and frameworks: they are not data types,
- * so they can't leak into the model space the way decorated models could.
+ * Interfaces are deliberately the carrier for stores, frameworks, and queries: they are not
+ * data types, so they can't leak into the model space the way decorated models could.
  *
  * Ordering: `roots` follows IR creation order, which is a depth-first walk of declarations in
  * source order — children precede parents (e.g. union members appear before the union itself).
@@ -38,7 +40,7 @@ import type {
   Union,
 } from "@typespec/compiler";
 import { reportDiagnostic } from "./lib.js";
-import { KField, KType, KFramework, KStore, KTypeRegistry } from "./ktypes.js";
+import { KField, KType, KFramework, KQueries, KQuery, KStore, KTypeRegistry } from "./ktypes.js";
 
 export interface LoweredProgram {
   registry: KTypeRegistry;
@@ -48,6 +50,8 @@ export interface LoweredProgram {
   stores: KStore[];
   /** all frameworks, in declaration order */
   frameworks: KFramework[];
+  /** all queries interfaces, in declaration order */
+  queries: KQueries[];
   /** the first TypeSpec type that lowered to each IR type, for diagnostic targeting */
   targets: Map<KType, Type>;
 }
@@ -64,8 +68,11 @@ function argType(arg: Entity | undefined): Type | undefined {
   return undefined; // a Value; callers diagnose
 }
 
-/** Find the instantiation of KurrentEngine.<name> among an interface's extends list. */
-function engineTemplateInstance(iface: Interface, name: string): Interface | undefined {
+/**
+ * Find KurrentEngine.<name> among an interface's extends list — the template instantiation for
+ * templates (Store, Framework), or the interface itself for plain ones (Queries).
+ */
+function engineSource(iface: Interface, name: string): Interface | undefined {
   for (const src of iface.sourceInterfaces) {
     if (
       src.name === name &&
@@ -203,7 +210,7 @@ export function lowerProgram(program: Program): LoweredProgram {
     empty.name = iface.name;
     storeCache.set(iface, empty);
 
-    const instance = engineTemplateInstance(iface, "Store");
+    const instance = engineSource(iface, "Store");
     if (instance === undefined) {
       reportDiagnostic(program, { code: "not-a-store", format: { name: iface.name }, target: iface });
       return empty;
@@ -221,7 +228,7 @@ export function lowerProgram(program: Program): LoweredProgram {
 
     const deps: KStore[] = [];
     for (const dep of (depsArg as Tuple).values) {
-      if (dep.kind !== "Interface" || engineTemplateInstance(dep, "Store") === undefined) {
+      if (dep.kind !== "Interface" || engineSource(dep, "Store") === undefined) {
         reportDiagnostic(program, {
           code: "not-a-store",
           format: { name: "name" in dep && typeof dep.name === "string" ? dep.name : dep.kind },
@@ -292,18 +299,34 @@ export function lowerProgram(program: Program): LoweredProgram {
     assignName(lowerType(decl), decl.name!, decl);
   }
 
-  // stores and frameworks are interfaces extending the KurrentEngine templates, in source order
+  // stores, frameworks, and queries are interfaces extending the KurrentEngine vocabulary, in
+  // source order
   const stores: KStore[] = [];
   const frameworks: KFramework[] = [];
+  const queries: KQueries[] = [];
   const userInterfaces = sourceOrder(
     [...globalNs.interfaces.values()].filter((i) => !isTemplateDeclaration(i)),
   );
   for (const iface of userInterfaces) {
-    if (engineTemplateInstance(iface, "Store") !== undefined) {
+    if (engineSource(iface, "Store") !== undefined) {
       stores.push(lowerStore(iface));
       continue;
     }
-    const instance = engineTemplateInstance(iface, "Framework");
+    if (engineSource(iface, "Queries") !== undefined) {
+      const ops: KQuery[] = [];
+      for (const op of iface.operations.values()) {
+        const args: KField[] = [];
+        for (const param of op.parameters.properties.values()) {
+          args.push([param.name, lowerType(param.type), param.optional]);
+        }
+        ops.push(new KQuery(op.name, args, lowerType(op.returnType)));
+      }
+      const kq = new KQueries(ops);
+      kq.name = iface.name;
+      queries.push(kq);
+      continue;
+    }
+    const instance = engineSource(iface, "Framework");
     if (instance === undefined) continue; // a plain interface; none of our business
 
     const [eventsArg, commandsArg, storeArg] = (instance.templateMapper?.args ?? []).map(argType);
@@ -337,5 +360,5 @@ export function lowerProgram(program: Program): LoweredProgram {
   }
 
   const roots = registry.all.filter((t) => t.name !== null);
-  return { registry, roots, stores, frameworks, targets };
+  return { registry, roots, stores, frameworks, queries, targets };
 }

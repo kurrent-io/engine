@@ -23,6 +23,11 @@ depend on the engine and emitter packages via `link:` entries; demo makefiles dr
   data-type space.  Lowering discovers them via `sourceInterfaces` + `templateMapper.args`
   (unwrapping `Indeterminate` entities — model expressions and tuple literals arrive as
   type-or-value).
+- **Queries are interfaces too**: `interface AdminQueries extends Queries { allPatrons(): AdminPatronInfo[]; }`
+  declares a typed query contract — a message contract only, binding no store (which storage backs
+  an implementation is the implementation's business).  Lowering collects them as `KQueries`
+  (one `KQuery` per op: name, args, result) on `LoweredProgram.queries` for the emitters to walk.
+  The full generated-API plan is QUERIES.md at the repo root.
 - **Commands stay a union** (`Framework<Events, Commands, Store>`).  Someday: allow a
   null/omitted Commands argument, with commands declared as ops in the framework interface body
   instead — the endgame where the command union is *derived* from the interface:

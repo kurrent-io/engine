@@ -162,6 +162,54 @@ describe("lowerProgram — stores", () => {
   });
 });
 
+describe("lowerProgram — queries", () => {
+  it("discovers a queries interface with its ops, args, and result types", async () => {
+    const { lowered } = await lower(`
+      model PatronInfo { id: string; name: string; }
+      interface AdminQueries extends Queries {
+        allPatrons(): PatronInfo[];
+        patronsNamed(name: string, limit?: int32): PatronInfo[];
+      }
+    `);
+    expect(lowered.queries).toHaveLength(1);
+    const kq = lowered.queries[0];
+    expect(kq.name).toBe("AdminQueries");
+    expect(kq.queries.map((q) => q.name)).toEqual(["allPatrons", "patronsNamed"]);
+
+    const [allPatrons, patronsNamed] = kq.queries;
+    expect(allPatrons.args).toHaveLength(0);
+    expect(allPatrons.result).toBeInstanceOf(KArray);
+    // arg and result types intern with the rest of the program
+    expect((allPatrons.result as KArray).itemType).toBe(root(lowered, "PatronInfo"));
+
+    expect(patronsNamed.args.map(([name]) => name)).toEqual(["name", "limit"]);
+    const [[, nameType, nameOpt], [, limitType, limitOpt]] = patronsNamed.args;
+    expect(nameType).toBeInstanceOf(KString);
+    expect(nameOpt).toBe(false);
+    expect(limitType).toBeInstanceOf(KInt);
+    expect(limitOpt).toBe(true);
+  });
+
+  it("collects multiple queries interfaces in declaration order", async () => {
+    const { lowered } = await lower(`
+      model Info { id: string; }
+      interface AdminQueries extends Queries { allInfos(): Info[]; }
+      interface UserQueries extends Queries { myInfo(id: string): Info; }
+    `);
+    expect(lowered.queries.map((q) => q.name)).toEqual(["AdminQueries", "UserQueries"]);
+    expect(lowered.queries[1].queries[0].result).toBe(root(lowered, "Info"));
+  });
+
+  it("keeps queries interfaces out of stores and frameworks", async () => {
+    const { lowered } = await lower(`
+      model Info { id: string; }
+      interface AdminQueries extends Queries { allInfos(): Info[]; }
+    `);
+    expect(lowered.stores).toHaveLength(0);
+    expect(lowered.frameworks).toHaveLength(0);
+  });
+});
+
 describe("lowerProgram — frameworks", () => {
   it("discovers a framework and its event, command, and store types", async () => {
     const { lowered } = await lower(`

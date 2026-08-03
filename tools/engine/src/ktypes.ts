@@ -203,7 +203,7 @@ export class KTypeRegistry {
   }
 }
 
-// Store and Framework IR
+// Store, Framework, and Queries IR
 
 const TPL_PATTERN = /\{([^}]*)\}/g;
 
@@ -286,4 +286,18 @@ export class KFramework {
     readonly commandType: KType,
     readonly store: KStore,
   ) {}
+}
+
+/** One query declaration: its name, arguments, and result type. */
+export class KQuery {
+  constructor(
+    readonly name: string,
+    readonly args: readonly KField[],
+    readonly result: KType,
+  ) {}
+}
+
+export class KQueries {
+  name: string | null = null;
+  constructor(readonly queries: readonly KQuery[]) {}
 }
