@@ -2303,6 +2303,183 @@ function matchSent<C>(tpl: any, cmd: C): boolean {
   return Object.entries(tpl).every(([k, v]) => matchSent(v, (cmd as Record<string, any>)[k]));
 }
 
+////////////
+// generate:
+// - export class RemoteAdminQueries extends RemoteQueries
+// - function checkAdminQueries()
+// - function decodeAdminQueries()
+// - type AdminQuery = ["allPatrons", X, Y] | ...
+// - type RawAdminQuery = ["allQueries", any, any] | ...
+// - decoder for all possible return types I suppose?
+//    - how do I know which return type I'm dealing with at any point in time?
+// - query function bodies:
+//
+//     export interface AdminQueryDefs {
+//       allPatrons(qx: QX, x: X, y: Y): QueryGenerator<AdminPatronInfo[]>;
+//       allEditions(qx: QX): QueryGenerator<AdminEditionInfo[]>;
+//     }
+//
+// - query providers:
+//
+//     export interface AdminQueries {
+//       allPatrons(x: X, y: Y): Query<AdminPatronInfo[]>;
+//       allEditions(x: X, y: Y): Query<AdminPatronInfo[]>;
+//     }
+//
+// - use local Framework to host queries based on defs:
+//
+//     function LocalAdminQueries<QX>(
+//       // use structrual typing to match Framework<QX, *>
+//       fw: { newQuery<T>(fn: QueryFunction<QX, T>): Query<T> },
+//       defs: AdminQueryDefs<QX>,
+//     ): AdminQueries {
+//       return {
+//         allPatrons(x: X, y: Y): Query<AdminPatronInfo[]> {
+//           return fw.newQuery((qx: QX) => defs.allPatrons(qx, x, y));
+//         },
+//         allEditions(x: X, y: Y): Query<AdminEditionInfo[]> {
+//           return fw.newQuery((qx: QX) => defs.allPatrons(qx, x, y));
+//         },
+//       };
+//     }
+//
+// - use remote query server for queries:
+//
+//     export class RemoteAdminQueries extends RemoteQueries {
+//       allPatrons(x: X, y: Y): Query<AdminPatronInfo[]> {
+//         return this.#newQuery(
+//           [allPatronsQueryId, encodePatron(x), encodePatron(y)],
+//           decodeAdminPatronInfoList,
+//         );
+//       }
+//
+//       allEditions(): Query<AdminEditionInfo[]> {
+//         return this.#newQuery(allEditionsQueryId, [], decodeAdminPatronInfoList);
+//       }
+//     }
+
+//////////////////////////////////////////////////////////////
+// skeleton code to keep:
+
+class RemoteQuery<T> {
+  latest: T | undefined = undefined;
+  subscribe: (callback: (val: T) => void): () => void;
+
+  #onClose: () => void;
+  #closed: boolean = false;
+
+  // RemoteQuery is passed a subcription factory.  The factory receives an onResults hook and
+  // returns a closer function.  This dance avoids hardcoding things like "every subscription gets
+  // a unique subId" since that is a wire protocol detail, not an API detail.
+  constructor(
+    subscriptionFactory: (onResult: (result: T) => void) => () => void,
+  ) {
+    this.#onClose = subscriptionFactory((result: T) => this.#onResult(result)));
+  }
+
+  #onResult(result: T): void {
+    ...
+  }
+
+  close(): void {
+    if(this.#closed) return;
+    this.#onClose();
+    this.#closed = true;
+  }
+}
+
+// QueriesIO is implemented by the user and passed into the RemoteQueries subclass.  Only the user
+// knows the transport over which query data should flow.
+interface QueriesIO {
+  // createQuery takes, query id, args, and an onResults hook, returning a closer function
+  createQuery(raw: any[], onResult: (result: any) => void): () => void;
+}
+
+// RemoteQueries is the base class behind the generated, strongly-typed remote query interfaces.
+export class RemoteQueries {
+  #io: QueriesIO;
+
+  constructor(io: QueriesIO) {
+    this.#io = io;
+  }
+
+  #newQuery<T>(raw: any[], decoder: (result: any) => T): Query<T> {
+    return new RemoteQuery<T>(
+      (onResult: (result: T) => void) => {
+        return this.#io.createQuery(raw, (result: any) => onResults(decoder(result)));
+      },
+    );
+  }
+}
+
+//////////////////////////////////////////////////////////////
+
+//////////////
+// How do we write a sanitizing query relay (in the cloudflare connection worker)?
+// - It needs to receive just the query args, as sent over the wire
+// - It doesn't need a query body
+// - It does need strong typing
+
+// your code receives data off the wire
+// your code can checkAdminQuery() (no type change)
+// your code can decodeAdminQuery() (returns a union of all query types)
+// your code can forward that or encode it.
+// we need to generate an admin query id union too, if people want to skip the encoding step but
+//   still want the strongly-typed switch case.
+
+export class ConnectionWorkerQueryServer {
+  #user: Uuid;
+  #remote: RemoteAdminQueries;
+  #root: string | null = null;
+  #rootAvailable: string | null = null;
+  #queries: [(root: string) => void] = [];
+
+  constructor(user, remote) {
+    this.#user = user;
+    this.#remote = remote;
+  }
+
+  // rerun all queries
+  setRoot(root: string) {
+    self.#rootAvailable = root;
+    if(!self.#isRunning) {
+      setTimeout(() => this.#run());
+    }
+  }
+
+  async #run() {
+    if (this.#rootAvailable != this.#root) {
+    }
+  }
+
+  newQuery(raw: any) => void {
+    const errors = checkAdminQuery(raw);
+    if (errors.length > 0) {
+      // XXX fail
+    }
+    const decoded = decodeAdminQuery(raw);
+    switch (decoded[0]) {
+    case adminQueryAllPatronsQid:
+      const [, x, y] = decoded;
+      ...
+      break;
+    case adminQueryAllEditionsQid:
+      break;
+    }
+  }
+
+  async onAllPatrons(x: X, y: Y): void {
+    const result = this.#remote.allPatrons(user, x, y);
+    const result = await fetch(this.#remote + "/query?" + new URLSearchParams({
+      r: this.#root,
+      u: this.#user,
+      q: JSON.stringify(encodeProto([x, y])),
+    }));
+  }
+}
+
+//////////////////////
+
 // "R"educerConte"x"t
 // "Q"ueryConte"x"t
 // "E"vents
@@ -2380,6 +2557,11 @@ export class Framework<QX, RX, E, C> {
   }
 
   //// public api ////
+
+  // register a remote client with this Framework, returns a close function
+  addRemoteClient(client: RemoteClient): () => void {
+
+  }
 
   // request info needed to resume a connection: last committed checkpoint and unsent commands
   reconnect(

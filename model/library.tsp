@@ -434,14 +434,59 @@ model RelayHold {
   patron: Uuid;
 }
 
-// The relay is mostly concerned with checking that all uuid references are valid, so it doesn't
-// have a lot of overlap with the storage layout of the decider or the ui
-interface RelayStore extends Store<{
-  "edition.{isbn}": true;
-  "book.{book_uuid}": true;
-  "patron.{hold_uuid}": true;
-  "checkout.{checkout_uuid}": true;
-  "hold.{hold_uuid}": RelayHold;
-}> {}
+// The relay holds the entire data model so it can serve server-side queries.
+alias RelayStore = AdminStore;
 
 interface RelayFramework extends Framework<LibraryEvents, RelayCommands, RelayStore> {}
+
+/////////////////
+// Query Layer //
+/////////////////
+
+model AdminPatronInfo {
+  id: Uuid;
+  name: string;
+  researcher: boolean;
+};
+
+model AdminBookInfo {
+  id: string;
+  restricted: boolean;
+  state: "open" | "rstr" | "held" | "out";
+  patronId?: string;
+  holdId?: string;
+  checkoutId?: string;
+}
+
+model AdminEditionInfo {
+  isbn: string;
+  title: string;
+  books: AdminBookInfo[];
+}
+
+// admin queries can run against the relay, or against a local AdminStore
+interface AdminQueries extends Queries {
+  allPatronIds(): AllPatronIds[];
+  allPatrons(): AdminPatronInfo[];
+  allEditions(): AdminEditionInfo[];
+}
+
+
+model UserBookInfo {
+  isbn: string;
+  title: string;
+  availableNormal: number;
+  availableRestricted: string[];
+  hold: VHold | null;
+}
+
+model UserPatronInfo {
+  name: string;
+  researcher: boolean;
+};
+
+// user queries can run on the relay, or against a local UserStore
+interface UserQueries extends Queries {
+  allBooks(): UserBookInfo[];
+  myPatron(): UserPatronInfo;
+}
