@@ -61,10 +61,10 @@ same numbers, different execution venue.  Each list's `n/m done` badge pins
 the other factory from the same module (`listStats`) to `'local'`, and the
 `archived @server` badge is a server-only query (`archive.server.ts`).
 
-Flexible queries degrade gracefully: if the server rejects a subscription
-(unknown id after a deploy, say), the client logs the reason and re-runs the
-query locally behind the same subscription surface.  Server-only queries have
-no fallback — that's the tier's contract.
+A rejected subscription (unknown id after a deploy, say) is dead: the client
+logs the reason and the subscription goes silent.  Choosing `'local'`
+placement is the author's responsibility: it requires local storage caught
+up enough to answer.
 
 ## Why this matters (see COMPETITORS.md)
 
@@ -88,7 +88,7 @@ machinery they need is what this demo builds.
 - A server-only tier, with the implementation structurally excluded from the
   browser bundle.
 - The wire protocol grew `{type: "error", sub, reason}` for rejected
-  subscriptions, and the client a local fallback for flexible queries.
+  subscriptions.
 - Everything else (query server, remote subscription registry, UI) is the
   kesq demo, on ports 3008/3009.
 
