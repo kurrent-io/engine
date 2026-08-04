@@ -2,13 +2,13 @@ all: model
 
 # The TypeSpec tooling (engine + emitters); one tsp compile of the todo model emits
 # both generated files directly to their destinations (see model/tspconfig.yaml).
-TSP_SRCS := $(wildcard ../tools/engine/src/*.ts ../tools/engine/lib/*.tsp \
-	../tools/emitter-ts/src/*.ts ../tools/emitter-ts/assets/* \
-	../tools/emitter-go/src/*.ts ../tools/emitter-go/assets/*)
+TSP_SRCS := $(wildcard ../../tools/engine/src/*.ts ../../tools/engine/lib/*.tsp \
+	../../tools/emitter-ts/src/*.ts ../../tools/emitter-ts/assets/* \
+	../../tools/emitter-go/src/*.ts ../../tools/emitter-go/assets/*)
 
 .PHONY: typespec-tools
 typespec-tools:
-	@cd ../tools && pnpm -s i && pnpm -rs build
+	@cd ../../tools && pnpm -s i && pnpm -rs build
 
 model/model.gen.ts relay/model/model.go &: model/model.tsp model/tspconfig.yaml model/node_modules $(TSP_SRCS) | typespec-tools
 	cd model && pnpm exec tsp compile model.tsp
