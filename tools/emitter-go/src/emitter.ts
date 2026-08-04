@@ -74,6 +74,7 @@ function camel(s: string): string {
 }
 
 const JSON_TYPE_TO_REFLECT_TYPE: Record<string, string> = {
+  null: "reflectTypeNil",
   string: "reflectTypeString",
   boolean: "reflectTypeBool",
   int: "reflectTypeInt",
@@ -135,6 +136,11 @@ function convertUnion(
 
   const visit = (solution: Solution): void => {
     if (solution instanceof Match) {
+      // null has no converter: the union's Go type is an interface, so null converts to nil
+      if (solution.typ instanceof KNull) {
+        d.print(`return nil\n`);
+        return;
+      }
       d.print(`out := ${converters.get(solution.typ)!("value")}\n`);
       d.print(`return out\n`);
     } else if (solution instanceof CheckJsonType) {
@@ -556,7 +562,9 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       }
       d.print(`default:\n`);
       d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("unexpected export type: %v", ${subjVar}.ExportType()))\n`);
+      d.print(`errs = append(errs, fmt.Errorf(\n`);
+      d.print(`\t"%v: type %v not allowed here", ${subjPath}, ${subjVar}.ExportType(),\n`);
+      d.print(`))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);

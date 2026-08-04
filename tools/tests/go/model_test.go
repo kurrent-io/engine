@@ -92,7 +92,7 @@ func TestGreek(t *testing.T) {
 	ok(t, CheckGreek, `{"type":"beta","at":"`+iso+`"}`)
 	fails(t, CheckGreek, `{"a":1}`, "missing discriminator")
 	fails(t, CheckGreek, `{"type":"gamma"}`, "unexpected literal")
-	fails(t, CheckGreek, `5`, "unexpected export type")
+	fails(t, CheckGreek, `5`, "not allowed here")
 }
 
 // The [type, v] regression: the pre-fix walker reassigned x to the "type" string and then
@@ -110,16 +110,16 @@ func TestTarget(t *testing.T) {
 	ok(t, CheckTarget, `{"book":"b1"}`)
 	ok(t, CheckTarget, `{"at":"`+iso+`"}`)
 	fails(t, CheckTarget, `{"nope":1}`, "no matching fields")
-	fails(t, CheckTarget, `5`, "unexpected export type")
+	fails(t, CheckTarget, `5`, "not allowed here")
 }
 
 func TestLiteralUnions(t *testing.T) {
 	ok(t, CheckColor, `"green"`)
 	fails(t, CheckColor, `"purple"`, "unexpected literal")
-	fails(t, CheckColor, `3`, "unexpected export type")
+	fails(t, CheckColor, `3`, "not allowed here")
 	ok(t, CheckLevel, `2`)
 	fails(t, CheckLevel, `9`, "unexpected literal")
-	fails(t, CheckLevel, `"2"`, "unexpected export type")
+	fails(t, CheckLevel, `"2"`, "not allowed here")
 }
 
 func TestFrameworkUnions(t *testing.T) {
