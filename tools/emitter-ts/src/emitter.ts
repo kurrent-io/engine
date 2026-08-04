@@ -1,6 +1,6 @@
 /**
  * TypeScript code generator: emits type aliases, decoders, JSON structural checkers, typed store
- * contexts, and Framework classes from the lowered IR.
+ * contexts, Framework classes, and typed query layers from the lowered IR.
  */
 
 import {
@@ -28,6 +28,8 @@ import {
   LoweredProgram,
   Match,
   Solution,
+  KQueries,
+  KQuery,
   KStore,
   KTypeRegistry,
   solveUnion,
@@ -939,9 +941,125 @@ export class ${ctxName}ReducerTester extends ReducerTester<${RX}, ${eventType}, 
 `);
 }
 
+/** "AdminQueries" → "Admin"; the stem names the per-interface artifacts */
+function queryStem(name: string): string {
+  return name.endsWith("Queries") ? name.slice(0, -"Queries".length) : name;
+}
+
+/** the wire id of one query: unique across all interfaces a connection may carry */
+function queryId(kq: KQueries, q: KQuery): string {
+  return `${kq.name}.${q.name}`;
+}
+
+/**
+ * Build the wire message type for a queries interface: a union of `[id, ...args]` tuples,
+ * discriminated by the id literal.  Optional arguments are nullable on the wire (a JSON array
+ * has no way to omit an element).  Naming the union routes it through the same annotation,
+ * decoder, and checker generation as any declared type, which is what gives the serving side
+ * `check<Stem>Query` for ingress and `Decode<Stem>Query` for typed dispatch.
+ */
+function queryWireType(registry: KTypeRegistry, kq: KQueries): KType {
+  const wire = registry.union(
+    kq.queries.map((q) =>
+      registry.tuple([
+        registry.literal(queryId(kq, q)),
+        ...q.args.map(([, at, opt]) => (opt ? registry.union([at, registry.null_()]) : at)),
+      ]),
+    ),
+  );
+  if (wire.name === null) wire.name = queryStem(kq.name!) + "Query";
+  return wire;
+}
+
+/**
+ * Generate the typed query layer for one Queries interface: the wire id constants, the defs
+ * interface an author implements, the provider interface call sites consume, and the local and
+ * remote provider constructions (both of which produce the provider interface, so a call site
+ * chooses execution venue by choosing a provider instance).
+ */
+function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueries): void {
+  const name = kq.name!;
+  const stem = queryStem(name);
+  const idsName = `${stem}QueryIds`;
+  const defsName = `${stem}QueryDefs`;
+
+  const params = (q: KQuery) =>
+    q.args.map(([an, at, opt]) => `${an}${opt ? "?" : ""}: ${annos.get(at)!}`).join(", ");
+  const result = (q: KQuery) => annos.get(q.result)!;
+
+  // wire ids
+  d.print(`\nexport const ${idsName} = {\n`);
+  d.indent("  ");
+  for (const q of kq.queries) {
+    d.print(`${q.name}: "${queryId(kq, q)}",\n`);
+  }
+  d.dedent();
+  d.print("} as const;\n");
+
+  // defs: implemented by the author, one generator body per query.  Generic in QX because the
+  // contract binds no store; per-caller context (a user id, ...) is constructor state on the
+  // implementation, closed over by the bodies.
+  d.print(`\nexport interface ${defsName}<QX> {\n`);
+  d.indent("  ");
+  for (const q of kq.queries) {
+    const rest = q.args.length ? ", " + params(q) : "";
+    d.print(`${q.name}(qx: QX${rest}): QueryGenerator<${result(q)}>;\n`);
+  }
+  d.dedent();
+  d.print("}\n");
+
+  // provider: consumed by call sites
+  d.print(`\nexport interface ${name} {\n`);
+  d.indent("  ");
+  for (const q of kq.queries) {
+    d.print(`${q.name}(${params(q)}): Query<${result(q)}>;\n`);
+  }
+  d.dedent();
+  d.print("}\n");
+
+  // local provider: hosts the defs on any framework with a compatible query context
+  d.print(`\nexport function Local${name}<QX>(\n`);
+  d.print(`  fw: { newQuery<X>(fn: QueryFunction<QX, X>): Query<X> },\n`);
+  d.print(`  defs: ${defsName}<QX>,\n`);
+  d.print(`): ${name} {\n`);
+  d.indent("  ");
+  d.print("return {\n");
+  d.indent("  ");
+  for (const q of kq.queries) {
+    const argNames = q.args.map(([an]) => an);
+    d.print(`${q.name}(${params(q)}): Query<${result(q)}> {\n`);
+    d.print(`  return fw.newQuery((qx: QX) => defs.${q.name}(${["qx", ...argNames].join(", ")}));\n`);
+    d.print("},\n");
+  }
+  d.dedent();
+  d.print("};\n");
+  d.dedent();
+  d.print("}\n");
+
+  // remote provider: encode the call, subscribe over the transport, decode results
+  d.print(`\nexport class Remote${name} extends RemoteQueries implements ${name} {\n`);
+  d.indent("  ");
+  for (const q of kq.queries) {
+    const raw = [
+      `${idsName}.${q.name}`,
+      ...q.args.map(([an, , opt]) => `EncodeProto(${an}${opt ? " ?? null" : ""})`),
+    ];
+    const dec = decoders.get(q.result);
+    const decodeFn =
+      dec == null
+        ? `(val: any): ${result(q)} => val`
+        : `(val: any): ${result(q)} => ${dec("val")}`;
+    d.print(`${q.name}(${params(q)}): Query<${result(q)}> {\n`);
+    d.print(`  return this.newQuery([${raw.join(", ")}], ${decodeFn});\n`);
+    d.print("}\n");
+  }
+  d.dedent();
+  d.print("}\n");
+}
+
 /** entrypoint: assemble the complete generated module */
 export function generateTs(lowered: LoweredProgram, skeleton: string): string {
-  const { registry, roots, stores, frameworks } = lowered;
+  const { registry, roots, stores, frameworks, queries } = lowered;
   if (!roots.length) throw new Error("no named types found to generate code for");
 
   const d = new Denter();
@@ -954,6 +1072,14 @@ export function generateTs(lowered: LoweredProgram, skeleton: string): string {
     ...stores.flatMap((s) => s.items.map((si) => si.type)),
     ...frameworks.flatMap((f) => f.store.items.map((si) => si.type)),
   ];
+
+  // Queries need their wire message type (which carries the arg types inside it) plus decoders
+  // for their result types.
+  for (const kq of queries) {
+    if (!kq.queries.length) continue;
+    typesToVisit.push(queryWireType(registry, kq));
+    for (const q of kq.queries) typesToVisit.push(q.result);
+  }
 
   // Define types and decide on type annotations.
   const annos: Annos = new Map();
@@ -975,6 +1101,9 @@ export function generateTs(lowered: LoweredProgram, skeleton: string): string {
 
   // Generate frameworks
   for (const f of frameworks) generateFramework(d, annos, f);
+
+  // Generate query layers
+  for (const kq of queries) generateQueries(d, annos, decoders, kq);
 
   // the generated file ends with a trailing newline
   return d.getvalue() + "\n";
