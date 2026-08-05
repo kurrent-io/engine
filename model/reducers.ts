@@ -763,7 +763,6 @@ function *relayReduceOne(rx: RelayRX, e: LibraryEvents): Reducer<void> {
     case "update-edition-title":
     case "update-book-restricted":
     case "remove-book":
-    case "add-patron":
     case "rename-patron":
     case "assign-patron":
     case "cancel-hold":

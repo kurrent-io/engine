@@ -969,8 +969,12 @@ func NewFramework[QX QueryContext, E any, C any](
 	setTimeout, run := makeSetTimeout()
 	vm.GlobalObject().Set("setTimeout", setTimeout)
 
-	// hack: load exports into the global namespace
-	vm.GlobalObject().Set("exports", vm.GlobalObject())
+	// minimal CommonJS host: seed module.exports for the bundle to populate
+	module := vm.NewObject()
+	exports := vm.NewObject()
+	module.Set("exports", exports)
+	vm.GlobalObject().Set("module", module)
+	vm.GlobalObject().Set("exports", exports)
 	name, script, err := source.ToSource()
 	if err != nil {
 		return nil, fmt.Errorf("source: %w", err)
@@ -979,7 +983,14 @@ func NewFramework[QX QueryContext, E any, C any](
 	if err != nil {
 		return nil, fmt.Errorf("loading bundle: %w", err)
 	}
+	vm.GlobalObject().Delete("module")
 	vm.GlobalObject().Delete("exports")
+	// copy the exports into the global namespace, where the migrate/reducer lookups happen;
+	// re-read module.exports because bundles may reassign it instead of mutating the seed
+	exported := module.Get("exports").ToObject(vm)
+	for _, key := range exported.Keys() {
+		vm.GlobalObject().Set(key, exported.Get(key))
+	}
 
 	storageVal, err := storage.ToStorage(vm)
 	if err != nil {

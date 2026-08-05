@@ -434,8 +434,16 @@ model RelayHold {
   patron: Uuid;
 }
 
-// The relay holds the entire data model so it can serve server-side queries.
-alias RelayStore = AdminStore;
+// The relay is mostly concerned with checking that all uuid references are valid, so it doesn't
+// have a lot of overlap with the storage layout of the decider or the ui
+interface RelayStore extends Store<{
+  "edition.{isbn}": true;
+  "book.{book_uuid}": true;
+  "patron.{hold_uuid}": true;
+  "checkout.{checkout_uuid}": true;
+  "hold.{hold_uuid}": RelayHold;
+}> {}
+
 
 interface RelayFramework extends Framework<LibraryEvents, RelayCommands, RelayStore> {}
 

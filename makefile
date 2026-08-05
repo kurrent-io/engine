@@ -36,7 +36,7 @@ model/check: model
 relay: relay/relay.js relay/model.py relay/_quickjs.so
 
 relay/relay.js: model/node_modules model/library.gen.ts model/relay.ts
-	cd model && pnpm rollup -m inline --exports named -p typescript relay.ts -o ../relay/relay.js
+	cd model && pnpm esbuild relay.ts --bundle --format=esm --sourcemap=inline --outfile=../$@
 
 relay/quickjs:
 	rm -rf quickjs~
@@ -57,7 +57,7 @@ relay/check: relay
 decider: decider/decider
 
 decider/decider.js: model/node_modules model/library.gen.ts model/decider.ts
-	cd model && pnpm rollup -m inline --format=cjs -p typescript decider.ts -o ../decider/decider.js
+	cd model && pnpm esbuild decider.ts --bundle --format=cjs --sourcemap=inline --outfile=../$@
 
 decider/decider: decider/decider.js decider/main.go decider/model/model.go
 	cd decider && go build -o decider .
@@ -69,7 +69,7 @@ ui/node_modules:
 	cd ui && pnpm i
 
 ui/src/model.js:  model/node_modules model/library.gen.ts model/ui.ts
-	cd model && pnpm rollup -m inline --format=esm -p typescript ui.ts -o ../$@
+	cd model && pnpm esbuild decider.ts --bundle --format=esm --sourcemap=inline --outfile=../$@
 
 ui/src/model.d.ts: model/node_modules model/library.gen.ts model/ui.ts
 	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
