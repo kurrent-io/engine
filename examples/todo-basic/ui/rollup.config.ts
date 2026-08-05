@@ -34,7 +34,8 @@ export default {
       destDir: 'dist/assets'           // Destination folder for copied assets
     }),
     typescript({
-        tsconfig: './tsconfig.json'      // Use this tsconfig file to configure TypeScript compilation
+        tsconfig: './tsconfig.json',     // Use this tsconfig file to configure TypeScript compilation
+        include: ['**/*.ts', '**/*.tsx', '../model/**/*.ts']
     }),
     isDev && serve({
       open: true,
@@ -45,6 +46,7 @@ export default {
     !isDev && terser(),
   ],
   onwarn: (warning, warn) => {
+    // ignore a lot of errors coming from antd
     if (warning.code === "MODULE_LEVEL_DIRECTIVE") return;
     if (warning.code === "THIS_IS_UNDEFINED") return;
     warn(warning);

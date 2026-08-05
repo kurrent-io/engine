@@ -1,6 +1,8 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
+    // nodejs requires 'import type ...' when importing types
+    "verbatimModuleSyntax": true,
     "paths": {
       "@/*": ["./*"]
     }

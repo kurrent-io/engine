@@ -2,7 +2,7 @@ import { ConfigProvider, Flex, theme } from 'antd';
 
 import Window from './Window';
 
-const RELAY_URL = 'ws://localhost:3003/ws';
+const RELAY_URL = 'ws://localhost:3001/ws';
 
 function App() {
   const { darkAlgorithm } = theme;

@@ -1,29 +1,20 @@
 {
+    "name": "@todo-basic/model",
     "type": "module",
+    "exports": {
+        "./ui": "./ui.ts",
+        "./relay": "./relay.ts"
+    },
     "devDependencies": {
-        "@kurrent/typespec-engine": "link:../../tools/engine",
-        "@kurrent/typespec-engine-ts": "link:../../tools/emitter-ts",
-        "@kurrent/typespec-engine-go": "link:../../tools/emitter-go",
+        "@kurrent/typespec-engine": "link:../../../tools/engine",
+        "@kurrent/typespec-engine-ts": "link:../../../tools/emitter-ts",
+        "@kurrent/typespec-engine-go": "link:../../../tools/emitter-go",
         "@typespec/compiler": "^1.0.0",
-        "@rollup/plugin-commonjs": "^29.0.0",
-        "@rollup/plugin-node-resolve": "^16.0.3",
-        "@rollup/plugin-replace": "^6.0.3",
-        "@rollup/plugin-terser": "^0.4.4",
-        "@rollup/plugin-typescript": "^12.3.0",
-        "@rollup/plugin-url": "^8.0.2",
         "@types/jest": "^30.0.0",
-        "dts-bundle-generator": "^9.5.1",
         "jest": "^30.2.0",
-        "rollup": "^4.53.3",
-        "rollup-plugin-livereload": "^2.0.5",
-        "rollup-plugin-postcss": "^4.0.2",
-        "rollup-plugin-serve": "^3.0.0",
         "ts-jest": "^29.4.6",
         "ts-node": "^10.9.2",
         "ts-node-test": "^0.4.4",
-        "typescript": "^5.9.3"
-    },
-    "dependencies": {
         "tslib": "^2.8.1"
     }
 }

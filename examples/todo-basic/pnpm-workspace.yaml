@@ -1,0 +1,9 @@
+packages:
+  - model
+  - relay
+  - ui
+
+onlyBuiltDependencies:
+  - bufferutil
+  - esbuild
+  - protobufjs

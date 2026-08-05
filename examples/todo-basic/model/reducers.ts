@@ -1,9 +1,4 @@
-import {
-  Reducer,
-  TodoEvents,
-  TodoRX,
-} from './model.gen';
-
+import type { Reducer, TodoEvents, TodoRX } from './model.gen';
 
 export function *migrateTodos(rx: TodoRX): Reducer<void> {
   // just set "all_lists" key to an empty list if it doesn't exist yet
@@ -11,7 +6,6 @@ export function *migrateTodos(rx: TodoRX): Reducer<void> {
     (yield* rx.get.all_lists()) ?? []
   );
 }
-
 
 export function *reduceTodos(rx: TodoRX, events: TodoEvents[]): Reducer<void> {
   for (const e of events) {

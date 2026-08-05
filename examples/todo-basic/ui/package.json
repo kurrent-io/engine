@@ -1,4 +1,5 @@
 {
+    "name": "@todo-basic/ui",
     "type": "module",
     "scripts": {
         "build": "rollup --config rollup.config.ts --configPlugin typescript",
@@ -22,11 +23,11 @@
         "rollup-plugin-serve": "^3.0.0",
         "ts-jest": "^29.4.6",
         "ts-node": "^10.9.2",
-        "ts-node-test": "^0.4.4",
-        "typescript": "^5.9.3"
+        "ts-node-test": "^0.4.4"
     },
     "dependencies": {
         "@ant-design/icons": "^6.1.1",
+        "@todo-basic/model": "workspace:*",
         "antd": "^6.2.1",
         "react": "^19.2.3",
         "react-dom": "^19.2.3",

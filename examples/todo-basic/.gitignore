@@ -1,2 +1,4 @@
 .db
 .log
+pnpm-lock.yaml
+**/*.gen.ts

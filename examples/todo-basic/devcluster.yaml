@@ -20,7 +20,8 @@ stages:
 
 - custom:
     name: relay
-    pre:
-      - sh: make relay
     cmd:
-      - relay/relay
+      - relay/node_modules/.bin/tsx
+      - watch
+      - relay/main.ts
+    kill_signal: TERM

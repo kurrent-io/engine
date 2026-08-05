@@ -4,7 +4,7 @@ import {
   migrateTodos,
   reduceTodos,
   InMemStorage,
-} from './model';
+} from '@todo-basic/model/ui';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
