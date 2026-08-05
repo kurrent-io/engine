@@ -2,10 +2,9 @@ import resolve from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import livereload from 'rollup-plugin-livereload';
 import serve from 'rollup-plugin-serve';
-import terser from '@rollup/plugin-terser';
 import url from '@rollup/plugin-url';
 import postcss from 'rollup-plugin-postcss';
-import typescript from '@rollup/plugin-typescript';
+import esbuild, { minify } from 'rollup-plugin-esbuild';
 import replace from '@rollup/plugin-replace';
 
 const isDev = process.env.ROLLUP_WATCH === 'true' || process.env.BUILD_MODE === 'dev';
@@ -33,17 +32,14 @@ export default {
       include: ['**/*.png'],           // Include these file types
       destDir: 'dist/assets'           // Destination folder for copied assets
     }),
-    typescript({
-        tsconfig: './tsconfig.json',     // Use this tsconfig file to configure TypeScript compilation
-        include: ['**/*.ts', '**/*.tsx', '../model/**/*.ts']
-    }),
+    esbuild(),
     isDev && serve({
       open: true,
       contentBase: ['dist', 'public'],
       port: 3000,
     }),
     isDev && livereload('dist'),
-    !isDev && terser(),
+    !isDev && minify(),
   ],
   onwarn: (warning, warn) => {
     // ignore a lot of errors coming from antd
