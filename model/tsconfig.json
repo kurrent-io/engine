@@ -23,7 +23,6 @@
     "noFallthroughCasesInSwitch": true,
 
     /* Aliasing */
-    "baseUrl": "@/",
     "paths": {
       "@/*": ["./*"]
     }

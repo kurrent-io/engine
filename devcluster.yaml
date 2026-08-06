@@ -41,3 +41,13 @@ stages:
       - sh: make decider
     cmd:
       - decider/decider
+
+- custom:
+    name: ui
+    pre:
+      - sh: make ui
+    cwd: ui
+    cmd:
+      - ./node_modules/.bin/vite
+      - dev
+    kill_signal: TERM

@@ -69,7 +69,7 @@ ui/node_modules:
 	cd ui && pnpm i
 
 ui/src/model.js:  model/node_modules model/library.gen.ts model/ui.ts
-	cd model && pnpm esbuild decider.ts --bundle --format=esm --sourcemap=inline --outfile=../$@
+	cd model && pnpm esbuild ui.ts --bundle --format=esm --sourcemap=inline --outfile=../$@
 
 ui/src/model.d.ts: model/node_modules model/library.gen.ts model/ui.ts
 	cd model && pnpm dts-bundle-generator ui.ts -o ../$@

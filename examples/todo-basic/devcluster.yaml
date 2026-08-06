@@ -25,3 +25,11 @@ stages:
       - watch
       - relay/main.ts
     kill_signal: TERM
+
+- custom:
+    name: ui
+    cwd: ui
+    cmd:
+      - ./node_modules/.bin/vite
+      - dev
+    kill_signal: TERM
