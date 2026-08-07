@@ -1,5 +1,9 @@
 {
     "name": "todo-basic",
+    "scripts": {
+        "gen": "cd model && pnpm gen",
+        "dev": "./devstack.mts"
+    },
     "private": true,
     "devDependencies": {
         "typescript": "^5.9.3"

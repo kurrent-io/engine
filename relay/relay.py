@@ -677,7 +677,7 @@ async def amain(connstr: str) -> None:
         await subscriber.start()
 
         # set up the webserver
-        async with setupWebserver("localhost:3003", {
+        async with setupWebserver("localhost:3001", {
             "framework": fw,
             "client": client,
             "appender": appender,

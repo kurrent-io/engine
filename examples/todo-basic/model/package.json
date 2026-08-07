@@ -1,6 +1,9 @@
 {
     "name": "@todo-basic/model",
     "type": "module",
+    "scripts": {
+        "gen": "tsp compile model.tsp"
+    },
     "exports": {
         "./ui": "./ui.ts",
         "./relay": "./relay.ts"
