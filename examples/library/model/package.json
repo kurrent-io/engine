@@ -1,10 +1,10 @@
 {
     "type": "module",
     "devDependencies": {
-        "@kurrent/typespec-engine": "link:../tools/engine",
-        "@kurrent/typespec-engine-ts": "link:../tools/emitter-ts",
-        "@kurrent/typespec-engine-py": "link:../tools/emitter-py",
-        "@kurrent/typespec-engine-go": "link:../tools/emitter-go",
+        "@kurrent/typespec-engine": "link:../../../tools/engine",
+        "@kurrent/typespec-engine-ts": "link:../../../tools/emitter-ts",
+        "@kurrent/typespec-engine-py": "link:../../../tools/emitter-py",
+        "@kurrent/typespec-engine-go": "link:../../../tools/emitter-go",
         "@typespec/compiler": "^1.0.0",
         "@types/jest": "^30.0.0",
         "dts-bundle-generator": "^9.5.1",

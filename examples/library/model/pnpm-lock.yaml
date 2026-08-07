@@ -9,17 +9,17 @@ importers:
   .:
     devDependencies:
       '@kurrent/typespec-engine':
-        specifier: link:../tools/engine
-        version: link:../tools/engine
+        specifier: link:../../../tools/engine
+        version: link:../../../tools/engine
       '@kurrent/typespec-engine-go':
-        specifier: link:../tools/emitter-go
-        version: link:../tools/emitter-go
+        specifier: link:../../../tools/emitter-go
+        version: link:../../../tools/emitter-go
       '@kurrent/typespec-engine-py':
-        specifier: link:../tools/emitter-py
-        version: link:../tools/emitter-py
+        specifier: link:../../../tools/emitter-py
+        version: link:../../../tools/emitter-py
       '@kurrent/typespec-engine-ts':
-        specifier: link:../tools/emitter-ts
-        version: link:../tools/emitter-ts
+        specifier: link:../../../tools/emitter-ts
+        version: link:../../../tools/emitter-ts
       '@types/jest':
         specifier: ^30.0.0
         version: 30.0.0
