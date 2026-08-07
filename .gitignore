@@ -5,5 +5,4 @@ dist/
 quickjs/
 *.so
 .claude
-.db
-.log
+*.gen.ts

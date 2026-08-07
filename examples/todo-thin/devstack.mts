@@ -21,7 +21,7 @@ main({
   stages: {
     // run KurrentDB in a docker container
     db: {
-      containerName: "todo-basic-db",
+      containerName: "todo-thin-db",
       dockerArgs: ["-p=2113:2113"],
       image: "docker.kurrent.io/kurrent-latest/kurrentdb:26.0.3",
       cmd: [

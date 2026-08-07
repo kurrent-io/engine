@@ -11,7 +11,7 @@ import type {
 import { WebSocket, WebSocketServer } from "ws";
 import type { MessageEvent } from "ws";
 
-import { checkTodoEvents } from "@todo-basic/model/relay";
+import { checkTodoEvents } from "@todo-thin/model/server";
 
 // assume all events go into one stream
 const TODO_STREAM = "todo";
@@ -143,7 +143,7 @@ function main() {
 
   server.on('connection', (socket) => handleWebsocketConnection(client, socket));
 
-  console.log(`todo-basic relay is listening on ${LISTEN_PORT}`);
+  console.log(`todo-thin relay is listening on ${LISTEN_PORT}`);
 }
 
 main();

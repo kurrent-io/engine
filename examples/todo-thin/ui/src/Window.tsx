@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { Card, Flex, Spin, Tag, Typography } from 'antd';
 
-import { TodoQX, QueryGenerator } from '@todo-basic/model/ui';
+import { TodoQX, QueryGenerator } from '@todo-thin/model/ui';
 import { useQuery } from './useQuery';
 import { useFramework } from './useFramework';
 import { generateUuid } from './util';

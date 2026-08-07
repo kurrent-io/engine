@@ -1,5 +1,5 @@
 {
-    "name": "@todo-basic/relay",
+    "name": "@todo-basic/server",
     "type": "module",
     "devDependencies": {
         "tsx": "^4.23.8"
