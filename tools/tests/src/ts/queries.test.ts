@@ -72,6 +72,10 @@ export interface Query<T> {
   subscribe(callback: (val: T) => void): () => void;
   close(): void;
 }
+export interface LocalQuery<T> extends Query<T> {
+  awaitResult(): QueryGenerator<T>;
+  start(): void;
+}
 
 export class RemoteQueries {
   io: any;
@@ -313,7 +317,10 @@ describe('generated type surface', () => {
     expect(text).toContain(
       'export class RemoteAdminQueries extends RemoteQueries implements AdminQueries {',
     );
+    expect(text).toContain('export interface LocalAdminQueries extends AdminQueries {');
+    expect(text).toContain('patronsNamed(name: string, limit?: number): LocalQuery<PatronInfo[]>;');
     expect(text).toContain('export function LocalAdminQueries<QX>(');
+    expect(text).toContain('): LocalAdminQueries {');
     expect(text).toContain(
       'export function dispatchAdminQuery(queries: AdminQueries, query: AdminQuery): Query<any> {',
     );

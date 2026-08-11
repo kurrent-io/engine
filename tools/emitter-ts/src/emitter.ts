@@ -1034,8 +1034,9 @@ function queryWireType(registry: KTypeRegistry, kq: KQueries): KType {
 /**
  * Generate the typed query layer for one Queries interface: the wire id constants, the defs
  * interface an author implements, the provider interface call sites consume, the local and
- * remote provider constructions (both of which produce the provider interface, so a call site
- * chooses execution venue by choosing a provider instance), and the dispatcher a serving side
+ * remote provider constructions (both satisfy the provider interface, so a call site chooses
+ * execution venue by choosing a provider instance; the local provider additionally exposes
+ * LocalQuery results, which compose via awaitResult()), and the dispatcher a serving side
  * uses to route a decoded wire message into a provider.
  */
 function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueries): void {
@@ -1078,17 +1079,27 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
   d.dedent();
   d.print('}\n');
 
-  // local provider: hosts the defs on any framework with a compatible query context
+  // local provider: hosts the defs on any framework with a compatible query context.  Its
+  // queries are LocalQuery-typed so they compose via awaitResult(); the interface merges with
+  // the constructor function below, mirroring the Remote class being both type and value.
+  d.print(`\nexport interface Local${name} extends ${name} {\n`);
+  d.indent('  ');
+  for (const q of kq.queries) {
+    d.print(`${q.name}(${params(q)}): LocalQuery<${result(q)}>;\n`);
+  }
+  d.dedent();
+  d.print('}\n');
+
   d.print(`\nexport function Local${name}<QX>(\n`);
-  d.print(`  fw: { newQuery<X>(fn: QueryFunction<QX, X>): Query<X> },\n`);
+  d.print(`  fw: { newQuery<X>(fn: QueryFunction<QX, X>): LocalQuery<X> },\n`);
   d.print(`  defs: ${defsName}<QX>,\n`);
-  d.print(`): ${name} {\n`);
+  d.print(`): Local${name} {\n`);
   d.indent('  ');
   d.print('return {\n');
   d.indent('  ');
   for (const q of kq.queries) {
     const argNames = q.args.map(([an]) => an);
-    d.print(`${q.name}(${params(q)}): Query<${result(q)}> {\n`);
+    d.print(`${q.name}(${params(q)}): LocalQuery<${result(q)}> {\n`);
     d.print(
       `  return fw.newQuery((qx: QX) => defs.${q.name}(${['qx', ...argNames].join(', ')}));\n`,
     );

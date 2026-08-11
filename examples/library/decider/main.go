@@ -64,7 +64,7 @@ func setupFramework(
 	}
 
 	// DEBUG //
-	q := model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext, prev *string) string {
+	q := model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext) string {
 		out := fmt.Sprintf("have books:\n")
 		for isbn := range qx.Editions() {
 			edition := qx.Edition(isbn)
@@ -73,8 +73,7 @@ func setupFramework(
 		return out
 	})
 	q.Subscribe(func(out string) { print(out) })
-	q.Start()
-	q = model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext, prev *string) string {
+	q = model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext) string {
 		out := fmt.Sprintf("have patrons:\n")
 		for id := range qx.Patrons() {
 			patron := qx.Patron(id)
@@ -83,12 +82,11 @@ func setupFramework(
 		return out
 	})
 	q.Subscribe(func(out string) { print(out) })
-	q.Start()
 	// END OF DEBUG //
 
 	// query for the decider events emitted by our reducer
 	query := model.NewQuery(fw, func(
-		vm *goja.Runtime, qx model.DeciderQueryContext, prev *[]model.DeciderEvents,
+		vm *goja.Runtime, qx model.DeciderQueryContext,
 	) []model.DeciderEvents {
 		out := qx.Decider_events()
 		return out
@@ -99,8 +97,6 @@ func setupFramework(
 		// just save them for processing on the main thread
 		*deciderEvents = result
 	})
-
-	query.Start()
 
 	// also request the current checkpoint status
 	checkpoint, err := fw.Reconnect()

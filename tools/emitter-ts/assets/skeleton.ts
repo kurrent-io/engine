@@ -1924,17 +1924,19 @@ export interface Query<T> {
   // latest holds the most recent value passed to subscribe callback.  It is updated immediately
   // after subscribe callbacks are made, on a per-Query basis.
   latest: T | undefined;
-  // awaitResult has no effect when executed outside of a query function
-  awaitResult(): QueryGenerator<T>
   // subscribe returns an unsubscribe function
   subscribe(callback: (val: T) => void): () => void;
-  // start will start the query, if it wasn't created with start=true.  This is mostly for wrappers
-  // written in other languages, where the event-loop will be managed automatically, and the caller
-  // needs a way to create the query and subscribe to it before letting it run the first time.
-  start(): void;
   // close will stop the query from running again.
   // Dependent queries which are not also closed will start crashing.
   close(): void;
+}
+
+// LocalQuery extends Query with the ability to compose queries by calling awaitResult() inside a
+// QueryFunction body.  This isn't possible with typespec-defined Queries, which can only handle
+// json-serializable args, not references to existing Query objects.
+export interface LocalQuery<T> extends Query<T> {
+  // awaitResult has no effect when executed outside of a query function
+  awaitResult(): QueryGenerator<T>;
 }
 
 export type QueryQuestion = {
@@ -1953,11 +1955,7 @@ export type QueryAnswer = {
 
 export type QueryGenerator<T> = Generator<QueryQuestion, T, QueryAnswer>;
 
-export type QueryFunction<QX, T> = (
-  qx: QX,
-  prev: T | undefined,
-  prevIsValid: boolean,
-) => QueryGenerator<T>;
+export type QueryFunction<QX, T> = (qx: QX) => QueryGenerator<T>;
 
 // graph-facing api, which hides typing info from the graph
 interface QueryWrapper<QX> {
@@ -1983,20 +1981,15 @@ class _Query<QX, T> {
   #queryDeps: Record<string, true> = {};
   #runs: number = 0;
   #result: T | undefined = undefined;
-  #fn: (qx: QX, prev: T | undefined, prevIsValid: boolean) => QueryGenerator<T>;
-  #onStart: (() => void) | undefined;
+  #fn: (qx: QX) => QueryGenerator<T>;
 
-  constructor(id: string, fn: QueryFunction<QX, T>, onStart: () => void) {
+  constructor(id: string, fn: QueryFunction<QX, T>) {
     this.id = id;
     this.#fn = fn;
-    this.#onStart = onStart;
   }
 
   // part of public api
   *awaitResult(): QueryGenerator<T> {
-    if (this.#onStart) {
-      throw new Error('cannot await result of unstarted Query');
-    }
     // don't try to coordinate our own #result vaule with the graph being executed; just use this as
     // an idiomatic way to ask the graph run for the result from our .id.
     const ans = yield { query: { [this.id]: true } };
@@ -2007,19 +2000,11 @@ class _Query<QX, T> {
   // part of public api
   subscribe(callback: (val: T) => void): () => void {
     this.#subs.push(callback);
+    // late subscribers get instant callback with the latest value
+    if (this.#runs > 0) callback(this.latest as T);
     return () => {
       this.#subs = this.#subs.filter((x) => x !== callback);
     };
-  }
-
-  start(): void {
-    if (this.closed) {
-      throw new Error('call to Query.start() on closed query');
-    }
-    if (this.#onStart) {
-      this.#onStart();
-      this.#onStart = undefined;
-    }
   }
 
   // part of public api
@@ -2062,7 +2047,7 @@ class _Query<QX, T> {
     this.#keyDeps = {};
     this.#queryDeps = {};
 
-    const g = this.#fn(qx, oldResult, this.#runs > 1);
+    const g = this.#fn(qx);
     let ans: QueryAnswer = { query: {}, store: {} };
     // run query function to completion
     while (true) {
@@ -2236,14 +2221,11 @@ export class QueryGraph<QX> {
     this.#run = new GraphRun(this.#qx, {});
   }
 
-  newQuery<T>(fn: QueryFunction<QX, T>, manualStart: boolean, onStart: () => void): Query<T> {
+  newQuery<T>(fn: QueryFunction<QX, T>): LocalQuery<T> {
     const id = `${this.#id++}`;
-    const q = new _Query(id, fn, () => {
-      onStart();
-      this.#queries[id] = q;
-      this.#newQueries.push(q);
-    });
-    if (!manualStart) q.start();
+    const q = new _Query(id, fn)
+    this.#queries[id] = q;
+    this.#newQueries.push(q);
     return q;
   }
 
@@ -2259,9 +2241,18 @@ export class QueryGraph<QX> {
     this.#dirty = {};
     this.#run = new GraphRun(this.#qx, commitKeys);
 
-    // run against all queries
-    const queries = Object.values(this.#queries);
+    // #newQueries are already in #queries, so they're no longer new
     this.#newQueries = [];
+
+    // discard closed queries and run all the rest
+    const queries: QueryWrapper<QX>[] = [];
+    for (const [qid, q] of Object.entries(this.#queries)) {
+      if (q.closed) {
+        delete this.#queries[qid];
+      } else {
+        queries.push(q);
+      }
+    }
     return yield* this.#execute(queries);
   }
 
@@ -2297,7 +2288,6 @@ class RemoteQuery<T> {
   #subs: ((val: T) => void)[] = [];
 
   #onClose: () => void;
-  #closed: boolean = false;
 
   // RemoteQuery is passed a subcription factory.  The factory receives an onResults hook and
   // returns a closer function.  This dance avoids hardcoding things like "every subscription gets
@@ -2323,7 +2313,7 @@ class RemoteQuery<T> {
   }
 
   close(): void {
-    if (this.#closed) return;
+    if (this.closed) return;
     this.#onClose();
     this.closed = true;
   }
@@ -2533,11 +2523,10 @@ export class Framework<QX, RX, E, C> {
   }
 
   // add a new Query to the graph
-  newQuery<T>(fn: QueryFunction<QX, T>, manualStart?: boolean): Query<T> {
-    return this.#graph.newQuery(fn, manualStart ?? false, () => {
-      this.#newQueries = true;
-      this.#schedule();
-    });
+  newQuery<T>(fn: QueryFunction<QX, T>): LocalQuery<T> {
+    this.#newQueries = true;
+    this.#schedule();
+    return this.#graph.newQuery(fn);
   }
 
   simulate<T>(

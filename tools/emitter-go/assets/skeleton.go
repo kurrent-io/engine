@@ -1115,25 +1115,7 @@ func (f *Framework[QX, E, C]) Reconnect() (*uint64, error) {
 
 type Query[T any] struct {
 	vm    *goja.Runtime
-	run   func() error
 	query *goja.Object
-}
-
-func (q *Query[T]) Start() (T, error) {
-	var zero T
-	startFn, ok := goja.AssertFunction(q.query.Get("start"))
-	if !ok {
-		panic("Query.start is not callable??")
-	}
-	_, err := startFn(q.query)
-	if err != nil {
-		return zero, fmt.Errorf("query.start failed: %w", err)
-	}
-	err = q.run()
-	if err != nil {
-		return zero, fmt.Errorf("query.start failed: %w", err)
-	}
-	return *q.Latest(), nil
 }
 
 func (q *Query[T]) Close() {
@@ -1249,21 +1231,16 @@ func (q *Query[T]) Subscribe(fn func(T)) func() {
 
 func NewQuery[QX QueryContext, E any, C any, T any](
 	fw *Framework[QX, E, C],
-	fn func(vm *goja.Runtime, qx QX, prev *T) T,
+	fn func(vm *goja.Runtime, qx QX) T,
 ) *Query[T] {
 	// each time a query is run, we create a new javascript iterator around a new coroutine
 	queryfunc := func(call goja.FunctionCall) goja.Value {
-		// args are (qx: javascriptQX, prev: T|None, prevIsValid: bool)
-		var prev *T
-		if call.Arguments[2].ToBoolean() {
-			tmp := call.Arguments[1].Export().(T)
-			prev = &tmp
-		}
+		// arg is just (qx: javscriptQX)
 
 		// start query function in a goroutine
 		next := newcoro[goja.Value, goja.Value, T](func(ask func(goja.Value) goja.Value) T {
 			qx := fw.qxFactory(fw.vm, ask)
-			return fn(fw.vm, qx, prev)
+			return fn(fw.vm, qx)
 		})
 
 		// return something that looks like a javascript iterator
@@ -1284,15 +1261,14 @@ func NewQuery[QX QueryContext, E any, C any, T any](
 		return it
 	}
 
-	// call javascript method: Framework.newQuery() with manualStart=true, which does not throw
-	query, err := fw.newQuery(fw.fw, fw.vm.ToValue(queryfunc), fw.vm.ToValue(true))
+	// call javascript method: Framework.newQuery(), which should not throw
+	query, err := fw.newQuery(fw.fw, fw.vm.ToValue(queryfunc))
 	if err != nil {
 		panic("framework.newQuery failed??")
 	}
 
 	return &Query[T]{
 		vm:    fw.vm,
-		run:   fw.run,
 		query: query.(*goja.Object),
 	}
 }

@@ -70,22 +70,16 @@ class _StoreResult:
 
 # technically we have type information of what is yielded and sent, but async python wants Any,Any
 QueryGenerator = Coroutine[Any, Any, T]
-QueryFunction = Callable[[QX, T | None, bool], QueryGenerator[T]]
+QueryFunction = Callable[[QX], QueryGenerator[T]]
 
 
 class Query[T]:
-    def __init__(self, _query: _quickjs.Value, on_start: Callable[[], None]):
+    def __init__(self, _query: _quickjs.Value):
         self._query = _query
-        self._on_start = on_start
 
     @property
     def latest(self) -> T | None:
         return cast(T | None, self._query.latest)
-
-    def start(self) -> T:
-        self._query.start()
-        self._on_start()
-        return cast(T, self._query.latest)
 
     def subscribe(self, cb: Callable[[T], None]) -> Callable[[], None]:
         return cast(Callable[[], None], self._query.subscribe(cb))
@@ -199,8 +193,8 @@ class Framework[QX, E, C]:
 
     def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:
         # queryfunc will wrap the python generator in a javascript iterator
-        def queryfunc(qx: QX, prev: T | None, isValid: bool) -> Any:
-            g = generator(qx, prev, isValid)
+        def queryfunc(qx: QX) -> Any:
+            g = generator(qx)
             first = True
 
             def nextfunc(val: Any = None) -> Any:
@@ -218,11 +212,16 @@ class Framework[QX, E, C]:
 
             return {"next": nextfunc}
 
-        # call javascript framework.newQuery() with manualStart=true to get javascript _Query
+        # call javascript framework.newQuery() to get javascript _Query
         _query = self._framework.newQuery(queryfunc, True)
 
-        # wrap _Query in a suitable python interface
-        return Query(_query, lambda: self._run())
+        # wrap javascript query in python wrapper
+        query: Query[T] = Query(_query)
+
+        # now run the framework
+        self._run()
+
+        return query
 
     def recv_events(self, events: List[Any]) -> None:
         self._framework.recvEvents(events)
