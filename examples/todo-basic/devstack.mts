@@ -46,33 +46,33 @@ main({
 
 ////////////////// devstack internals below this line //////////////////////////
 
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import * as fs from "node:fs";
-import { connect } from "node:net";
-import * as path from "node:path";
-import { DatabaseSync } from "node:sqlite";  // literally just for file locks
-import { setTimeout as sleep } from "node:timers/promises";
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import { connect } from 'node:net';
+import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite'; // literally just for file locks
+import { setTimeout as sleep } from 'node:timers/promises';
 
 function usage(out: NodeJS.WriteStream): void {
   out.write(
-    "usage: node devstack.mts [options]\n"
-    + "  -1, --oneshot           no UI; stream logs to stdout and announce\n"
-    + "                          readiness on stderr (for CI; implied when\n"
-    + "                          stdin or stdout is not a terminal)\n"
-    + "  --target-stage <stage>  initial target, by name, index, or 'dead'\n"
-    + "                          (default: the last stage)\n"
-    + "  -h, --help              show this help\n"
-    + "\n"
-    + "KEYBINDINGS:\n"
-    + "  0-9         set target stage\n"
-    + "  shift+(0-9) enable/disable logs for each stage\n"
-    + "  k/up        scroll up one line\n"
-    + "  u           scroll up one half page\n"
-    + "  b/pgup      scroll up one full page\n"
-    + "  j/down      scroll down one line\n"
-    + "  d           scroll down one half page\n"
-    + "  f/pgdn      scroll down one full page\n"
-    + "  x           when scrolled, jump back to bottom\n"
+    'usage: node devstack.mts [options]\n' +
+      '  -1, --oneshot           no UI; stream logs to stdout and announce\n' +
+      '                          readiness on stderr (for CI; implied when\n' +
+      '                          stdin or stdout is not a terminal)\n' +
+      "  --target-stage <stage>  initial target, by name, index, or 'dead'\n" +
+      '                          (default: the last stage)\n' +
+      '  -h, --help              show this help\n' +
+      '\n' +
+      'KEYBINDINGS:\n' +
+      '  0-9         set target stage\n' +
+      '  shift+(0-9) enable/disable logs for each stage\n' +
+      '  k/up        scroll up one line\n' +
+      '  u           scroll up one half page\n' +
+      '  b/pgup      scroll up one full page\n' +
+      '  j/down      scroll down one line\n' +
+      '  d           scroll down one half page\n' +
+      '  f/pgdn      scroll down one full page\n' +
+      '  x           when scrolled, jump back to bottom\n',
   );
 }
 
@@ -139,7 +139,7 @@ export type StepCtx = {
 };
 
 // autocompletes the common signals but accepts any signal name
-export type KillSignal = "SIGTERM" | "SIGINT" | "SIGKILL" | (string & {});
+export type KillSignal = 'SIGTERM' | 'SIGINT' | 'SIGKILL' | (string & {});
 
 ///////////////////////////////////////////////////////////////////
 // begin advancer: one function (`advance()`) to drive all state //
@@ -199,11 +199,7 @@ function advance(): void {
      which flushes stdout on the way out (a hard process.exit would truncate
      pending pipe writes).  Late wakeups land here again harmlessly; every
      action below is idempotent. */
-  if (
-    target.quitRequested &&
-    status.stages.every(isFullyDown) &&
-    commands.size === 0
-  ) {
+  if (target.quitRequested && status.stages.every(isFullyDown) && commands.size === 0) {
     if (opts.oneshot) renderOneshot(true);
     restoreTerminal();
     process.exitCode = oneshot.failing ? 1 : 0;
@@ -231,12 +227,12 @@ function panic(err: unknown): never {
    which can corrupt complex children like databases). */
 function killEverything(): void {
   for (const st of status.stages) {
-    const signal = normSignal(st.cfg.killSignal ?? "SIGTERM");
+    const signal = normSignal(st.cfg.killSignal ?? 'SIGTERM');
     if (isDocker(st.cfg)) {
       if (!st.containerStarted) continue;
       try {
-        spawn("docker", ["kill", `--signal=${signal}`, st.cfg.containerName], {
-          stdio: "ignore",
+        spawn('docker', ['kill', `--signal=${signal}`, st.cfg.containerName], {
+          stdio: 'ignore',
           detached: true,
         }).unref();
       } catch {}
@@ -251,7 +247,7 @@ function killEverything(): void {
   for (const cmd of commands.values()) {
     if (cmd.exited || cmd.pid === null) continue;
     try {
-      process.kill(-cmd.pid, "SIGTERM");
+      process.kill(-cmd.pid, 'SIGTERM');
     } catch {}
   }
 }
@@ -308,7 +304,7 @@ const stepSlot = {
   current: null as null | {
     // which stage the step belongs to (1-based, like targetIdx)
     stageIdx: number;
-    kind: "pre" | "dockerCreate" | "dockerStart" | "post";
+    kind: 'pre' | 'dockerCreate' | 'dockerStart' | 'post';
     controller: AbortController;
     settled: boolean;
     ok: boolean;
@@ -318,19 +314,13 @@ const stepSlot = {
 
 // the stage whose step occupies the slot, if any
 function stepSlotOwner(): StageState | null {
-  return stepSlot.current === null
-    ? null
-    : status.stages[stepSlot.current.stageIdx - 1];
+  return stepSlot.current === null ? null : status.stages[stepSlot.current.stageIdx - 1];
 }
 
 // a stage with a step in flight is not down, even before its proc spawns;
 // that is what routes mid-pre-step stages into the teardown walk
 function isFullyDown(st: StageState): boolean {
-  return (
-    st.proc === null &&
-    st.containerId === "" &&
-    stepSlotOwner() !== st
-  );
+  return st.proc === null && st.containerId === '' && stepSlotOwner() !== st;
 }
 
 // return a stage's run state to pristine DOWN
@@ -340,7 +330,7 @@ function resetRun(st: StageState): void {
   st.postStarted = false;
   st.up = false;
   st.crashed = false;
-  st.containerId = "";
+  st.containerId = '';
   st.containerStarted = false;
   st.wantDown = false;
   st.killSent = false;
@@ -389,22 +379,22 @@ function advanceStages(): void {
 // collect a settled step's result and free the slot
 function consumeStep(): void {
   const slot = stepSlot.current;
-  if (slot === null || !slot.settled) return;
+  if (!slot?.settled) return;
   stepSlot.current = null;
   const st = status.stages[slot.stageIdx - 1];
   if (slot.controller.signal.aborted) {
-    log(fore(3) + `${st.name} ${slot.kind} step canceled` + RES + "\n");
+    log(fore(3) + `${st.name} ${slot.kind} step canceled` + RES + '\n');
     return;
   }
   if (!slot.ok) {
     st.crashed = true;
     const msg = `${st.name} ${slot.kind} step failed: ${errText(slot.error)}`;
-    log(fore(1) + msg + RES + "\n");
-    log(fore(1) + msg + RES + "\n", st.name);
+    log(fore(1) + msg + RES + '\n');
+    log(fore(1) + msg + RES + '\n', st.name);
     return;
   }
-  if (slot.kind === "pre") st.preDone++;
-  if (slot.kind === "post") st.postDone++;
+  if (slot.kind === 'pre') st.preDone++;
+  if (slot.kind === 'post') st.postDone++;
 }
 
 // returns true once the stage is up; false means parked on a step
@@ -414,25 +404,25 @@ function advanceStandUp(idx: number): boolean {
   const st = status.stages[idx - 1];
 
   if (st.preDone < st.preSteps.length) {
-    startStep(st, idx, "pre", st.preSteps[st.preDone]);
+    startStep(st, idx, 'pre', st.preSteps[st.preDone]);
     return false;
   }
 
   // docker stages: between pre and post steps, the container is created
   // (which registers it in running.json) and then started
-  if (isDocker(st.cfg) && st.containerId === "") {
-    startStep(st, idx, "dockerCreate", dockerCreateStep(st));
+  if (isDocker(st.cfg) && st.containerId === '') {
+    startStep(st, idx, 'dockerCreate', dockerCreateStep(st));
     return false;
   }
   if (isDocker(st.cfg) && !st.containerStarted) {
-    startStep(st, idx, "dockerStart", dockerStartStep(st));
+    startStep(st, idx, 'dockerStart', dockerStartStep(st));
     return false;
   }
 
   if (!st.postStarted) {
     st.postStarted = true;
     if (st.postDone < st.postSteps.length) {
-      startStep(st, idx, "post", st.postSteps[st.postDone]);
+      startStep(st, idx, 'post', st.postSteps[st.postDone]);
       spawnMain(st);
       return false;
     }
@@ -442,7 +432,7 @@ function advanceStandUp(idx: number): boolean {
   }
 
   if (st.postDone < st.postSteps.length) {
-    startStep(st, idx, "post", st.postSteps[st.postDone]);
+    startStep(st, idx, 'post', st.postSteps[st.postDone]);
     return false;
   }
 
@@ -476,7 +466,7 @@ function advanceTearDown(st: StageState, idx: number): boolean {
   }
 
   // remove the stage's container and drop it from running.json
-  if (st.containerId !== "") {
+  if (st.containerId !== '') {
     if (!st.rmStarted) {
       st.rmStarted = true;
       st.rmPending = true;
@@ -496,7 +486,7 @@ function advanceTearDown(st: StageState, idx: number): boolean {
 function startStep(
   st: StageState,
   stageIdx: number,
-  kind: "pre" | "dockerCreate" | "dockerStart" | "post",
+  kind: 'pre' | 'dockerCreate' | 'dockerStart' | 'post',
   step: Step,
 ): void {
   const controller = new AbortController();
@@ -511,9 +501,9 @@ function startStep(
   stepSlot.current = slot;
   const ctx: StepCtx = {
     signal: controller.signal,
-    log: (line) => log(line.endsWith("\n") ? line : line + "\n", st.name),
+    log: (line) => log(line.endsWith('\n') ? line : line + '\n', st.name),
     stream: st.name,
-    cwd: "cwd" in st.cfg ? st.cfg.cwd : undefined,
+    cwd: 'cwd' in st.cfg ? st.cfg.cwd : undefined,
   };
   Promise.resolve()
     .then(() => step(ctx))
@@ -532,7 +522,7 @@ function startStep(
 }
 
 export function isDocker(cfg: ProcessStage | DockerStage): cfg is DockerStage {
-  return "containerName" in cfg;
+  return 'containerName' in cfg;
 }
 
 function errText(e: unknown): string {
@@ -554,24 +544,23 @@ function newProc(child: ChildProcess): Proc {
 function spawnMain(st: StageState): void {
   let child: ChildProcess;
   if (isDocker(st.cfg)) {
-    child = spawn(
-      "docker",
-      ["container", "logs", "--follow", st.cfg.containerName],
-      { stdio: ["ignore", "pipe", "pipe"], detached: true },
-    );
+    child = spawn('docker', ['container', 'logs', '--follow', st.cfg.containerName], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
   } else {
     const cfg = st.cfg;
-    log(fore(3) + `starting ${st.name}` + RES + "\n");
+    log(fore(3) + `starting ${st.name}` + RES + '\n');
     const options = {
       cwd: cfg.cwd,
       env: cfg.env ? { ...process.env, ...cfg.env } : process.env,
-      stdio: ["ignore", "pipe", "pipe"] as ("ignore" | "pipe")[],
+      stdio: ['ignore', 'pipe', 'pipe'] as ('ignore' | 'pipe')[],
       // a separate process group isolates the child from terminal signals
       // and lets kills reach the whole group
       detached: true,
     };
     child =
-      typeof cfg.cmd === "string"
+      typeof cfg.cmd === 'string'
         ? spawn(cfg.cmd, { ...options, shell: true })
         : spawn(cfg.cmd[0], cfg.cmd.slice(1), options);
   }
@@ -579,24 +568,20 @@ function spawnMain(st: StageState): void {
   st.proc = proc;
   wireChild(st, proc, child);
   if (isDocker(st.cfg)) {
-    trackPid(
-      proc.pid,
-      `docker container logs --follow ${st.cfg.containerName}`,
-      "SIGKILL",
-    );
+    trackPid(proc.pid, `docker container logs --follow ${st.cfg.containerName}`, 'SIGKILL');
   } else {
     const cmd = st.cfg.cmd;
     trackPid(
       proc.pid,
-      typeof cmd === "string" ? cmd : cmd.join(" "),
-      normSignal(st.cfg.killSignal ?? "SIGTERM"),
+      typeof cmd === 'string' ? cmd : cmd.join(' '),
+      normSignal(st.cfg.killSignal ?? 'SIGTERM'),
     );
   }
 }
 
 function wireChild(st: StageState, proc: Proc, child: ChildProcess): void {
-  child.stdout?.on("data", (b: Buffer) => log(b, st.name));
-  child.stderr?.on("data", (b: Buffer) => log(b, st.name));
+  child.stdout?.on('data', (b: Buffer) => log(b, st.name));
+  child.stderr?.on('data', (b: Buffer) => log(b, st.name));
 
   const markExited = (what: string) => {
     if (proc.exited) return;
@@ -606,17 +591,17 @@ function wireChild(st: StageState, proc: Proc, child: ChildProcess): void {
     log(` ----- ${st.name} exited with ${what} -----\n`, st.name);
     if (!proc.dying) {
       st.crashed = true;
-      log(fore(1) + `${st.name} closing unexpectedly!` + RES + "\n");
+      log(fore(1) + `${st.name} closing unexpectedly!` + RES + '\n');
     }
     schedule();
   };
 
-  child.on("error", (err: Error) => {
+  child.on('error', (err: Error) => {
     // spawn failures land here (e.g. the command does not exist)
-    log(fore(1) + `${st.name}: ${err.message}` + RES + "\n", st.name);
+    log(fore(1) + `${st.name}: ${err.message}` + RES + '\n', st.name);
     markExited(`spawn error: ${err.message}`);
   });
-  child.on("close", (code, signal) => {
+  child.on('close', (code, signal) => {
     proc.exitCode = code;
     proc.exitSignal = signal;
     markExited(signal !== null ? `signal ${signal}` : `code ${code}`);
@@ -625,30 +610,28 @@ function wireChild(st: StageState, proc: Proc, child: ChildProcess): void {
 
 // accept bare signal names like "TERM" for "SIGTERM", as `kill` does
 function normSignal(sig: string): NodeJS.Signals {
-  return (sig.startsWith("SIG") ? sig : "SIG" + sig) as NodeJS.Signals;
+  return (sig.startsWith('SIG') ? sig : 'SIG' + sig) as NodeJS.Signals;
 }
 
 function sendKill(st: StageState): void {
-  const signal = normSignal(st.cfg.killSignal ?? "SIGTERM");
+  const signal = normSignal(st.cfg.killSignal ?? 'SIGTERM');
   if (isDocker(st.cfg)) {
-    log(fore(3) + `killing ${st.name} (docker kill --signal=${signal})` + RES + "\n");
-    const p = spawn(
-      "docker",
-      ["kill", `--signal=${signal}`, st.cfg.containerName],
-      { stdio: ["ignore", "ignore", "pipe"] },
-    );
-    p.stderr?.on("data", (b: Buffer) => log(b, st.name));
-    p.on("error", (err: Error) => {
-      log(fore(1) + `docker kill for ${st.name} failed: ${err.message}` + RES + "\n");
+    log(fore(3) + `killing ${st.name} (docker kill --signal=${signal})` + RES + '\n');
+    const p = spawn('docker', ['kill', `--signal=${signal}`, st.cfg.containerName], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    p.stderr?.on('data', (b: Buffer) => log(b, st.name));
+    p.on('error', (err: Error) => {
+      log(fore(1) + `docker kill for ${st.name} failed: ${err.message}` + RES + '\n');
     });
   } else {
     const proc = st.proc!;
-    log(fore(3) + `killing ${st.name} with ${signal}` + RES + "\n");
+    log(fore(3) + `killing ${st.name} with ${signal}` + RES + '\n');
     try {
       // Negative pid signals the whole process group (see detached above).
       // A null pid must never reach here: kill(-0) would signal devstack's
       // own process group.
-      if (proc.pid === null) throw new Error("no pid");
+      if (proc.pid === null) throw new Error('no pid');
       process.kill(-proc.pid, signal);
     } catch {
       try {
@@ -667,35 +650,31 @@ function dockerCreateStep(st: StageState): Step {
          to completion, and teardown deals with whatever exists afterward. */
       ctx.log(`creating container ${cfg.containerName}`);
       const p = spawn(
-        "docker",
+        'docker',
         [
-          "container",
-          "create",
-          "--name",
+          'container',
+          'create',
+          '--name',
           cfg.containerName,
           ...(cfg.dockerArgs ?? []),
           cfg.image,
           ...(cfg.cmd ?? []),
         ],
-        { stdio: ["ignore", "pipe", "pipe"] },
+        { stdio: ['ignore', 'pipe', 'pipe'] },
       );
-      let out = "";
-      p.stdout?.on("data", (b: Buffer) => {
+      let out = '';
+      p.stdout?.on('data', (b: Buffer) => {
         out += b.toString();
       });
-      p.stderr?.on("data", (b: Buffer) => log(b, st.name));
-      p.on("error", reject);
-      p.on("close", (code) => {
+      p.stderr?.on('data', (b: Buffer) => log(b, st.name));
+      p.on('error', reject);
+      p.on('close', (code) => {
         if (code !== 0) {
           reject(new Error(`docker create exited with code ${code}`));
           return;
         }
         st.containerId = out.trim();
-        trackContainer(
-          st.containerId,
-          cfg.containerName,
-          normSignal(cfg.killSignal ?? "SIGTERM"),
-        );
+        trackContainer(st.containerId, cfg.containerName, normSignal(cfg.killSignal ?? 'SIGTERM'));
         resolve();
       });
     });
@@ -708,12 +687,12 @@ function dockerStartStep(st: StageState): Step {
       /* Runs to completion on abort, like dockerCreateStep: whether the
          container is running must be a settled fact by teardown time. */
       ctx.log(`starting container ${cfg.containerName}`);
-      const p = spawn("docker", ["container", "start", st.containerId], {
-        stdio: ["ignore", "ignore", "pipe"],
+      const p = spawn('docker', ['container', 'start', st.containerId], {
+        stdio: ['ignore', 'ignore', 'pipe'],
       });
-      p.stderr?.on("data", (b: Buffer) => log(b, st.name));
-      p.on("error", reject);
-      p.on("close", (code) => {
+      p.stderr?.on('data', (b: Buffer) => log(b, st.name));
+      p.on('error', reject);
+      p.on('close', (code) => {
         if (code !== 0) {
           reject(new Error(`docker start exited with code ${code}`));
           return;
@@ -727,13 +706,13 @@ function dockerStartStep(st: StageState): Step {
 async function dockerRm(st: StageState): Promise<void> {
   let force = false;
   if (st.containerStarted) {
-    force = !(await runQuiet("docker", ["wait", st.containerId], 10_000));
+    force = !(await runQuiet('docker', ['wait', st.containerId], 10_000));
     if (force) {
       log(` ----- docker wait for ${st.name} took too long, force-removing -----\n`, st.name);
     }
   }
-  const rmArgs = force ? ["rm", "--force"] : ["rm"];
-  await runQuiet("docker", [...rmArgs, st.containerId], 10_000);
+  const rmArgs = force ? ['rm', '--force'] : ['rm'];
+  await runQuiet('docker', [...rmArgs, st.containerId], 10_000);
   untrackContainer(st.containerId);
 }
 
@@ -741,13 +720,13 @@ async function dockerRm(st: StageState): Promise<void> {
 // failure, or timeout (the process is SIGKILLed on timeout)
 export function runQuiet(cmd: string, args: string[], timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, { stdio: ["ignore", "ignore", "ignore"] });
-    const timer = setTimeout(() => p.kill("SIGKILL"), timeoutMs);
-    p.on("error", () => {
+    const p = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'ignore'] });
+    const timer = setTimeout(() => p.kill('SIGKILL'), timeoutMs);
+    p.on('error', () => {
       clearTimeout(timer);
       resolve(false);
     });
-    p.on("close", (code) => {
+    p.on('close', (code) => {
       clearTimeout(timer);
       resolve(code === 0);
     });
@@ -765,57 +744,57 @@ export function sh(command: string): Step {
 
 // run an argv directly (no shell) as a step; it must exit 0
 export function exec(...argv: string[]): Step {
-  return commandStep(argv, argv.join(" "));
+  return commandStep(argv, argv.join(' '));
 }
 
 function commandStep(cmd: string | string[], cmdStr: string): Step {
   return (ctx) =>
     new Promise<void>((resolve, reject) => {
       if (ctx.signal.aborted) {
-        reject(new Error("canceled"));
+        reject(new Error('canceled'));
         return;
       }
       ctx.log(fore(3) + `starting \`${cmdStr}\`` + RES);
       const start = Date.now();
       const options = {
         cwd: ctx.cwd,
-        stdio: ["ignore", "pipe", "pipe"] as ("ignore" | "pipe")[],
+        stdio: ['ignore', 'pipe', 'pipe'] as ('ignore' | 'pipe')[],
         detached: true,
       };
       const child =
-        typeof cmd === "string"
+        typeof cmd === 'string'
           ? spawn(cmd, { ...options, shell: true })
           : spawn(cmd[0], cmd.slice(1), options);
-      child.stdout?.on("data", (b: Buffer) => log(b, ctx.stream));
-      child.stderr?.on("data", (b: Buffer) => log(b, ctx.stream));
+      child.stdout?.on('data', (b: Buffer) => log(b, ctx.stream));
+      child.stderr?.on('data', (b: Buffer) => log(b, ctx.stream));
 
       const onAbort = () => {
         try {
-          if (child.pid === undefined) throw new Error("no pid");
-          process.kill(-child.pid, "SIGTERM");
+          if (child.pid === undefined) throw new Error('no pid');
+          process.kill(-child.pid, 'SIGTERM');
         } catch {
           try {
-            child.kill("SIGTERM");
+            child.kill('SIGTERM');
           } catch {}
         }
       };
-      ctx.signal.addEventListener("abort", onAbort, { once: true });
+      ctx.signal.addEventListener('abort', onAbort, { once: true });
 
       let settled = false;
       const finish = (err: Error | null) => {
         if (settled) return;
         settled = true;
-        ctx.signal.removeEventListener("abort", onAbort);
+        ctx.signal.removeEventListener('abort', onAbort);
         if (err === null) resolve();
         else reject(err);
       };
 
-      child.on("error", (err: Error) => finish(err));
-      child.on("close", (code) => {
+      child.on('error', (err: Error) => finish(err));
+      child.on('close', (code) => {
         const duration = ((Date.now() - start) / 1000).toFixed(2);
         if (ctx.signal.aborted) {
           ctx.log(fore(3) + ` ----- \`${cmdStr}\` canceled -----` + RES);
-          finish(new Error("canceled"));
+          finish(new Error('canceled'));
         } else if (code === 0) {
           ctx.log(fore(3) + ` ----- \`${cmdStr}\` complete! (${duration}s) -----` + RES);
           finish(null);
@@ -829,7 +808,7 @@ function commandStep(cmd: string | string[], cmdStr: string): Step {
 
 /* A step that succeeds once a tcp connection to the port succeeds.  Tries
    about every 20ms for up to 30 seconds, then fails the stage. */
-export function connCheck(port: number, host = "localhost"): Step {
+export function connCheck(port: number, host = 'localhost'): Step {
   return async (ctx) => {
     // one attempt: true on connect, false on error or a 20ms timeout, and
     // false immediately on abort (the socket is destroyed either way)
@@ -837,22 +816,22 @@ export function connCheck(port: number, host = "localhost"): Step {
       new Promise<boolean>((resolve) => {
         const sock = connect({ host, port });
         const finish = (ok: boolean) => {
-          ctx.signal.removeEventListener("abort", onAbort);
+          ctx.signal.removeEventListener('abort', onAbort);
           sock.destroy();
           resolve(ok);
         };
         const onAbort = () => finish(false);
-        ctx.signal.addEventListener("abort", onAbort, { once: true });
+        ctx.signal.addEventListener('abort', onAbort, { once: true });
         sock.setTimeout(20);
-        sock.on("timeout", () => finish(false));
-        sock.on("error", () => finish(false));
-        sock.on("connect", () => finish(true));
+        sock.on('timeout', () => finish(false));
+        sock.on('error', () => finish(false));
+        sock.on('connect', () => finish(true));
       });
 
     ctx.log(fore(3) + `waiting for ${host}:${port}` + RES);
     const deadline = Date.now() + 30_000;
     while (true) {
-      if (ctx.signal.aborted) throw new Error("canceled");
+      if (ctx.signal.aborted) throw new Error('canceled');
       if (Date.now() > deadline) {
         ctx.log(fore(1) + ` ----- ${host}:${port} was not connectable within 30s -----` + RES);
         throw new Error(`${host}:${port} was not connectable within 30s`);
@@ -877,9 +856,9 @@ export function httpCheck(url: string): Step {
   return async (ctx) => {
     ctx.log(fore(3) + `waiting for ${url}` + RES);
     const deadline = Date.now() + 30_000;
-    let last = "no response";
+    let last = 'no response';
     while (true) {
-      if (ctx.signal.aborted) throw new Error("canceled");
+      if (ctx.signal.aborted) throw new Error('canceled');
       if (Date.now() > deadline) {
         ctx.log(fore(1) + ` ----- ${url} was not healthy within 30s (${last}) -----` + RES);
         throw new Error(`${url} was not healthy within 30s (${last})`);
@@ -911,27 +890,27 @@ export function httpCheck(url: string): Step {
    a match can never be lost to an output-chunk boundary. */
 export function logCheck(regex: RegExp, stream?: string): Step {
   // strip stateful flags so repeated tests can't skip matches
-  const re = new RegExp(regex.source, regex.flags.replace(/[gy]/g, ""));
+  const re = new RegExp(regex.source, regex.flags.replace(/[gy]/g, ''));
   return (ctx) =>
     new Promise<void>((resolve, reject) => {
       if (ctx.signal.aborted) {
-        reject(new Error("canceled"));
+        reject(new Error('canceled'));
         return;
       }
       const watch = stream ?? ctx.stream;
       /* The announcements go to the console stream, and the waiting one is
          written before subscribing: a line on the watched stream containing
          the regex's own source text must never satisfy the check. */
-      log(fore(3) + `${watch}: waiting for ${re}` + RES + "\n");
+      log(fore(3) + `${watch}: waiting for ${re}` + RES + '\n');
 
       let settled = false;
       const finish = (err: Error | null) => {
         if (settled) return;
         settled = true;
         logs.subscribers.delete(sub);
-        ctx.signal.removeEventListener("abort", onAbort);
+        ctx.signal.removeEventListener('abort', onAbort);
         if (err === null) {
-          log(fore(3) + `${watch}: saw ${re}` + RES + "\n");
+          log(fore(3) + `${watch}: saw ${re}` + RES + '\n');
           resolve();
         } else {
           reject(err);
@@ -941,10 +920,10 @@ export function logCheck(regex: RegExp, stream?: string): Step {
         if (s !== watch || !re.test(line)) return;
         finish(null);
       };
-      const onAbort = () => finish(new Error("canceled"));
+      const onAbort = () => finish(new Error('canceled'));
 
       logs.subscribers.add(sub);
-      ctx.signal.addEventListener("abort", onAbort, { once: true });
+      ctx.signal.addEventListener('abort', onAbort, { once: true });
     });
 }
 
@@ -968,12 +947,12 @@ function advanceCommands(): void {
     const cfg = config.commands?.[key];
     if (cfg === undefined) continue;
     if (target.quitRequested) {
-      log(fore(3) + "ignoring command while we are quitting" + RES + "\n");
+      log(fore(3) + 'ignoring command while we are quitting' + RES + '\n');
       continue;
     }
     if (commands.has(key)) {
       const cmdStr = commands.get(key)!.cmdStr;
-      log(fore(3) + `command ${cmdStr} is still running, please wait...` + RES + "\n");
+      log(fore(3) + `command ${cmdStr} is still running, please wait...` + RES + '\n');
       continue;
     }
     commands.set(key, startCommand(cfg));
@@ -985,13 +964,13 @@ function advanceCommands(): void {
       commands.delete(key);
     } else if (target.quitRequested && !cmd.killing) {
       cmd.killing = true;
-      log(fore(3) + `killing \`${cmd.cmdStr}\`...` + RES + "\n");
+      log(fore(3) + `killing \`${cmd.cmdStr}\`...` + RES + '\n');
       try {
-        if (cmd.pid === null) throw new Error("no pid");
-        process.kill(-cmd.pid, "SIGTERM");
+        if (cmd.pid === null) throw new Error('no pid');
+        process.kill(-cmd.pid, 'SIGTERM');
       } catch {
         try {
-          cmd.child.kill("SIGTERM");
+          cmd.child.kill('SIGTERM');
         } catch {}
       }
     }
@@ -999,14 +978,14 @@ function advanceCommands(): void {
 }
 
 function startCommand(cfg: string | string[]): Command {
-  const cmdStr = typeof cfg === "string" ? cfg : cfg.join(" ");
-  log(fore(3) + `starting \`${cmdStr}\`` + RES + "\n");
+  const cmdStr = typeof cfg === 'string' ? cfg : cfg.join(' ');
+  log(fore(3) + `starting \`${cmdStr}\`` + RES + '\n');
   const options = {
-    stdio: ["ignore", "pipe", "pipe"] as ("ignore" | "pipe")[],
+    stdio: ['ignore', 'pipe', 'pipe'] as ('ignore' | 'pipe')[],
     detached: true,
   };
   const child =
-    typeof cfg === "string"
+    typeof cfg === 'string'
       ? spawn(cfg, { ...options, shell: true })
       : spawn(cfg[0], cfg.slice(1), options);
   const cmd: Command = {
@@ -1018,18 +997,18 @@ function startCommand(cfg: string | string[]): Command {
     exited: false,
   };
 
-  child.stdout?.on("data", (b: Buffer) => log(b));
-  child.stderr?.on("data", (b: Buffer) => log(b));
+  child.stdout?.on('data', (b: Buffer) => log(b));
+  child.stderr?.on('data', (b: Buffer) => log(b));
 
   const finish = (outcome: string, color: number) => {
     if (cmd.exited) return;
     cmd.exited = true;
-    log(fore(color) + `\`${cmdStr}\` ${outcome}` + RES + "\n");
+    log(fore(color) + `\`${cmdStr}\` ${outcome}` + RES + '\n');
     schedule();
   };
 
-  child.on("error", (err: Error) => finish(`failed to start: ${err.message}`, 1));
-  child.on("close", (code, signal) => {
+  child.on('error', (err: Error) => finish(`failed to start: ${err.message}`, 1));
+  child.on('close', (code, signal) => {
     const duration = ((Date.now() - cmd.start) / 1000).toFixed(2);
     if (cmd.killing) finish(`killed after ${duration}s`, 3);
     else if (code === 0) finish(`complete (${duration}s)`, 3);
@@ -1089,7 +1068,7 @@ export const logs = {
 function getStream(name: string): LogStream {
   let s = logs.streams[name];
   if (!s) {
-    s = { raw: "", open: null, swallowLF: false, decoder: new TextDecoder() };
+    s = { raw: '', open: null, swallowLF: false, decoder: new TextDecoder() };
     logs.streams[name] = s;
   }
   return s;
@@ -1101,20 +1080,19 @@ function isOpen(item: StreamItem): boolean {
 }
 
 // append process output or an internal message to a log stream
-export function log(data: string | Uint8Array, stream = "console"): void {
+export function log(data: string | Uint8Array, stream = 'console'): void {
   // mirror every stream, raw, to <tempDir>/<stream>.log; best-effort only
-  if (tracker.dir !== "") {
+  if (tracker.dir !== '') {
     try {
-      fs.appendFileSync(path.join(tracker.dir, stream + ".log"), data);
+      fs.appendFileSync(path.join(tracker.dir, stream + '.log'), data);
     } catch {}
   }
   const s = getStream(stream);
-  let text =
-    typeof data === "string" ? data : s.decoder.decode(data, { stream: true });
-  if (s.swallowLF && text.startsWith("\n")) text = text.slice(1);
+  let text = typeof data === 'string' ? data : s.decoder.decode(data, { stream: true });
+  if (s.swallowLF && text.startsWith('\n')) text = text.slice(1);
   s.swallowLF = false;
-  if (text === "") return;
-  s.swallowLF = text.endsWith("\r");
+  if (text === '') return;
+  s.swallowLF = text.endsWith('\r');
   // \n, \r, and \r\n all terminate a line, so bare-\r progress-bar frames
   // each become their own line instead of overwriting anything
   const parts = text.split(/\r\n|[\r\n]/);
@@ -1122,14 +1100,14 @@ export function log(data: string | Uint8Array, stream = "console"): void {
     if (i > 0) {
       // a terminator sits between parts[i-1] and parts[i]
       if (s.open === null) {
-        logs.items.push({ stream, seq: ++logs.seq, time: Date.now(), line: "" });
+        logs.items.push({ stream, seq: ++logs.seq, time: Date.now(), line: '' });
       }
       s.open = null;
-      s.raw = "";
+      s.raw = '';
     }
-    if (parts[i] !== "") {
+    if (parts[i] !== '') {
       if (s.open === null) {
-        s.open = { stream, seq: ++logs.seq, time: Date.now(), line: "" };
+        s.open = { stream, seq: ++logs.seq, time: Date.now(), line: '' };
         logs.items.push(s.open);
       } else if (logs.items[logs.items.length - 1] !== s.open) {
         // an older line is growing: move it to the end of the timeline so
@@ -1156,7 +1134,7 @@ export function log(data: string | Uint8Array, stream = "console"): void {
    escape at the end of the string is dropped too; unterminated lines are
    re-sanitized from raw text as they grow, so it comes back once complete. */
 function sanitizeLine(raw: string): string {
-  let out = "";
+  let out = '';
   let col = 0;
   let i = 0;
   while (i < raw.length) {
@@ -1170,7 +1148,7 @@ function sanitizeLine(raw: string): string {
     }
     if (c === 0x09) {
       const n = 8 - (col % 8);
-      out += " ".repeat(n);
+      out += ' '.repeat(n);
       col += n;
       i++;
       continue;
@@ -1190,20 +1168,17 @@ function sanitizeLine(raw: string): string {
 // Scan the escape sequence starting at raw[i] (an ESC).  Returns its end
 // (exclusive) and whether it is an SGR sequence, or null if the sequence
 // runs off the end of the string.
-function scanEscape(
-  raw: string,
-  i: number,
-): { end: number; sgr: boolean } | null {
+function scanEscape(raw: string, i: number): { end: number; sgr: boolean } | null {
   const kind = raw[i + 1];
   if (kind === undefined) return null;
-  if (kind === "[") {
+  if (kind === '[') {
     // CSI: parameter and intermediate bytes, then one final byte 0x40-0x7e
     let j = i + 2;
     while (j < raw.length && raw.charCodeAt(j) < 0x40) j++;
     if (j >= raw.length) return null;
-    return { end: j + 1, sgr: raw[j] === "m" };
+    return { end: j + 1, sgr: raw[j] === 'm' };
   }
-  if (kind === "]") {
+  if (kind === ']') {
     // OSC: terminated by BEL or by ESC \
     let j = i + 2;
     while (j < raw.length) {
@@ -1216,7 +1191,7 @@ function scanEscape(
     }
     return null;
   }
-  if ("()#%*+".includes(kind)) {
+  if ('()#%*+'.includes(kind)) {
     // three-byte sequences (charset selection and friends)
     if (i + 2 >= raw.length) return null;
     return { end: i + 3, sgr: false };
@@ -1269,7 +1244,7 @@ export function strWidth(s: string): number {
   let i = 0;
   while (i < s.length) {
     if (s.charCodeAt(i) === 0x1b) {
-      i = s.indexOf("m", i) + 1;
+      i = s.indexOf('m', i) + 1;
       continue;
     }
     const cp = s.codePointAt(i)!;
@@ -1293,12 +1268,12 @@ export type WrapInfo = {
 function measureLine(line: string, width: number): WrapInfo {
   const w = Math.max(1, width);
   const starts: { at: number; sgr: string }[] = [];
-  let sgr = "";
+  let sgr = '';
   let col = 0;
   let i = 0;
   while (i < line.length) {
     if (line.charCodeAt(i) === 0x1b) {
-      const end = line.indexOf("m", i) + 1;
+      const end = line.indexOf('m', i) + 1;
       sgr = sgrCombine(sgr, line.slice(i, end));
       i = end;
       continue;
@@ -1322,14 +1297,14 @@ function measureLine(line: string, width: number): WrapInfo {
    color state; a sequence containing parameter 0 (or empty) is such a
    reset, and stands alone. */
 function sgrCombine(prev: string, seq: string): string {
-  const params = seq.slice(2, -1).split(";");
-  if (!params.some((p) => p === "" || Number(p) === 0)) return prev + seq;
-  if (params.every((p) => p === "" || Number(p) === 0)) return "";
+  const params = seq.slice(2, -1).split(';');
+  if (!params.some((p) => p === '' || Number(p) === 0)) return prev + seq;
+  if (params.every((p) => p === '' || Number(p) === 0)) return '';
   return seq;
 }
 
 function wrapInfo(item: StreamItem, width: number): WrapInfo {
-  if (!item.wrap || item.wrap.width !== width) {
+  if (item.wrap?.width !== width) {
     item.wrap = measureLine(item.line, width);
   }
   return item.wrap;
@@ -1339,7 +1314,7 @@ function wrapInfo(item: StreamItem, width: number): WrapInfo {
 // view: our terminal ui //
 ///////////////////////////
 
-export const RES = "\x1b[0m";
+export const RES = '\x1b[0m';
 
 export function fore(n: number): string {
   return `\x1b[38;5;${n}m`;
@@ -1387,7 +1362,7 @@ export const view = {
   scrollDelta: 0,
   markerColor: 0,
   // what was last painted, so unchanged wakeups cost nothing
-  paintedBar: "",
+  paintedBar: '',
   paintedVersion: -1,
   // force a log repaint (resize, scroll, stream toggles)
   dirty: true,
@@ -1401,7 +1376,7 @@ export const view = {
 
 // display order of log streams: devstack's own console stream, then stages
 function streamNames(): string[] {
-  return ["console", ...status.stages.map((s) => s.name)];
+  return ['console', ...status.stages.map((s) => s.name)];
 }
 
 // the render sub-advancer; parks until there is a terminal and a change
@@ -1412,14 +1387,14 @@ function advanceRender(): void {
   }
   // paint only while the terminal is in devstack mode and usably sized
   if (!view.termConfigured || view.cols < 4 || view.rows < 4) return;
-  let out = "";
+  let out = '';
   if (view.hardClear) {
     view.hardClear = false;
     // re-read the size and re-assert the screen setup: this recovers from a
     // missed resize or from a child's stray output corrupting the terminal
     view.cols = process.stdout.columns;
     view.rows = process.stdout.rows;
-    view.paintedBar = "";
+    view.paintedBar = '';
     view.dirty = true;
     out += `\x1b[2J\x1b[?25l\x1b[3;${view.rows}r`;
   }
@@ -1440,48 +1415,43 @@ function advanceRender(): void {
 function renderBar(): string {
   const cols = view.cols;
   // use kurrent colors on the status bar
-  const idle = foreHex("#ded9ff") + backHex("#631b3a");
-  const active = foreHex("#631b3a") + backHex("#ded9ff");
-  const failed = foreHex("#000000") + backHex("#d00000");
+  const idle = foreHex('#ded9ff') + backHex('#631b3a');
+  const active = foreHex('#631b3a') + backHex('#ded9ff');
+  const failed = foreHex('#000000') + backHex('#d00000');
 
-  const names = ["dead", ...status.stages.map((s) => s.name)];
+  const names = ['dead', ...status.stages.map((s) => s.name)];
   // crashed paints red; anything else not fully down (standing up, running,
   // or tearing down) paints as active
-  const colors = status.stages.map((st) =>
-    st.crashed ? failed : isFullyDown(st) ? idle : active,
-  );
+  const colors = status.stages.map((st) => (st.crashed ? failed : isFullyDown(st) ? idle : active));
   // only when nothing is running is the DEAD state highlighted
   const allDown = colors.every((c) => c === idle);
 
-  let bar1 = "state: ";
+  let bar1 = 'state: ';
   let len1 = bar1.length;
   for (let i = 0; i < names.length; i++) {
     const color = i === 0 ? (allDown ? active : idle) : colors[i - 1];
-    const binding = i === 0 ? "  (`)" : `  (${i})`;
-    const post = i === effectiveTarget() ? "< " : "  ";
+    const binding = i === 0 ? '  (`)' : `  (${i})`;
+    const post = i === effectiveTarget() ? '< ' : '  ';
     bar1 += binding + color + names[i].toUpperCase() + idle + post;
     len1 += 7 + strWidth(names[i]);
   }
-  bar1 += " ".repeat(Math.max(0, cols - len1));
+  bar1 += ' '.repeat(Math.max(0, cols - len1));
 
-  const bindings = "~!@#$%^&*(";
-  let bar2 = "logs: ";
+  const bindings = '~!@#$%^&*(';
+  let bar2 = 'logs: ';
   let len2 = bar2.length;
   const streams = streamNames();
   for (let i = 0; i < streams.length; i++) {
-    const binding = i < bindings.length ? `(${bindings[i]})` : "   ";
+    const binding = i < bindings.length ? `(${bindings[i]})` : '   ';
     const color = view.activeStreams.has(streams[i]) ? active : idle;
-    bar2 += binding + color + streams[i].toUpperCase() + idle + "    ";
+    bar2 += binding + color + streams[i].toUpperCase() + idle + '    ';
     len2 += 7 + strWidth(streams[i]);
   }
-  bar2 += " ".repeat(Math.max(0, cols - len2));
+  bar2 += ' '.repeat(Math.max(0, cols - len2));
 
   // each row is positioned explicitly, so bar1's padding never has to line
   // up exactly with the terminal width for bar2 to land on row 2
-  return (
-    place(1, 1) + idle + bar1 +
-    place(2, 1) + foreHex("#9fbbc5") + bar2 + RES
-  );
+  return place(1, 1) + idle + bar1 + place(2, 1) + foreHex('#9fbbc5') + bar2 + RES;
 }
 
 // ─── the timeline cursor: positions in logs.items, filtered by stream ───
@@ -1667,10 +1637,9 @@ function renderLogs(): string {
       const info = wrapInfo(item, width);
       const take = Math.min(info.rows - k, H - rows);
       const from = rowStart(info, k);
-      const sgr = k === 0 ? "" : info.starts[k - 1].sgr;
+      const sgr = k === 0 ? '' : info.starts[k - 1].sgr;
       const endRow = k + take;
-      const to =
-        endRow >= info.rows ? item.line.length : info.starts[endRow - 1].at;
+      const to = endRow >= info.rows ? item.line.length : info.starts[endRow - 1].at;
       segs.push(RES + sgr + item.line.slice(from, to));
       rows += take;
       k = 0;
@@ -1678,14 +1647,9 @@ function renderLogs(): string {
     }
   }
 
-  let out = place(3, 1) + "\x1b[J" + segs.join("\r\n");
+  let out = place(3, 1) + '\x1b[J' + segs.join('\r\n');
   if (view.anchor !== null) {
-    out +=
-      place(view.rows, 1) +
-      "\x1b[2K" +
-      foreHex("#ffed4e") +
-      "(scrolled; 'x' to follow)" +
-      RES;
+    out += place(view.rows, 1) + '\x1b[2K' + foreHex('#ffed4e') + "(scrolled; 'x' to follow)" + RES;
   }
   return out;
 }
@@ -1711,7 +1675,7 @@ function advanceOneshot(): void {
   const crashed = status.stages.some((s) => s.crashed);
   if (target.targetIdx !== t || crashed) {
     oneshot.failing = true;
-    process.stderr.write("devstack is failing\n");
+    process.stderr.write('devstack is failing\n');
     target.quitRequested = true;
     // HACK: we're inside advance() but we need to restart it
     schedule();
@@ -1721,7 +1685,7 @@ function advanceOneshot(): void {
   // a stage being up implies everything below it stood up first
   if (!oneshot.up && (t === 0 || status.stages[t - 1].up)) {
     oneshot.up = true;
-    process.stderr.write("devstack is up\n");
+    process.stderr.write('devstack is up\n');
   }
 }
 
@@ -1747,7 +1711,7 @@ function renderOneshot(flush = false): void {
   const out: { seq: number; text: string }[] = [];
   const emit = (item: StreamItem) => {
     // reset colors per line so unbalanced SGR can't bleed into the prefix
-    const tail = item.line.includes("\x1b") ? RES : "";
+    const tail = item.line.includes('\x1b') ? RES : '';
     out.push({ seq: item.seq, text: `${item.stream}: ${item.line}${tail}\n` });
   };
   // the unseen items are a suffix of the seq-sorted timeline
@@ -1770,7 +1734,7 @@ function renderOneshot(flush = false): void {
   }
   if (out.length === 0) return;
   out.sort((a, b) => a.seq - b.seq);
-  process.stdout.write(out.map((o) => o.text).join(""));
+  process.stdout.write(out.map((o) => o.text).join(''));
 }
 
 //////////////////
@@ -1778,12 +1742,11 @@ function renderOneshot(flush = false): void {
 //////////////////
 
 // undecoded input bytes, held until an escape sequence completes
-let inputBuf = "";
+let inputBuf = '';
 
 // feed keyboard bytes (or startupInput) through the key decoder
 export function feedInput(data: string | Uint8Array): void {
-  inputBuf +=
-    typeof data === "string" ? data : Buffer.from(data).toString("latin1");
+  inputBuf += typeof data === 'string' ? data : Buffer.from(data).toString('latin1');
   let key;
   while (inputBuf.length > 0 && (key = scanKey(inputBuf)) !== null) {
     inputBuf = inputBuf.slice(key.length);
@@ -1797,16 +1760,16 @@ export function feedInput(data: string | Uint8Array): void {
    when buf holds the start of an escape sequence that has not fully
    arrived; a lone ESC therefore dispatches nothing until more bytes come. */
 function scanKey(buf: string): string | null {
-  if (buf[0] !== "\x1b") return buf[0];
+  if (buf[0] !== '\x1b') return buf[0];
   if (buf.length < 2) return null;
-  if (buf[1] === "[") {
+  if (buf[1] === '[') {
     // CSI: parameter bytes, then one final byte in 0x40-0x7e
     let j = 2;
     while (j < buf.length && buf.charCodeAt(j) < 0x40) j++;
     if (j >= buf.length) return null;
     return buf.slice(0, j + 1);
   }
-  if (buf[1] === "O") {
+  if (buf[1] === 'O') {
     // SS3, how some terminals send arrow keys
     if (buf.length < 3) return null;
     return buf.slice(0, 3);
@@ -1828,14 +1791,14 @@ export function setTargetOrRestart(idx: number): void {
 
 function handleKey(key: string): void {
   // 0-9 and backtick: choose a target stage (or restart a crashed one)
-  const digit = "0123456789".indexOf(key);
-  if (digit >= 0 || key === "`") {
+  const digit = '0123456789'.indexOf(key);
+  if (digit >= 0 || key === '`') {
     setTargetOrRestart(Math.max(0, digit));
     return;
   }
   // shifted 0-9: toggle log streams
-  const shift = ")!@#$%^&*(".indexOf(key);
-  if (shift >= 0 || key === "~") {
+  const shift = ')!@#$%^&*('.indexOf(key);
+  if (shift >= 0 || key === '~') {
     toggleStream(Math.max(0, shift));
     return;
   }
@@ -1845,54 +1808,54 @@ function handleKey(key: string): void {
     return;
   }
   switch (key) {
-    case "\x03": // ctrl-c
-    case "q":
+    case '\x03': // ctrl-c
+    case 'q':
       requestQuit();
       return;
-    case "k":
-    case "\x1b[A": // up arrow
-    case "\x1bOA":
+    case 'k':
+    case '\x1b[A': // up arrow
+    case '\x1bOA':
       scrollBy(1);
       return;
-    case "j":
-    case "\x1b[B": // down arrow
-    case "\x1bOB":
+    case 'j':
+    case '\x1b[B': // down arrow
+    case '\x1bOB':
       scrollBy(-1);
       return;
-    case "b":
-    case "\x1b[5~": // page up
+    case 'b':
+    case '\x1b[5~': // page up
       scrollBy(pageRows());
       return;
-    case "f":
-    case "\x1b[6~": // page down
+    case 'f':
+    case '\x1b[6~': // page down
       scrollBy(-pageRows());
       return;
-    case "u":
+    case 'u':
       scrollBy(Math.ceil(pageRows() / 2));
       return;
-    case "d":
+    case 'd':
       scrollBy(-Math.ceil(pageRows() / 2));
       return;
-    case "x":
+    case 'x':
       followTail();
       return;
-    case "\x0c": // ctrl-l: redraw the screen unconditionally
+    case '\x0c': // ctrl-l: redraw the screen unconditionally
       view.hardClear = true;
       view.dirty = true;
       return;
-    case " ":
+    case ' ':
       marker();
       return;
   }
-  log(fore(9) + `"${printableKey(key)}" is not a known shortcut` + RES + "\n");
+  log(fore(9) + `"${printableKey(key)}" is not a known shortcut` + RES + '\n');
 }
 
 // control characters rendered caret-style, e.g. ESC as ^[
 function printableKey(key: string): string {
-  let out = "";
+  let out = '';
   for (const ch of key) {
     const c = ch.charCodeAt(0);
-    out += c < 0x20 ? "^" + String.fromCharCode(c + 0x40) : ch;
+    out += c < 0x20 ? '^' + String.fromCharCode(c + 0x40) : ch;
   }
   return out;
 }
@@ -1932,24 +1895,24 @@ function toggleStream(idx: number): void {
 // emit a visual separator with a timestamp, cycling through colors
 export function marker(): void {
   const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
+  const p = (n: number) => String(n).padStart(2, '0');
   const t =
     `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
     `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   const color = ((view.markerColor + 3) % 5) + 10;
   view.markerColor++;
-  log(fore(color) + `-- ${Date.now() / 1000} -- ${t} --------------` + RES + "\n");
+  log(fore(color) + `-- ${Date.now() / 1000} -- ${t} --------------` + RES + '\n');
 }
 
 export function requestQuit(): void {
   if (target.quitRequested) {
     killEverything();
     restoreTerminal();
-    console.error("devstack quit forcibly");
+    console.error('devstack quit forcibly');
     process.exit(130);
   }
   target.quitRequested = true;
-  log("quitting...\n");
+  log('quitting...\n');
 }
 
 //////////////////////////////////
@@ -1962,10 +1925,10 @@ export function requestQuit(): void {
 function initTerminal(): void {
   process.stdin.setRawMode(true);
   process.stdin.resume();
-  process.stdin.on("data", feedInput);
+  process.stdin.on('data', feedInput);
   view.cols = process.stdout.columns;
   view.rows = process.stdout.rows;
-  process.stdout.on("resize", () => {
+  process.stdout.on('resize', () => {
     view.cols = process.stdout.columns;
     view.rows = process.stdout.rows;
     process.stdout.write(`\x1b[3;${view.rows}r`);
@@ -2006,29 +1969,29 @@ type TrackedProc =
 
 const tracker = {
   // set by initStateDir(); empty disables tracking (should never happen)
-  dir: "",
+  dir: '',
   running: [] as TrackedProc[],
   // the instance lock: an EXCLUSIVE transaction held for our lifetime
   lockDb: null as DatabaseSync | null,
 };
 
 function initStateDir(): void {
-  tracker.dir = config.tempDir ?? "/tmp/devstack";
+  tracker.dir = config.tempDir ?? '/tmp/devstack';
   fs.mkdirSync(tracker.dir, { recursive: true });
 }
 
 function trackerPath(): string {
-  return path.join(tracker.dir, "running.json");
+  return path.join(tracker.dir, 'running.json');
 }
 
 // atomic write, so a crash mid-update can't corrupt the recovery data
 function trackerWrite(): void {
-  if (tracker.dir === "") return;
+  if (tracker.dir === '') return;
   try {
-    fs.writeFileSync(trackerPath() + ".tmp", JSON.stringify(tracker.running));
-    fs.renameSync(trackerPath() + ".tmp", trackerPath());
+    fs.writeFileSync(trackerPath() + '.tmp', JSON.stringify(tracker.running));
+    fs.renameSync(trackerPath() + '.tmp', trackerPath());
   } catch (err) {
-    log(fore(1) + `failed to update running.json: ${errText(err)}` + RES + "\n");
+    log(fore(1) + `failed to update running.json: ${errText(err)}` + RES + '\n');
   }
 }
 
@@ -2040,7 +2003,7 @@ function trackPid(pid: number | null, matchArgs: string, killSignal: string): vo
 
 function untrackPid(pid: number | null): void {
   if (pid === null) return;
-  tracker.running = tracker.running.filter((p) => !("pid" in p) || p.pid !== pid);
+  tracker.running = tracker.running.filter((p) => !('pid' in p) || p.pid !== pid);
   trackerWrite();
 }
 
@@ -2055,7 +2018,7 @@ function trackContainer(containerId: string, containerName: string, killSignal: 
 
 function untrackContainer(containerId: string): void {
   tracker.running = tracker.running.filter(
-    (p) => !("container_id" in p) || p.container_id !== containerId,
+    (p) => !('container_id' in p) || p.container_id !== containerId,
   );
   trackerWrite();
 }
@@ -2066,13 +2029,11 @@ function untrackContainer(containerId: string): void {
    nothing to clean up, and no race.  Any devstack implementation, in any
    language with sqlite, cooperates by honoring the same convention. */
 function acquireLock(): void {
-  tracker.lockDb = new DatabaseSync(path.join(tracker.dir, "lock.db"));
+  tracker.lockDb = new DatabaseSync(path.join(tracker.dir, 'lock.db'));
   try {
-    tracker.lockDb.exec("BEGIN EXCLUSIVE");
+    tracker.lockDb.exec('BEGIN EXCLUSIVE');
   } catch {
-    process.stderr.write(
-      `another devstack is already running for ${tracker.dir}\n`,
-    );
+    process.stderr.write(`another devstack is already running for ${tracker.dir}\n`);
     process.exit(1);
   }
 }
@@ -2084,38 +2045,31 @@ function acquireLock(): void {
 function recoverOrphans(): void {
   let old: TrackedProc[];
   try {
-    old = JSON.parse(fs.readFileSync(trackerPath(), "utf8"));
+    old = JSON.parse(fs.readFileSync(trackerPath(), 'utf8'));
   } catch {
     return; // no leftover file, or an unreadable one: nothing to recover
   }
   if (!Array.isArray(old)) return;
   // newest first, mirroring teardown order
   for (const entry of [...old].reverse()) {
-    if ("pid" in entry) recoverPid(entry);
-    else if ("container_id" in entry) recoverContainer(entry);
+    if ('pid' in entry) recoverPid(entry);
+    else if ('container_id' in entry) recoverContainer(entry);
   }
   trackerWrite(); // tracker.running is empty: the slate is clean
 }
 
-function recoverPid(entry: {
-  pid: number;
-  match_args: string;
-  kill_signal: string;
-}): void {
-  const ps = spawnSync("ps", ["-p", String(entry.pid), "-o", "command"], {
-    encoding: "utf8",
+function recoverPid(entry: { pid: number; match_args: string; kill_signal: string }): void {
+  const ps = spawnSync('ps', ['-p', String(entry.pid), '-o', 'command'], {
+    encoding: 'utf8',
   });
-  if (ps.status !== 0 || typeof ps.stdout !== "string") return; // pid is gone
+  if (ps.status !== 0 || typeof ps.stdout !== 'string') return; // pid is gone
   // skip the ps header; there is no cross-platform way to not print it
-  const lines = ps.stdout.trim().split("\n");
+  const lines = ps.stdout.trim().split('\n');
   if (lines.length < 2) return;
   const found = lines[1].trim();
   if (!found.includes(entry.match_args)) {
     // the pid was recycled by an unrelated process; better not to kill it
-    log(
-      `chose not to kill pid ${entry.pid} whose args don't match ` +
-        `'${entry.match_args}'\n`,
-    );
+    log(`chose not to kill pid ${entry.pid} whose args don't match ` + `'${entry.match_args}'\n`);
     return;
   }
   try {
@@ -2125,8 +2079,7 @@ function recoverPid(entry: {
       process.kill(entry.pid, normSignal(entry.kill_signal));
     }
     log(
-      `killed old pid ${entry.pid} running '${entry.match_args}' ` +
-        `with ${entry.kill_signal}\n`,
+      `killed old pid ${entry.pid} running '${entry.match_args}' ` + `with ${entry.kill_signal}\n`,
     );
   } catch {
     // it died between the check and the kill
@@ -2139,24 +2092,22 @@ function recoverContainer(entry: {
   kill_signal: string;
 }): void {
   const ps = spawnSync(
-    "docker",
-    ["ps", "-a", "--filter", `id=${entry.container_id}`, "--format", "{{.State}}"],
-    { encoding: "utf8" },
+    'docker',
+    ['ps', '-a', '--filter', `id=${entry.container_id}`, '--format', '{{.State}}'],
+    { encoding: 'utf8' },
   );
-  const state = (ps.stdout ?? "").trim();
-  if (ps.status !== 0 || state === "") return; // no docker, or container gone
-  if (state !== "created" && state !== "exited") {
-    spawnSync(
-      "docker",
-      ["kill", `--signal=${normSignal(entry.kill_signal)}`, entry.container_id],
-      { stdio: "ignore" },
-    );
-    spawnSync("docker", ["wait", entry.container_id], {
-      stdio: "ignore",
+  const state = (ps.stdout ?? '').trim();
+  if (ps.status !== 0 || state === '') return; // no docker, or container gone
+  if (state !== 'created' && state !== 'exited') {
+    spawnSync('docker', ['kill', `--signal=${normSignal(entry.kill_signal)}`, entry.container_id], {
+      stdio: 'ignore',
+    });
+    spawnSync('docker', ['wait', entry.container_id], {
+      stdio: 'ignore',
       timeout: 10_000,
     });
   }
-  spawnSync("docker", ["rm", entry.container_id], { stdio: "ignore" });
+  spawnSync('docker', ['rm', entry.container_id], { stdio: 'ignore' });
   log(`killed old docker container ${entry.container_name}\n`);
 }
 
@@ -2172,26 +2123,26 @@ function installProcessHandlers(): void {
     requestQuit();
     schedule();
   };
-  process.on("SIGTERM", onQuitSignal);
-  process.on("SIGINT", onQuitSignal);
+  process.on('SIGTERM', onQuitSignal);
+  process.on('SIGINT', onQuitSignal);
   // the terminal went away; tear the cluster down rather than orphan it
-  process.on("SIGHUP", onQuitSignal);
+  process.on('SIGHUP', onQuitSignal);
 
   // redraw when terminal changes
-  process.on("SIGWINCH", () => {
+  process.on('SIGWINCH', () => {
     view.hardClear = true;
     schedule();
   });
 
   // a throw from an event adapter runs outside schedule()'s try/catch, but
   // must still restore the terminal and kill the children
-  process.on("uncaughtException", (err) => panic(err));
-  process.on("unhandledRejection", (err) => panic(err));
+  process.on('uncaughtException', (err) => panic(err));
+  process.on('unhandledRejection', (err) => panic(err));
 
   // a closed output pipe (`devstack --oneshot | head`) raises EPIPE on
   // write; swallow it and let the reader's death reach us as a signal
-  process.stdout.on("error", () => {});
-  process.stderr.on("error", () => {});
+  process.stdout.on('error', () => {});
+  process.stderr.on('error', () => {});
 }
 
 ///////////////////
@@ -2202,17 +2153,17 @@ function parseArgs(argv: string[]): { targetStage?: string } {
   const out: { targetStage?: string } = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "-1" || arg === "--oneshot") {
+    if (arg === '-1' || arg === '--oneshot') {
       opts.oneshot = true;
-    } else if (arg === "--target-stage") {
+    } else if (arg === '--target-stage') {
       if (i + 1 >= argv.length) {
-        process.stderr.write("--target-stage requires a value\n");
+        process.stderr.write('--target-stage requires a value\n');
         process.exit(1);
       }
       out.targetStage = argv[++i];
-    } else if (arg.startsWith("--target-stage=")) {
-      out.targetStage = arg.slice("--target-stage=".length);
-    } else if (arg === "-h" || arg === "--help") {
+    } else if (arg.startsWith('--target-stage=')) {
+      out.targetStage = arg.slice('--target-stage='.length);
+    } else if (arg === '-h' || arg === '--help') {
       usage(process.stdout);
       process.exit(0);
     } else {
@@ -2225,34 +2176,27 @@ function parseArgs(argv: string[]): { targetStage?: string } {
 }
 
 // the fields of the two stage-config union members
-const COMMON_FIELDS = ["cmd", "pre", "post", "killSignal"];
-const DOCKER_FIELDS = ["containerName", "dockerArgs", "image"];
-const PROCESS_FIELDS = ["cwd", "env"];
+const COMMON_FIELDS = ['cmd', 'pre', 'post', 'killSignal'];
+const DOCKER_FIELDS = ['containerName', 'dockerArgs', 'image'];
+const PROCESS_FIELDS = ['cwd', 'env'];
 
 function isStringArray(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every((x) => typeof x === "string");
+  return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
 // a Step, or an array of Steps (the shapes toSteps() accepts)
 function isStepish(v: unknown): boolean {
-  return (
-    typeof v === "function" ||
-    (Array.isArray(v) && v.every((x) => typeof x === "function"))
-  );
+  return typeof v === 'function' || (Array.isArray(v) && v.every((x) => typeof x === 'function'));
 }
 
 /* Field-level stage validation, since configs run type-stripped (`node
    devstack.mts`) and never meet tsc.  Any docker-only field commits the
    stage to the docker side of the union, so an `image` with a forgotten
    `containerName` errors here instead of running as a process stage. */
-function validateStage(
-  name: string,
-  stage: ProcessStage | DockerStage,
-  errors: string[],
-): void {
+function validateStage(name: string, stage: ProcessStage | DockerStage, errors: string[]): void {
   const bad = (msg: string) => errors.push(`stage ${name}: ${msg}`);
-  if (typeof stage !== "object" || stage === null) {
-    bad("must be an object");
+  if (typeof stage !== 'object' || stage === null) {
+    bad('must be an object');
     return;
   }
   const s = stage as Record<string, unknown>;
@@ -2270,52 +2214,50 @@ function validateStage(
   }
 
   if (s.pre !== undefined && !isStepish(s.pre)) {
-    bad("pre must be a Step function or an array of Step functions");
+    bad('pre must be a Step function or an array of Step functions');
   }
   if (s.post !== undefined && !isStepish(s.post)) {
-    bad("post must be a Step function or an array of Step functions");
+    bad('post must be a Step function or an array of Step functions');
   }
-  if (s.killSignal !== undefined && typeof s.killSignal !== "string") {
-    bad("killSignal must be a string");
+  if (s.killSignal !== undefined && typeof s.killSignal !== 'string') {
+    bad('killSignal must be a string');
   }
 
   if (docker) {
     if (s.containerName === undefined) {
       bad(`"${mark}" makes this a docker stage, but containerName is missing`);
-    } else if (typeof s.containerName !== "string" || s.containerName === "") {
-      bad("containerName must be a non-empty string");
+    } else if (typeof s.containerName !== 'string' || s.containerName === '') {
+      bad('containerName must be a non-empty string');
     }
     if (s.image === undefined) {
       bad(`"${mark}" makes this a docker stage, but image is missing`);
-    } else if (typeof s.image !== "string" || s.image === "") {
-      bad("image must be a non-empty string");
+    } else if (typeof s.image !== 'string' || s.image === '') {
+      bad('image must be a non-empty string');
     }
     if (s.dockerArgs !== undefined && !isStringArray(s.dockerArgs)) {
-      bad("dockerArgs must be an array of strings");
+      bad('dockerArgs must be an array of strings');
     }
     if (s.cmd !== undefined && !isStringArray(s.cmd)) {
-      bad("cmd on a docker stage must be an array of strings");
+      bad('cmd on a docker stage must be an array of strings');
     }
     return;
   }
 
   const cmdOk =
-    typeof s.cmd === "string"
-      ? s.cmd.trim() !== ""
-      : isStringArray(s.cmd) && s.cmd.length > 0;
+    typeof s.cmd === 'string' ? s.cmd.trim() !== '' : isStringArray(s.cmd) && s.cmd.length > 0;
   if (!cmdOk) {
-    bad("cmd must be a non-empty string or a non-empty array of strings");
+    bad('cmd must be a non-empty string or a non-empty array of strings');
   }
-  if (s.cwd !== undefined && typeof s.cwd !== "string") {
-    bad("cwd must be a string");
+  if (s.cwd !== undefined && typeof s.cwd !== 'string') {
+    bad('cwd must be a string');
   }
   if (
     s.env !== undefined &&
-    (typeof s.env !== "object" ||
+    (typeof s.env !== 'object' ||
       s.env === null ||
-      Object.values(s.env).some((v) => typeof v !== "string"))
+      Object.values(s.env).some((v) => typeof v !== 'string'))
   ) {
-    bad("env must be an object with string values");
+    bad('env must be an object with string values');
   }
 }
 
@@ -2323,23 +2265,23 @@ function validateConfig(cfg: Config): string[] {
   const errors: string[] = [];
   const names = Object.keys(cfg.stages);
   if (names.length === 0) {
-    errors.push("config.stages is empty");
+    errors.push('config.stages is empty');
   }
   if (names.length > 9) {
-    errors.push("at most 9 stages are supported (stage keys are 1-9)");
+    errors.push('at most 9 stages are supported (stage keys are 1-9)');
   }
   for (const name of names) {
     if (/^\d+$/.test(name)) {
       errors.push(
         `stage name "${name}" is all digits; JS enumerates such keys ` +
-          "numerically-first, breaking the boot order",
+          'numerically-first, breaking the boot order',
       );
     }
-    if (name === "console" || name === "dead") {
+    if (name === 'console' || name === 'dead') {
       errors.push(`stage name "${name}" is reserved`);
     }
     // stage names name log files in tempDir
-    if (/[/\\\0]/.test(name) || name.startsWith(".")) {
+    if (/[/\\\0]/.test(name) || name.startsWith('.')) {
       errors.push(`stage name "${name}" is not a safe file name`);
     }
     validateStage(name, cfg.stages[name], errors);
@@ -2347,10 +2289,8 @@ function validateConfig(cfg: Config): string[] {
   for (const key of Object.keys(cfg.commands ?? {})) {
     if ([...key].length !== 1) {
       errors.push(`command hotkey "${key}" must be a single character`);
-    } else if ("0123456789`~!@#$%^&*()".includes(key)) {
-      errors.push(
-        `command hotkey "${key}" is shadowed by the stage/stream keys`,
-      );
+    } else if ('0123456789`~!@#$%^&*()'.includes(key)) {
+      errors.push(`command hotkey "${key}" is shadowed by the stage/stream keys`);
     }
   }
   return errors;
@@ -2372,7 +2312,7 @@ function newStageState(name: string, cfg: ProcessStage | DockerStage): StageStat
     postStarted: false,
     up: false,
     crashed: false,
-    containerId: "",
+    containerId: '',
     containerStarted: false,
     wantDown: false,
     killSent: false,
@@ -2384,7 +2324,7 @@ function newStageState(name: string, cfg: ProcessStage | DockerStage): StageStat
 
 // resolve a --target-stage value to a stage index; exits on nonsense
 function resolveTargetStage(value: string): number {
-  if (value === "dead") return 0;
+  if (value === 'dead') return 0;
   const byName = status.stages.findIndex((st) => st.name === value);
   if (byName >= 0) return byName + 1;
   if (/^\d+$/.test(value)) {
@@ -2393,7 +2333,7 @@ function resolveTargetStage(value: string): number {
   }
   process.stderr.write(
     `bad --target-stage "${value}"; expected 'dead', a stage name ` +
-      `(${status.stages.map((s) => s.name).join(", ")}), or an index\n`,
+      `(${status.stages.map((s) => s.name).join(', ')}), or an index\n`,
   );
   process.exit(1);
 }
@@ -2435,9 +2375,7 @@ export function main(userConfig: Config, options?: MainOptions): void {
     }
 
     target.targetIdx =
-      targetStage !== undefined
-        ? resolveTargetStage(targetStage)
-        : status.stages.length;
+      targetStage !== undefined ? resolveTargetStage(targetStage) : status.stages.length;
 
     // the TUI needs a terminal on both ends; otherwise run headless
     if (!process.stdout.isTTY || !process.stdin.isTTY) {
@@ -2447,6 +2385,5 @@ export function main(userConfig: Config, options?: MainOptions): void {
     if (!opts.oneshot) initTerminal();
     if (config.startupInput) feedInput(config.startupInput);
     schedule();
-
   });
 }

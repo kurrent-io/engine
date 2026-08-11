@@ -4,36 +4,36 @@
  */
 
 import {
+  CheckJsonType,
+  CheckLength,
+  CheckLiteral,
+  Denter,
+  GetField,
+  GetIndex,
+  HasField,
   KArray,
   KBool,
   KDate,
+  KFramework,
   KInt,
   KJson,
   KLiteral,
   KNull,
   KObject,
+  KQueries,
+  KQuery,
+  KStore,
   KString,
   KStruct,
   KTuple,
   KType,
+  KTypeRegistry,
   KUnion,
-  CheckJsonType,
-  CheckLength,
-  CheckLiteral,
-  Denter,
-  KFramework,
-  GetField,
-  GetIndex,
-  HasField,
   LoweredProgram,
   Match,
   Solution,
-  KQueries,
-  KQuery,
-  KStore,
-  KTypeRegistry,
   solveUnion,
-} from "@kurrent/typespec-engine";
+} from '@kurrent/typespec-engine';
 
 type Annos = Map<KType, string>;
 /** a decoder maps a value expression to a decoding expression; null is the identity decoder */
@@ -43,7 +43,7 @@ type Decoders = Map<KType, Decoder>;
 type Checker = (val: string, path: string) => string;
 type Checkers = Map<KType, Checker>;
 
-const NOOP: Checker = () => "";
+const NOOP: Checker = () => '';
 
 function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
   const visit = (t: KType): void => {
@@ -51,42 +51,48 @@ function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
     if (annos.has(t)) return;
     // handle builtin types
     const builtin =
-      t instanceof KDate ? "Date"
-      : t instanceof KString ? "string"
-      : t instanceof KInt ? "number"
-      : t instanceof KBool ? "boolean"
-      : t instanceof KJson ? "unknown"
-      : t instanceof KNull ? "null"
-      : null;
+      t instanceof KDate
+        ? 'Date'
+        : t instanceof KString
+          ? 'string'
+          : t instanceof KInt
+            ? 'number'
+            : t instanceof KBool
+              ? 'boolean'
+              : t instanceof KJson
+                ? 'unknown'
+                : t instanceof KNull
+                  ? 'null'
+                  : null;
     if (builtin !== null) {
       annos.set(t, builtin);
       return;
     }
     // handle literals, which never need a type definition
     if (t instanceof KLiteral) {
-      if (typeof t.value === "string") annos.set(t, `"${t.value}"`);
-      else if (typeof t.value === "boolean") annos.set(t, t.value ? "true" : "false");
+      if (typeof t.value === 'string') annos.set(t, `"${t.value}"`);
+      else if (typeof t.value === 'boolean') annos.set(t, t.value ? 'true' : 'false');
       else annos.set(t, String(t.value));
       return;
     }
     let anno: string;
     if (t instanceof KArray) {
       visit(t.itemType);
-      anno = annos.get(t.itemType)! + "[]";
+      anno = annos.get(t.itemType)! + '[]';
     } else if (t instanceof KTuple) {
       for (const it of t.itemTypes) visit(it);
-      anno = "[" + t.itemTypes.map((it) => annos.get(it)!).join(", ") + "]";
+      anno = '[' + t.itemTypes.map((it) => annos.get(it)!).join(', ') + ']';
     } else if (t instanceof KUnion) {
       for (const ut of t.types) visit(ut);
-      anno = t.types.map((ut) => annos.get(ut)!).join(" | ");
+      anno = t.types.map((ut) => annos.get(ut)!).join(' | ');
     } else if (t instanceof KStruct) {
       for (const ft of t.fields.values()) visit(ft);
       const mkfield = (k: string, v: KType) =>
-        k + (t.maybes.has(k) ? "?" : "") + ": " + annos.get(v)!;
-      anno = "{" + [...t.fields].map(([k, v]) => mkfield(k, v)).join(", ") + "}";
+        k + (t.maybes.has(k) ? '?' : '') + ': ' + annos.get(v)!;
+      anno = '{' + [...t.fields].map(([k, v]) => mkfield(k, v)).join(', ') + '}';
     } else if (t instanceof KObject) {
       visit(t.valueType);
-      anno = "Record<string, " + annos.get(t.valueType)! + ">";
+      anno = 'Record<string, ' + annos.get(t.valueType)! + '>';
     } else {
       throw new Error(`unhandled type in generateAnnotations: ${t.constructor.name}`);
     }
@@ -102,7 +108,7 @@ function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
 }
 
 function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void {
-  d.print("let x = val;\n");
+  d.print('let x = val;\n');
 
   // `x` holds the object currently being inspected; only GetIndex descends it (into an array
   // element).  `subj` is the expression the enclosing switch tests — `x` itself, or a field of it
@@ -112,7 +118,7 @@ function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void
   const visit = (solution: Solution, subj: string): void => {
     if (solution instanceof Match) {
       const decoder = decoders.get(solution.typ) ?? null;
-      d.print("return " + (decoder === null ? "val" : decoder("val")) + ";\n");
+      d.print('return ' + (decoder === null ? 'val' : decoder('val')) + ';\n');
     } else if (solution instanceof CheckJsonType) {
       if (solution.options.size === 1) {
         visit(solution.options.values().next().value!, subj);
@@ -123,76 +129,79 @@ function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void
       // - typeof(null) = "object"
       // so we use a custom helper function specific to handling decoded json
       d.print(`switch(json_typeof(${subj})){\n`);
-      d.indent("  ");
+      d.indent('  ');
       for (const [jtyp, subsln] of solution.options) {
         d.print(`case "${jtyp}":\n`);
-        d.indent("  ");
-        visit(subsln, "x");
+        d.indent('  ');
+        visit(subsln, 'x');
         d.dedent();
       }
+      d.print(`default: throw new Error(\`unexpected json type: \${json_typeof(${subj})}\`);\n`);
       d.dedent();
-      d.print("}\n");
+      d.print('}\n');
     } else if (solution instanceof CheckLiteral) {
       if (solution.options.size === 1) {
         visit(solution.options.values().next().value!, subj);
         return;
       }
       d.print(`switch(${subj}){\n`);
-      d.indent("  ");
+      d.indent('  ');
       for (const [lit, subsln] of solution.options) {
-        if (typeof lit === "string") {
+        if (typeof lit === 'string') {
           d.print(`case "${lit}":\n`);
         } else {
           d.print(`case ${lit}:\n`);
         }
-        d.indent("  ");
-        visit(subsln, "x");
+        d.indent('  ');
+        visit(subsln, 'x');
         d.dedent();
       }
-      d.print("default: throw new Error(`unexpected value: ${val}`);\n");
+      d.print('default: throw new Error(`unexpected value: ${val}`);\n');
       d.dedent();
-      d.print("}\n");
+      d.print('}\n');
     } else if (solution instanceof CheckLength) {
       if (solution.options.size === 1 && solution.default === null) {
         visit(solution.options.values().next().value!, subj);
         return;
       }
       d.print(`switch(${subj}.length){\n`);
-      d.indent("  ");
+      d.indent('  ');
       for (const [length, subsln] of solution.options) {
         d.print(`case ${length}:\n`);
-        d.indent("  ");
-        visit(subsln, "x");
+        d.indent('  ');
+        visit(subsln, 'x');
         d.dedent();
       }
       if (solution.default !== null) {
         d.print(`default:\n`);
-        d.indent("  ");
-        visit(solution.default, "x");
+        d.indent('  ');
+        visit(solution.default, 'x');
         d.dedent();
+      } else {
+        d.print(`default: throw new Error(\`unexpected length: \${${subj}.length}\`);\n`);
       }
       d.dedent();
-      d.print("}\n");
+      d.print('}\n');
     } else if (solution instanceof GetIndex) {
       d.print(`x = ${subj}[${solution.i}];\n`);
-      visit(solution.solution, "x");
+      visit(solution.solution, 'x');
     } else if (solution instanceof GetField) {
       visit(solution.solution, `${subj}.${solution.key}`);
     } else if (solution instanceof HasField) {
       for (const [field, subsln] of solution.solutions) {
         d.print(`if ("${field}" in ${subj}) {\n`);
-        d.indent("  ");
-        visit(subsln, "x");
+        d.indent('  ');
+        visit(subsln, 'x');
         d.dedent();
-        d.print("}\n");
+        d.print('}\n');
       }
-      d.print("throw new Error(`no matching field: ${JSON.stringify(val)}`);\n");
+      d.print('throw new Error(`no matching field: ${JSON.stringify(val)}`);\n');
     } else {
       throw new Error(`unrecognized solution type: ${(solution as Solution).constructor.name}`);
     }
   };
 
-  visit(solution, "x");
+  visit(solution, 'x');
 }
 
 function generateDecoders(
@@ -207,8 +216,12 @@ function generateDecoders(
     if (decoders.has(t)) return;
 
     if (
-      t instanceof KString || t instanceof KInt || t instanceof KBool ||
-      t instanceof KNull || t instanceof KLiteral || t instanceof KJson
+      t instanceof KString ||
+      t instanceof KInt ||
+      t instanceof KBool ||
+      t instanceof KNull ||
+      t instanceof KLiteral ||
+      t instanceof KJson
     ) {
       decoders.set(t, null);
       // builtin types and their aliases need no Decode{name}() function
@@ -235,7 +248,7 @@ function generateDecoders(
           anon.n += 1;
         }
         d.print(`\nfunction decode${name}(val: any): ${annos.get(t)} {\n`);
-        d.indent("  ");
+        d.indent('  ');
         decodeSolution(d, decoders, solution);
         d.dedent();
         d.print(`}\n`);
@@ -248,8 +261,8 @@ function generateDecoders(
       if (itemDecoder === null) {
         decoder = null;
       } else {
-        const decodeItemX = itemDecoder("x");
-        decoder = (val) => `${val}.map((x) => ${decodeItemX})`;
+        const decodeItemX = itemDecoder('x');
+        decoder = (val) => `${val}.map((x: any) => ${decodeItemX})`;
       }
     } else if (t instanceof KTuple) {
       for (const it of t.itemTypes) visit(it);
@@ -257,14 +270,14 @@ function generateDecoders(
         decoder = null;
       } else {
         decoder = (val) =>
-          "[" +
+          '[' +
           t.itemTypes
             .map((it, i) => {
               const itd = decoders.get(it);
               return itd === null ? `${val}[${i}]` : itd!(`${val}[${i}]`);
             })
-            .join(", ") +
-          "]";
+            .join(', ') +
+          ']';
       }
     } else if (t instanceof KStruct) {
       for (const ft of t.fields.values()) visit(ft);
@@ -274,21 +287,21 @@ function generateDecoders(
       } else if ([...t.maybes.values()].every((ft) => decoders.get(ft) === null)) {
         // all maybe decoders are identity; can be inlined with spread operator
         decoder = (val) =>
-          "{ " +
+          '{ ' +
           [
             `...${val}`,
             ...[...t.always]
               .filter(([, ft]) => decoders.get(ft) !== null)
-              .map(([fn, ft]) => fn + ": " + decoders.get(ft)!(`${val}.${fn}`)),
-          ].join(", ") +
-          " }";
+              .map(([fn, ft]) => fn + ': ' + decoders.get(ft)!(`${val}.${fn}`)),
+          ].join(', ') +
+          ' }';
       } else {
         // non-identity maybes are present; inlining not possible
         const n = anon.n;
         anon.n += 1;
         d.print(`\nfunction decodeAnon${n}(val: any): ${annos.get(t)} {\n`);
-        d.indent("  ");
-        d.print("const out = { ...val };\n");
+        d.indent('  ');
+        d.print('const out = { ...val };\n');
         for (const [fn, ft] of t.fields) {
           const fd = decoders.get(ft)!;
           if (fd === null) continue;
@@ -314,8 +327,10 @@ function generateDecoders(
         const n = anon.n;
         anon.n += 1;
         d.print(`\nfunction decodeAnon${n}(val: any): ${annos.get(t)} {\n`);
-        d.indent("  ");
-        d.print(`return Object.fromEntries(Object.entries(val).map(([k, v]) => [k, ${vd("v")}])) as ${annos.get(t)};\n`);
+        d.indent('  ');
+        d.print(
+          `return Object.fromEntries(Object.entries(val).map(([k, v]) => [k, ${vd('v')}])) as ${annos.get(t)};\n`,
+        );
         d.dedent();
         d.print(`}\n`);
         decoder = (val) => `decodeAnon${n}(${val})`;
@@ -327,10 +342,10 @@ function generateDecoders(
     // either define a named decoder or inline it
     if (t.name) {
       // we always export a named decoder...
-      const decodeVal = decoder === null ? "val" : decoder("val");
+      const decodeVal = decoder === null ? 'val' : decoder('val');
       d.print(`\nexport function Decode${t.name}(val: any): ${annos.get(t)} {\n`);
       d.print(`  return ${decodeVal} as ${annos.get(t)};\n`);
-      d.print("}\n");
+      d.print('}\n');
       // ... but if the decoder is the identity_decoder, we don't use it ourselves
       if (decoder === null) {
         decoders.set(t, null);
@@ -351,12 +366,18 @@ function generateDecoders(
 /** an expression testing that `subj` is of the given json type */
 function jsonTypeCond(jtyp: string, subj: string): string {
   switch (jtyp) {
-    case "null": return `${subj} === null`;
-    case "string": return `typeof ${subj} === "string"`;
-    case "boolean": return `typeof ${subj} === "boolean"`;
-    case "int": return `Number.isInteger(${subj})`;
-    case "object": return `json_typeof(${subj}) === "object"`;
-    case "array": return `Array.isArray(${subj})`;
+    case 'null':
+      return `${subj} === null`;
+    case 'string':
+      return `typeof ${subj} === "string"`;
+    case 'boolean':
+      return `typeof ${subj} === "boolean"`;
+    case 'int':
+      return `Number.isInteger(${subj})`;
+    case 'object':
+      return `json_typeof(${subj}) === "object"`;
+    case 'array':
+      return `Array.isArray(${subj})`;
     default:
       throw new Error(`json type not checkable in a union: ${jtyp}`);
   }
@@ -365,9 +386,9 @@ function jsonTypeCond(jtyp: string, subj: string): string {
 const TIMESTAMP_RE = String.raw`/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/`;
 
 function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void {
-  d.print("const problems: string[] = [];\n");
-  d.print("const x0 = val;\n");
-  d.print("const xpath0 = path;\n");
+  d.print('const problems: string[] = [];\n');
+  d.print('const x0 = val;\n');
+  d.print('const xpath0 = path;\n');
 
   // `obj` names the value/path currently being navigated; `subj` names the value/path the
   // enclosing check tests.  GetField mints a fresh, uniquely-numbered subject variable from `obj`
@@ -383,38 +404,45 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
     const [objVar, objPath] = obj;
     const [subjVar, subjPath] = subj;
     if (solution instanceof Match) {
-      d.print(checkers.get(solution.typ)!("val", "path"));
-      d.print("return problems;\n");
+      d.print(checkers.get(solution.typ)!('val', 'path'));
+      d.print('return problems;\n');
     } else if (solution instanceof CheckJsonType) {
       for (const [jtyp, subsln] of solution.options) {
         d.print(`if (${jsonTypeCond(jtyp, subjVar)}) {\n`);
-        d.indent("  ");
+        d.indent('  ');
         visit(subsln, obj, obj);
         d.dedent();
-        d.print("}\n");
+        d.print('}\n');
       }
-      d.print(`problems.push(${subjPath} + ": type " + json_typeof(${subjVar}) + " not allowed here");\n`);
-      d.print("return problems;\n");
+      d.print(
+        `problems.push(${subjPath} + ": type " + json_typeof(${subjVar}) + " not allowed here");\n`,
+      );
+      d.print('return problems;\n');
     } else if (solution instanceof CheckLiteral) {
       for (const [lit, subsln] of solution.options) {
-        const jslit = typeof lit === "string" ? `"${lit}"` : String(lit);
+        const jslit = typeof lit === 'string' ? `"${lit}"` : String(lit);
         d.print(`if (${subjVar} === ${jslit}) {\n`);
-        d.indent("  ");
+        d.indent('  ');
         visit(subsln, obj, obj);
         d.dedent();
-        d.print("}\n");
+        d.print('}\n');
       }
       d.print(`problems.push(${subjPath} + ": unexpected value");\n`);
-      d.print("return problems;\n");
+      d.print('return problems;\n');
     } else if (solution instanceof CheckLength) {
       for (const [length, subsln] of solution.options) {
         d.print(`if (${subjVar}.length === ${length}) {\n`);
-        d.indent("  ");
+        d.indent('  ');
         visit(subsln, obj, obj);
         d.dedent();
-        d.print("}\n");
+        d.print('}\n');
       }
-      if (solution.default !== null) visit(solution.default, obj, obj);
+      if (solution.default !== null) {
+        visit(solution.default, obj, obj);
+      } else {
+        d.print(`problems.push(${subjPath} + ": unexpected length");\n`);
+        d.print('return problems;\n');
+      }
     } else if (solution instanceof GetIndex) {
       const i = counter++;
       d.print(`const x${i} = ${objVar}[${solution.i}];\n`);
@@ -433,18 +461,18 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
     } else if (solution instanceof HasField) {
       for (const [field, subsln] of solution.solutions) {
         d.print(`if ("${field}" in ${objVar}) {\n`);
-        d.indent("  ");
+        d.indent('  ');
         visit(subsln, obj, obj);
         d.dedent();
-        d.print("}\n");
+        d.print('}\n');
       }
       d.print(`problems.push(${subjPath} + ": no matching keys found");\n`);
-      d.print("return problems;\n");
+      d.print('return problems;\n');
     } else {
       throw new Error(`unrecognized solution type: ${(solution as Solution).constructor.name}`);
     }
   };
-  visit(solution, ["x0", "xpath0"], ["x0", "xpath0"]);
+  visit(solution, ['x0', 'xpath0'], ['x0', 'xpath0']);
 }
 
 function generateCheckers(
@@ -463,52 +491,73 @@ function generateCheckers(
       return;
     }
     if (t instanceof KString) {
-      checkers.set(t, (val, path) =>
-        `if (typeof ${val} !== "string") {\n` +
-        `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not string");\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (val, path) =>
+          `if (typeof ${val} !== "string") {\n` +
+          `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not string");\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KInt) {
-      checkers.set(t, (val, path) =>
-        `if (!Number.isInteger(${val})) {\n` +
-        `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not int");\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (val, path) =>
+          `if (!Number.isInteger(${val})) {\n` +
+          `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not int");\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KBool) {
-      checkers.set(t, (val, path) =>
-        `if (typeof ${val} !== "boolean") {\n` +
-        `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not bool");\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (val, path) =>
+          `if (typeof ${val} !== "boolean") {\n` +
+          `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not bool");\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KNull || (t instanceof KLiteral && t.value === null)) {
-      checkers.set(t, (val, path) =>
-        `if (${val} !== null) {\n` +
-        `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not null");\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (val, path) =>
+          `if (${val} !== null) {\n` +
+          `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not null");\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KDate) {
-      checkers.set(t, (val, path) =>
-        `if (typeof ${val} !== "string" || !${TIMESTAMP_RE}.test(${val}) || isNaN(Date.parse(${val}))) {\n` +
-        `  problems.push(${path} + ": invalid timestamp");\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (val, path) =>
+          `if (typeof ${val} !== "string" || !${TIMESTAMP_RE}.test(${val}) || isNaN(Date.parse(${val}))) {\n` +
+          `  problems.push(${path} + ": invalid timestamp");\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KLiteral) {
-      if (typeof t.value === "string") {
-        checkers.set(t, (val, path) =>
-          `if (${val} !== "${t.value}") {\n` +
-          `  problems.push(${path} + ': is not "${t.value}"');\n` +
-          `}\n`);
+      if (typeof t.value === 'string') {
+        checkers.set(
+          t,
+          (val, path) =>
+            `if (${val} !== "${t.value}") {\n` +
+            `  problems.push(${path} + ': is not "${t.value}"');\n` +
+            `}\n`,
+        );
       } else {
         const jslit = String(t.value);
-        checkers.set(t, (val, path) =>
-          `if (${val} !== ${jslit}) {\n` +
-          `  problems.push(${path} + ": is not ${jslit}");\n` +
-          `}\n`);
+        checkers.set(
+          t,
+          (val, path) =>
+            `if (${val} !== ${jslit}) {\n` +
+            `  problems.push(${path} + ": is not ${jslit}");\n` +
+            `}\n`,
+        );
       }
       return;
     }
@@ -518,34 +567,38 @@ function generateCheckers(
       for (const ut of t.types) visit(ut);
       const solution = solveUnion(registry, t.types);
       const name = t.name ? `check${t.name}` : `checkAnon${anon.n++}`;
-      d.print(`\n${t.name ? "export " : ""}function ${name}(val: any, path: string = "<root>"): string[] {\n`);
-      d.indent("  ");
+      d.print(
+        `\n${t.name ? 'export ' : ''}function ${name}(val: any, path: string = "<root>"): string[] {\n`,
+      );
+      d.indent('  ');
       checkSolution(d, checkers, solution);
       d.dedent();
-      d.print("}\n");
+      d.print('}\n');
       checker = (val, path) => `problems.push(...${name}(${val}, ${path}));\n`;
     } else if (t instanceof KArray) {
       visit(t.itemType);
       checker = (val, path) => {
         const dd = new Denter();
         dd.print(`if (!Array.isArray(${val})) {\n`);
-        dd.print(`  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json array");\n`);
+        dd.print(
+          `  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json array");\n`,
+        );
         if (checkers.get(t.itemType) === NOOP) {
-          dd.print("}\n");
+          dd.print('}\n');
           return dd.getvalue();
         }
-        dd.print("} else {\n");
-        dd.indent("  ");
+        dd.print('} else {\n');
+        dd.indent('  ');
         const iv = `i${loop.n++}`;
         dd.print(`for (let ${iv} = 0; ${iv} < ${val}.length; ${iv}++) {\n`);
-        dd.indent("  ");
+        dd.indent('  ');
         // index the element and build its path off the original expressions, so nothing is
         // clobbered when this checker is inlined inside another
         dd.print(checkers.get(t.itemType)!(`(${val})[${iv}]`, `${path} + "[" + ${iv} + "]"`));
         dd.dedent();
-        dd.print("}\n");
+        dd.print('}\n');
         dd.dedent();
-        dd.print("}\n");
+        dd.print('}\n');
         return dd.getvalue();
       };
     } else if (t instanceof KTuple) {
@@ -554,7 +607,9 @@ function generateCheckers(
         const dd = new Denter();
         const n = t.itemTypes.length;
         dd.print(`if (!Array.isArray(${val})) {\n`);
-        dd.print(`  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json array");\n`);
+        dd.print(
+          `  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json array");\n`,
+        );
         dd.print(`} else if (${val}.length !== ${n}) {\n`);
         dd.print(`  problems.push(${path} + ": expected ${n} items, not " + ${val}.length);\n`);
         // index each element off the original value/path expressions, so nothing is clobbered
@@ -563,12 +618,12 @@ function generateCheckers(
           .map((it, i) => checkers.get(it)!(`${val}[${i}]`, `${path} + "[${i}]"`))
           .filter((p) => p);
         if (parts.length) {
-          dd.print("} else {\n");
-          dd.indent("  ");
+          dd.print('} else {\n');
+          dd.indent('  ');
           for (const p of parts) dd.print(p);
           dd.dedent();
         }
-        dd.print("}\n");
+        dd.print('}\n');
         return dd.getvalue();
       };
     } else if (t instanceof KStruct) {
@@ -582,56 +637,60 @@ function generateCheckers(
         keys = `_Anon${n}_ALLOWED_KEYS`;
         func = `checkAnon${n}`;
       }
-      const keyset = "[" + [...t.fields.keys()].map((fn) => `"${fn}"`).join(", ") + "]";
+      const keyset = '[' + [...t.fields.keys()].map((fn) => `"${fn}"`).join(', ') + ']';
       d.print(`\nconst ${keys} = new Set(${keyset});\n`);
-      d.print(`\n${t.name ? "export " : ""}function ${func}(val: any, path: string = "<root>"): string[] {\n`);
-      d.indent("  ");
+      d.print(
+        `\n${t.name ? 'export ' : ''}function ${func}(val: any, path: string = "<root>"): string[] {\n`,
+      );
+      d.indent('  ');
       d.print(`if (json_typeof(val) !== "object") {\n`);
       d.print(`  return [path + ": is a " + json_typeof(val) + ", not json object"];\n`);
-      d.print("}\n");
-      d.print("const problems: string[] = [];\n");
+      d.print('}\n');
+      d.print('const problems: string[] = [];\n');
       for (const [fn, ft] of t.fields) {
         d.print(`if ("${fn}" in val) {\n`);
-        d.indent("  ");
+        d.indent('  ');
         d.print(`const x = val["${fn}"];\n`);
         d.print(`const xpath = path + ".${fn}";\n`);
-        d.print(checkers.get(ft)!("x", "xpath"));
+        d.print(checkers.get(ft)!('x', 'xpath'));
         d.dedent();
         if (!t.maybes.has(fn)) {
-          d.print("} else {\n");
+          d.print('} else {\n');
           d.print(`  problems.push(path + ": missing required key ${fn}");\n`);
         }
-        d.print("}\n");
+        d.print('}\n');
       }
       d.print(`if (Object.keys(val).some((k) => !${keys}.has(k))) {\n`);
       d.print(`  problems.push(path + ": contains extra keys");\n`);
-      d.print("}\n");
-      d.print("return problems;\n");
+      d.print('}\n');
+      d.print('return problems;\n');
       d.dedent();
-      d.print("}\n");
+      d.print('}\n');
       checker = (val, path) => `problems.push(...${func}(${val}, ${path}));\n`;
     } else if (t instanceof KObject) {
       visit(t.valueType);
       checker = (val, path) => {
         const dd = new Denter();
         dd.print(`if (json_typeof(${val}) !== "object") {\n`);
-        dd.print(`  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json object");\n`);
+        dd.print(
+          `  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json object");\n`,
+        );
         if (checkers.get(t.valueType) === NOOP) {
-          dd.print("}\n");
+          dd.print('}\n');
           return dd.getvalue();
         }
-        dd.print("} else {\n");
-        dd.indent("  ");
+        dd.print('} else {\n');
+        dd.indent('  ');
         const kv = `k${loop.n++}`;
         dd.print(`for (const ${kv} of Object.keys(${val})) {\n`);
-        dd.indent("  ");
+        dd.indent('  ');
         // index the value and build its path off the original expressions, so nothing is
         // clobbered when this checker is inlined inside another
         dd.print(checkers.get(t.valueType)!(`(${val})[${kv}]`, `${path} + "." + ${kv}`));
         dd.dedent();
-        dd.print("}\n");
+        dd.print('}\n');
         dd.dedent();
-        dd.print("}\n");
+        dd.print('}\n');
         return dd.getvalue();
       };
     } else {
@@ -641,12 +700,12 @@ function generateCheckers(
     // named types without a function already defined get a wrapper now
     if (t.name && !(t instanceof KUnion) && !(t instanceof KStruct)) {
       d.print(`\nexport function check${t.name}(val: any, path: string = "<root>"): string[] {\n`);
-      d.indent("  ");
-      d.print("const problems: string[] = [];\n");
-      d.print(checker("val", "path"));
-      d.print("return problems;\n");
+      d.indent('  ');
+      d.print('const problems: string[] = [];\n');
+      d.print(checker('val', 'path'));
+      d.print('return problems;\n');
       d.dedent();
-      d.print("}\n");
+      d.print('}\n');
     }
     checkers.set(t, checker);
   };
@@ -654,51 +713,51 @@ function generateCheckers(
 }
 
 function generateStorePrereqs(d: Denter): void {
-  d.print("\n");
-  d.print("function *queryGet<T>(key: string): QueryGenerator<T> {\n");
+  d.print('\n');
+  d.print('function *queryGet<T>(key: string): QueryGenerator<T> {\n');
   d.print("  const ans = yield {'store': {[key]: true}};\n");
-  d.print("  const sv = ans.store[key];\n");
+  d.print('  const sv = ans.store[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
-  d.print("  return readOnly(sv.value) as T\n");
-  d.print("}\n");
-  d.print("\n");
-  d.print("function *reducerOld<T>(key: string): Reducer<T> {\n");
+  d.print('  return readOnly(sv.value) as T\n');
+  d.print('}\n');
+  d.print('\n');
+  d.print('function *reducerOld<T>(key: string): Reducer<T> {\n');
   d.print("  const ans = yield {'old': {[key]: true}};\n");
-  d.print("  const sv = ans.old[key];\n");
+  d.print('  const sv = ans.old[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
-  d.print("  return copyOnWrite(sv.value) as T\n");
-  d.print("}\n");
-  d.print("\n");
-  d.print("function *reducerGet<T>(key: string): Reducer<T> {\n");
+  d.print('  return copyOnWrite(sv.value) as T\n');
+  d.print('}\n');
+  d.print('\n');
+  d.print('function *reducerGet<T>(key: string): Reducer<T> {\n');
   d.print("  const ans = yield {'get': {[key]: true}};\n");
-  d.print("  const sv = ans.get[key];\n");
+  d.print('  const sv = ans.get[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
-  d.print("  return copyOnWrite(sv.value) as T\n");
-  d.print("}\n");
-  d.print("\n");
-  d.print("function *reducerSet<T>(key: string, value: T): Reducer<void> {\n");
+  d.print('  return copyOnWrite(sv.value) as T\n');
+  d.print('}\n');
+  d.print('\n');
+  d.print('function *reducerSet<T>(key: string, value: T): Reducer<void> {\n');
   d.print("  const ans = yield {'set': {[key]: value}};\n");
-  d.print("  const sv = ans.set[key];\n");
+  d.print('  const sv = ans.set[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
-  d.print("}\n");
-  d.print("function *reducerDel(key: string): Reducer<void> {\n");
+  d.print('}\n');
+  d.print('function *reducerDel(key: string): Reducer<void> {\n');
   d.print("  const ans = yield {'del': {[key]: true}};\n");
-  d.print("  const sv = ans.del[key];\n");
+  d.print('  const sv = ans.del[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
-  d.print("}\n");
-  d.print("function *reducerUpdate<T, R>(key: string, fn: (t: T) => R): Reducer<R> {\n");
-  d.print("  const obj = yield* reducerGet<T>(key);\n");
-  d.print("  const out = fn(obj);\n");
-  d.print("  yield* reducerSet(key, obj);\n");
-  d.print("  return out;\n");
-  d.print("}\n");
-  d.print("export type NoSet<T extends {\n");
+  d.print('}\n');
+  d.print('function *reducerUpdate<T, R>(key: string, fn: (t: T) => R): Reducer<R> {\n');
+  d.print('  const obj = yield* reducerGet<T>(key);\n');
+  d.print('  const out = fn(obj);\n');
+  d.print('  yield* reducerSet(key, obj);\n');
+  d.print('  return out;\n');
+  d.print('}\n');
+  d.print('export type NoSet<T extends {\n');
   d.print('  "get": unknown, "old": unknown, "del": unknown, "update": unknown\n');
   d.print('}> = Pick<T, "get"|"old"|"del"|"update">;\n');
 }
 
 function contextName(name: string): string {
-  return name.endsWith("Store") ? name.slice(0, -5) : name;
+  return name.endsWith('Store') ? name.slice(0, -5) : name;
 }
 
 /**
@@ -719,9 +778,12 @@ function isUpdatable(t: KType): boolean {
   return false;
 }
 
-function printTemplate(d: Denter, si: { chunks: readonly string[]; params: readonly string[] }): void {
+function printTemplate(
+  d: Denter,
+  si: { chunks: readonly string[]; params: readonly string[] },
+): void {
   for (let i = 0; i < si.params.length; i++) {
-    d.print(si.chunks[i] + "${" + si.params[i] + "}");
+    d.print(si.chunks[i] + '${' + si.params[i] + '}');
   }
   d.print(si.chunks[si.chunks.length - 1]);
 }
@@ -730,124 +792,122 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
   const ctxName = contextName(store.name!);
   // Generate the QueryContext singleton.
   d.print(`\nexport const ${ctxName}QueryContext = {\n`);
-  d.indent("  ");
+  d.indent('  ');
   // generate getters like:
   // topic: (topic_uuid: Uuid) => queryGet<Topic>(`topic.${topic_uuid}`)
-  d.print("get: {\n");
-  d.indent("  ");
+  d.print('get: {\n');
+  d.indent('  ');
   const originalItems = store.originalItems;
   for (const si of originalItems) {
     d.print(`${si.name}: (`);
-    d.print(si.params.map((p) => p + ": string").join(", "));
+    d.print(si.params.map((p) => p + ': string').join(', '));
     d.print(`) => queryGet<${annos.get(si.type)}>(\``);
     printTemplate(d, si);
-    d.print("`),\n");
+    d.print('`),\n');
   }
   // also use the spread operator to reuse definitions from our deps
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}QueryContext.get,\n`);
   }
   d.dedent();
-  d.print("},\n");
+  d.print('},\n');
   d.dedent();
   d.print(`};\n`);
-  d.print("\n");
+  d.print('\n');
   // also create typeof shorthand
   d.print(`\nexport type ${ctxName}QX = typeof ${ctxName}QueryContext;\n`);
 
   // Generate the ReducerContext singleton.
   d.print(`export const ${ctxName}ReducerContext = {\n`);
-  d.indent("  ");
+  d.indent('  ');
 
   // generate old getters like:
   // topic: (topic_uuid: Uuid) => reducerOld<Topic>(`topic.${topic_uuid}`)
-  d.print("old: {\n");
-  d.indent("  ");
+  d.print('old: {\n');
+  d.indent('  ');
   for (const si of originalItems) {
     d.print(`${si.name}: (`);
-    d.print(si.params.map((p) => p + ": string").join(", "));
+    d.print(si.params.map((p) => p + ': string').join(', '));
     d.print(`) => reducerOld<${annos.get(si.type)}>(\``);
     printTemplate(d, si);
-    d.print("`),\n");
+    d.print('`),\n');
   }
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}ReducerContext.old,\n`);
   }
   d.dedent();
-  d.print("},\n");
+  d.print('},\n');
 
   // generate getters like:
   // topic: (topic_uuid: Uuid) => reducerGet<Topic>(`topic.${topic_uuid}`)
-  d.print("get: {\n");
-  d.indent("  ");
+  d.print('get: {\n');
+  d.indent('  ');
   for (const si of originalItems) {
     d.print(`${si.name}: (`);
-    d.print(si.params.map((p) => p + ": string").join(", "));
+    d.print(si.params.map((p) => p + ': string').join(', '));
     d.print(`) => reducerGet<${annos.get(si.type)}>(\``);
     printTemplate(d, si);
-    d.print("`),\n");
+    d.print('`),\n');
   }
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}ReducerContext.get,\n`);
   }
   d.dedent();
-  d.print("},\n");
+  d.print('},\n');
 
   // generate setters like:
   // topic: (topic_uuid: Uuid, value: Topic) => reducerSetter(`topic.${topic_uuid}`, value)
-  d.print("set: {\n");
-  d.indent("  ");
+  d.print('set: {\n');
+  d.indent('  ');
   for (const si of originalItems) {
     d.print(`${si.name}: (`);
-    d.print(
-      [...si.params.map((p) => p + ": string"), `value: ${annos.get(si.type)}`].join(", "),
-    );
-    d.print(") => reducerSet(`");
+    d.print([...si.params.map((p) => p + ': string'), `value: ${annos.get(si.type)}`].join(', '));
+    d.print(') => reducerSet(`');
     printTemplate(d, si);
-    d.print("`, value),\n");
+    d.print('`, value),\n');
   }
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}ReducerContext.set,\n`);
   }
   d.dedent();
-  d.print("},\n");
+  d.print('},\n');
 
   // generate deleters like:
   // topic: (topic_uuid: Uuid) => reducerDeleter(`topic.${topic_uuid}`)
-  d.print("del: {\n");
-  d.indent("  ");
+  d.print('del: {\n');
+  d.indent('  ');
   for (const si of originalItems) {
     // no point in adding deleters for indices (when there isn't a param)
     if (!si.params.length) continue;
     d.print(`${si.name}: (`);
-    d.print(si.params.map((p) => p + ": string").join(", "));
-    d.print(") => reducerDel(`");
+    d.print(si.params.map((p) => p + ': string').join(', '));
+    d.print(') => reducerDel(`');
     printTemplate(d, si);
-    d.print("`),\n");
+    d.print('`),\n');
   }
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}ReducerContext.del,\n`);
   }
   d.dedent();
-  d.print("},\n");
+  d.print('},\n');
 
   // compound types (objects and arrays) also get updaters
-  d.print("update: {\n");
-  d.indent("  ");
+  d.print('update: {\n');
+  d.indent('  ');
   for (const si of originalItems) {
     if (!isUpdatable(si.type)) continue;
     d.print(`${si.name}: <R>(`);
-    d.print(si.params.map((p) => p + ": string, ").join(""));
+    d.print(si.params.map((p) => p + ': string, ').join(''));
     d.print(`fn: (value: ${annos.get(si.type)}) => R`);
-    d.print(") => reducerUpdate(`");
+    d.print(') => reducerUpdate(`');
     printTemplate(d, si);
-    d.print("`, fn),\n");
+    d.print('`, fn),\n');
   }
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}ReducerContext.update,\n`);
   }
   d.dedent();
-  d.print("},\n");
+  d.print('},\n');
 
   d.dedent();
   d.print(`};\n`);
@@ -895,21 +955,21 @@ export class ${f.name} extends Framework<${QX}, ${RX}, ${eventType}, ${commandTy
   // Then generate a TestData helper.  This could use typescript's "constrained mixins", but why
   // complicate code that's only used for testing?
   d.print(`\nexport class ${ctxName}TestData {\n`);
-  d.indent("  ");
+  d.indent('  ');
   d.print(`data: Record<string, any>;\n`);
   d.print(`\n`);
   d.print(`constructor(data: Record<string, any>){\n`);
-  d.indent("  ");
+  d.indent('  ');
   d.print(`this.data = data;\n`);
   d.dedent();
   d.print(`}\n`);
 
   for (const si of f.store.items) {
     d.print(`\n${si.name}(`);
-    d.print(si.params.map((p) => p + ": string").join(", "));
+    d.print(si.params.map((p) => p + ': string').join(', '));
     d.print(`): ${annos.get(si.type)} {\n`);
-    d.indent("  ");
-    d.print("return this.data[`");
+    d.indent('  ');
+    d.print('return this.data[`');
     printTemplate(d, si);
     d.print(`\`] as ${annos.get(si.type)}\n`);
     d.dedent();
@@ -943,7 +1003,7 @@ export class ${ctxName}ReducerTester extends ReducerTester<${RX}, ${eventType}, 
 
 /** "AdminQueries" → "Admin"; the stem names the per-interface artifacts */
 function queryStem(name: string): string {
-  return name.endsWith("Queries") ? name.slice(0, -"Queries".length) : name;
+  return name.endsWith('Queries') ? name.slice(0, -'Queries'.length) : name;
 }
 
 /** the wire id of one query: unique across all interfaces a connection may carry */
@@ -967,7 +1027,7 @@ function queryWireType(registry: KTypeRegistry, kq: KQueries): KType {
       ]),
     ),
   );
-  if (wire.name === null) wire.name = queryStem(kq.name!) + "Query";
+  if (wire.name === null) wire.name = queryStem(kq.name!) + 'Query';
   return wire;
 }
 
@@ -985,100 +1045,102 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
   const defsName = `${stem}QueryDefs`;
 
   const params = (q: KQuery) =>
-    q.args.map(([an, at, opt]) => `${an}${opt ? "?" : ""}: ${annos.get(at)!}`).join(", ");
+    q.args.map(([an, at, opt]) => `${an}${opt ? '?' : ''}: ${annos.get(at)!}`).join(', ');
   const result = (q: KQuery) => annos.get(q.result)!;
 
   // wire ids
   d.print(`\nexport const ${idsName} = {\n`);
-  d.indent("  ");
+  d.indent('  ');
   for (const q of kq.queries) {
     d.print(`${q.name}: "${queryId(kq, q)}",\n`);
   }
   d.dedent();
-  d.print("} as const;\n");
+  d.print('} as const;\n');
 
   // defs: implemented by the author, one generator body per query.  Generic in QX because the
   // contract binds no store; per-caller context (a user id, ...) is constructor state on the
   // implementation, closed over by the bodies.
   d.print(`\nexport interface ${defsName}<QX> {\n`);
-  d.indent("  ");
+  d.indent('  ');
   for (const q of kq.queries) {
-    const rest = q.args.length ? ", " + params(q) : "";
+    const rest = q.args.length ? ', ' + params(q) : '';
     d.print(`${q.name}(qx: QX${rest}): QueryGenerator<${result(q)}>;\n`);
   }
   d.dedent();
-  d.print("}\n");
+  d.print('}\n');
 
   // provider: consumed by call sites
   d.print(`\nexport interface ${name} {\n`);
-  d.indent("  ");
+  d.indent('  ');
   for (const q of kq.queries) {
     d.print(`${q.name}(${params(q)}): Query<${result(q)}>;\n`);
   }
   d.dedent();
-  d.print("}\n");
+  d.print('}\n');
 
   // local provider: hosts the defs on any framework with a compatible query context
   d.print(`\nexport function Local${name}<QX>(\n`);
   d.print(`  fw: { newQuery<X>(fn: QueryFunction<QX, X>): Query<X> },\n`);
   d.print(`  defs: ${defsName}<QX>,\n`);
   d.print(`): ${name} {\n`);
-  d.indent("  ");
-  d.print("return {\n");
-  d.indent("  ");
+  d.indent('  ');
+  d.print('return {\n');
+  d.indent('  ');
   for (const q of kq.queries) {
     const argNames = q.args.map(([an]) => an);
     d.print(`${q.name}(${params(q)}): Query<${result(q)}> {\n`);
-    d.print(`  return fw.newQuery((qx: QX) => defs.${q.name}(${["qx", ...argNames].join(", ")}));\n`);
-    d.print("},\n");
+    d.print(
+      `  return fw.newQuery((qx: QX) => defs.${q.name}(${['qx', ...argNames].join(', ')}));\n`,
+    );
+    d.print('},\n');
   }
   d.dedent();
-  d.print("};\n");
+  d.print('};\n');
   d.dedent();
-  d.print("}\n");
+  d.print('}\n');
 
   // remote provider: encode the call, subscribe over the transport, decode results
   d.print(`\nexport class Remote${name} extends RemoteQueries implements ${name} {\n`);
-  d.indent("  ");
+  d.indent('  ');
   for (const q of kq.queries) {
     const raw = [
       `${idsName}.${q.name}`,
-      ...q.args.map(([an, , opt]) => `EncodeProto(${an}${opt ? " ?? null" : ""})`),
+      ...q.args.map(([an, , opt]) => `EncodeProto(${an}${opt ? ' ?? null' : ''})`),
     ];
     const dec = decoders.get(q.result);
     const decodeFn =
-      dec == null
-        ? `(val: any): ${result(q)} => val`
-        : `(val: any): ${result(q)} => ${dec("val")}`;
+      dec == null ? `(val: any): ${result(q)} => val` : `(val: any): ${result(q)} => ${dec('val')}`;
     d.print(`${q.name}(${params(q)}): Query<${result(q)}> {\n`);
-    d.print(`  return this.newQuery([${raw.join(", ")}], ${decodeFn});\n`);
-    d.print("}\n");
+    d.print(`  return this.newQuery([${raw.join(', ')}], ${decodeFn});\n`);
+    d.print('}\n');
   }
   d.dedent();
-  d.print("}\n");
+  d.print('}\n');
 
   // dispatcher: decoded wire message → provider call.  Query<any> because the wire message is a
   // union over queries with different result types; the caller is transport code.
-  d.print(`\nexport function dispatch${stem}Query(queries: ${name}, query: ${stem}Query): Query<any> {\n`);
-  d.indent("  ");
-  d.print("switch (query[0]) {\n");
+  d.print(
+    `\nexport function dispatch${stem}Query(queries: ${name}, query: ${stem}Query): Query<any> {\n`,
+  );
+  d.indent('  ');
+  d.print('switch (query[0]) {\n');
   for (const q of kq.queries) {
     // optional args are nullable on the wire; the provider takes them as absent
-    const args = q.args.map(([, , opt], i) => `query[${i + 1}]${opt ? " ?? undefined" : ""}`);
+    const args = q.args.map(([, , opt], i) => `query[${i + 1}]${opt ? ' ?? undefined' : ''}`);
     d.print(`case ${idsName}.${q.name}:\n`);
-    d.print(`  return queries.${q.name}(${args.join(", ")});\n`);
+    d.print(`  return queries.${q.name}(${args.join(', ')});\n`);
   }
-  d.print("default:\n");
-  d.print("  throw new Error(`unexpected query ID: ${query[0]}`);\n");
-  d.print("}\n");
+  d.print('default:\n');
+  d.print('  throw new Error(`unexpected query ID: ${query[0]}`);\n');
+  d.print('}\n');
   d.dedent();
-  d.print("}\n");
+  d.print('}\n');
 }
 
 /** entrypoint: assemble the complete generated module */
 export function generateTs(lowered: LoweredProgram, skeleton: string): string {
   const { registry, roots, stores, frameworks, queries } = lowered;
-  if (!roots.length) throw new Error("no named types found to generate code for");
+  if (!roots.length) throw new Error('no named types found to generate code for');
 
   const d = new Denter();
 
@@ -1124,5 +1186,5 @@ export function generateTs(lowered: LoweredProgram, skeleton: string): string {
   for (const kq of queries) generateQueries(d, annos, decoders, kq);
 
   // the generated file ends with a trailing newline
-  return d.getvalue() + "\n";
+  return d.getvalue() + '\n';
 }

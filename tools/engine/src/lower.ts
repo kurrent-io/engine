@@ -27,7 +27,7 @@ import {
   isStdNamespace,
   isTemplateDeclaration,
   walkPropertiesInherited,
-} from "@typespec/compiler";
+} from '@typespec/compiler';
 import type {
   Entity,
   Enum,
@@ -38,9 +38,10 @@ import type {
   Tuple,
   Type,
   Union,
-} from "@typespec/compiler";
-import { reportDiagnostic } from "./lib.js";
-import { KField, KType, KFramework, KQueries, KQuery, KStore, KTypeRegistry } from "./ktypes.js";
+} from '@typespec/compiler';
+
+import { KField, KFramework, KQueries, KQuery, KStore, KType, KTypeRegistry } from './ktypes.js';
+import { reportDiagnostic } from './lib.js';
 
 export interface LoweredProgram {
   registry: KTypeRegistry;
@@ -63,8 +64,8 @@ export interface LoweredProgram {
  */
 function argType(arg: Entity | undefined): Type | undefined {
   if (arg === undefined) return undefined;
-  if (arg.entityKind === "Indeterminate") return arg.type;
-  if (arg.entityKind === "Type") return arg;
+  if (arg.entityKind === 'Indeterminate') return arg.type;
+  if (arg.entityKind === 'Type') return arg;
   return undefined; // a Value; callers diagnose
 }
 
@@ -77,7 +78,7 @@ function engineSource(iface: Interface, name: string): Interface | undefined {
     if (
       src.name === name &&
       src.namespace !== undefined &&
-      getNamespaceFullName(src.namespace) === "KurrentEngine"
+      getNamespaceFullName(src.namespace) === 'KurrentEngine'
     ) {
       return src;
     }
@@ -93,7 +94,7 @@ export function lowerProgram(program: Program): LoweredProgram {
 
   function unsupported(target: Type, message: string): KType {
     reportDiagnostic(program, {
-      code: "unsupported-type",
+      code: 'unsupported-type',
       format: { message },
       target,
     });
@@ -102,7 +103,7 @@ export function lowerProgram(program: Program): LoweredProgram {
 
   function invalidArgs(target: Type, message: string): void {
     reportDiagnostic(program, {
-      code: "invalid-template-args",
+      code: 'invalid-template-args',
       format: { message },
       target,
     });
@@ -113,26 +114,26 @@ export function lowerProgram(program: Program): LoweredProgram {
     for (let s: Scalar | undefined = scalar; s !== undefined; s = s.baseScalar) {
       if (s.namespace === undefined || !isStdNamespace(s.namespace)) continue;
       switch (s.name) {
-        case "string":
-        case "url":
+        case 'string':
+        case 'url':
           return registry.string();
-        case "boolean":
+        case 'boolean':
           return registry.bool();
-        case "integer":
-        case "safeint":
-        case "int8":
-        case "int16":
-        case "int32":
-        case "int64":
-        case "uint8":
-        case "uint16":
-        case "uint32":
-        case "uint64":
+        case 'integer':
+        case 'safeint':
+        case 'int8':
+        case 'int16':
+        case 'int32':
+        case 'int64':
+        case 'uint8':
+        case 'uint16':
+        case 'uint32':
+        case 'uint64':
           return registry.int();
-        case "utcDateTime":
-        case "offsetDateTime":
-        case "plainDate":
-        case "plainTime":
+        case 'utcDateTime':
+        case 'offsetDateTime':
+        case 'plainDate':
+        case 'plainTime':
           return registry.date();
         default:
           return unsupported(scalar, `scalar ${s.name}`);
@@ -172,28 +173,28 @@ export function lowerProgram(program: Program): LoweredProgram {
 
   function lowerTypeUncached(type: Type): KType {
     switch (type.kind) {
-      case "Model":
+      case 'Model':
         return lowerModel(type);
-      case "Union":
+      case 'Union':
         return registry.union([...type.variants.values()].map((v) => lowerType(v.type)));
-      case "Scalar":
+      case 'Scalar':
         return lowerScalar(type);
-      case "String":
+      case 'String':
         return registry.literal(type.value);
-      case "Boolean":
+      case 'Boolean':
         return registry.literal(type.value);
-      case "Number":
+      case 'Number':
         if (!Number.isInteger(type.value)) {
           return unsupported(type, `non-integer numeric literal ${type.value}`);
         }
         return registry.literal(type.value);
-      case "Tuple":
+      case 'Tuple':
         return registry.tuple(type.values.map((v) => lowerType(v)));
-      case "Enum":
+      case 'Enum':
         return lowerEnum(type);
-      case "Intrinsic":
-        if (type.name === "null") return registry.null_();
-        if (type.name === "unknown") return registry.json();
+      case 'Intrinsic':
+        if (type.name === 'null') return registry.null_();
+        if (type.name === 'unknown') return registry.json();
         return unsupported(type, `intrinsic ${type.name}`);
       default:
         return unsupported(type, type.kind);
@@ -210,28 +211,32 @@ export function lowerProgram(program: Program): LoweredProgram {
     empty.name = iface.name;
     storeCache.set(iface, empty);
 
-    const instance = engineSource(iface, "Store");
+    const instance = engineSource(iface, 'Store');
     if (instance === undefined) {
-      reportDiagnostic(program, { code: "not-a-store", format: { name: iface.name }, target: iface });
+      reportDiagnostic(program, {
+        code: 'not-a-store',
+        format: { name: iface.name },
+        target: iface,
+      });
       return empty;
     }
 
     const [specArg, depsArg] = (instance.templateMapper?.args ?? []).map(argType);
-    if (specArg === undefined || specArg.kind !== "Model") {
+    if (specArg?.kind !== 'Model') {
       invalidArgs(iface, `Store 'Spec' argument of '${iface.name}' must be a model`);
       return empty;
     }
-    if (depsArg === undefined || depsArg.kind !== "Tuple") {
+    if (depsArg?.kind !== 'Tuple') {
       invalidArgs(iface, `Store 'Deps' argument of '${iface.name}' must be a tuple of Stores`);
       return empty;
     }
 
     const deps: KStore[] = [];
     for (const dep of (depsArg as Tuple).values) {
-      if (dep.kind !== "Interface" || engineSource(dep, "Store") === undefined) {
+      if (dep.kind !== 'Interface' || engineSource(dep, 'Store') === undefined) {
         reportDiagnostic(program, {
-          code: "not-a-store",
-          format: { name: "name" in dep && typeof dep.name === "string" ? dep.name : dep.kind },
+          code: 'not-a-store',
+          format: { name: 'name' in dep && typeof dep.name === 'string' ? dep.name : dep.kind },
           target: iface,
         });
         continue;
@@ -250,7 +255,7 @@ export function lowerProgram(program: Program): LoweredProgram {
       store = new KStore(specs, deps);
     } catch (e) {
       reportDiagnostic(program, {
-        code: "store-collision",
+        code: 'store-collision',
         format: { message: (e as Error).message },
         target: iface,
       });
@@ -267,7 +272,7 @@ export function lowerProgram(program: Program): LoweredProgram {
     } else if (ct.name !== declName) {
       // two declarations resolved to the same structural type under different names
       reportDiagnostic(program, {
-        code: "duplicate-name",
+        code: 'duplicate-name',
         format: { name: declName, other: ct.name },
         target,
       });
@@ -279,11 +284,9 @@ export function lowerProgram(program: Program): LoweredProgram {
     return types
       .map((t, i) => {
         const loc = getSourceLocation(t);
-        return { t, i, file: loc?.file?.path ?? "", pos: loc?.pos ?? 0 };
+        return { t, i, file: loc?.file?.path ?? '', pos: loc?.pos ?? 0 };
       })
-      .sort((a, b) =>
-        a.file < b.file ? -1 : a.file > b.file ? 1 : a.pos - b.pos || a.i - b.i,
-      )
+      .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.pos - b.pos || a.i - b.i))
       .map((x) => x.t);
   }
 
@@ -308,11 +311,11 @@ export function lowerProgram(program: Program): LoweredProgram {
     [...globalNs.interfaces.values()].filter((i) => !isTemplateDeclaration(i)),
   );
   for (const iface of userInterfaces) {
-    if (engineSource(iface, "Store") !== undefined) {
+    if (engineSource(iface, 'Store') !== undefined) {
       stores.push(lowerStore(iface));
       continue;
     }
-    if (engineSource(iface, "Queries") !== undefined) {
+    if (engineSource(iface, 'Queries') !== undefined) {
       const ops: KQuery[] = [];
       for (const op of iface.operations.values()) {
         const args: KField[] = [];
@@ -326,7 +329,7 @@ export function lowerProgram(program: Program): LoweredProgram {
       queries.push(kq);
       continue;
     }
-    const instance = engineSource(iface, "Framework");
+    const instance = engineSource(iface, 'Framework');
     if (instance === undefined) continue; // a plain interface; none of our business
 
     const [eventsArg, commandsArg, storeArg] = (instance.templateMapper?.args ?? []).map(argType);
@@ -334,9 +337,9 @@ export function lowerProgram(program: Program): LoweredProgram {
       invalidArgs(iface, `Framework '${iface.name}' needs Events and Commands type arguments`);
       continue;
     }
-    if (storeArg === undefined || storeArg.kind !== "Interface") {
+    if (storeArg?.kind !== 'Interface') {
       reportDiagnostic(program, {
-        code: "not-a-store",
+        code: 'not-a-store',
         format: { name: iface.name },
         target: iface,
       });
@@ -345,7 +348,10 @@ export function lowerProgram(program: Program): LoweredProgram {
     const eventType = lowerType(eventsArg);
     const commandType = lowerType(commandsArg);
     // decoders are looked up by name (Decode<Name>), so both must lower to named types
-    for (const [arg, ct] of [[eventsArg, eventType], [commandsArg, commandType]] as const) {
+    for (const [arg, ct] of [
+      [eventsArg, eventType],
+      [commandsArg, commandType],
+    ] as const) {
       if (ct.name === null) {
         invalidArgs(
           iface,

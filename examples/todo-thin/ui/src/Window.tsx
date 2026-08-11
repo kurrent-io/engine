@@ -1,21 +1,15 @@
 import { Card, Flex, Spin, Tag, Typography } from 'antd';
 
-import { useQuery } from './useQuery';
-import { useFramework } from './useFramework';
-import { generateUuid } from './util';
 import ListView, { InlineAdd } from './ListView';
+import { useFramework } from './useFramework';
+import { useQuery } from './useQuery';
+import { generateUuid } from './util';
 
 const { Text } = Typography;
 
-export default function Window({
-  name,
-  serverUrl,
-}: {
-  name: string;
-  serverUrl: string;
-}) {
+export default function Window({ name, serverUrl }: { name: string; serverUrl: string }) {
   const [server, connState] = useFramework(serverUrl);
-  const lists = useQuery(server.queries, "allLists");
+  const lists = useQuery(server.queries, 'allLists');
 
   const stateColor = {
     connecting: 'orange',
@@ -24,9 +18,7 @@ export default function Window({
   }[connState];
 
   function addList(listName: string) {
-    server.sendCommand(
-      { type: 'new-list', id: generateUuid(), name: listName },
-    );
+    server.sendCommand({ type: 'new-list', id: generateUuid(), name: listName });
   }
 
   function renameList(id: string, listName: string) {
@@ -38,9 +30,7 @@ export default function Window({
   }
 
   function addItem(listId: string, itemText: string) {
-    server.sendCommand(
-      { type: 'new-item', id: generateUuid(), list: listId, text: itemText },
-    );
+    server.sendCommand({ type: 'new-item', id: generateUuid(), list: listId, text: itemText });
   }
 
   function toggleItem(id: string, done: boolean) {
@@ -60,11 +50,12 @@ export default function Window({
       className="window"
       title={
         <Flex align="center" gap="small">
-          <Text strong className="grow">{name}</Text>
+          <Text strong className="grow">
+            {name}
+          </Text>
           <Tag color={stateColor}>{connState}</Tag>
         </Flex>
-      }
-    >
+      }>
       {lists === undefined ? (
         <Spin />
       ) : (
@@ -81,11 +72,7 @@ export default function Window({
               onArchiveItem={archiveItem}
             />
           ))}
-          <InlineAdd
-            label="add list"
-            placeholder="list name"
-            onSubmit={addList}
-          />
+          <InlineAdd label="add list" placeholder="list name" onSubmit={addList} />
         </>
       )}
     </Card>

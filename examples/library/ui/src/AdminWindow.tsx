@@ -1,12 +1,24 @@
-import { useCallback, useState } from 'react';
-import { Button, Card, Divider, Flex, Input, List, Modal, Spin, Switch, Tag, Typography } from 'antd';
 import { EditOutlined, PlusOutlined } from '@ant-design/icons';
+import {
+  Button,
+  Card,
+  Divider,
+  Flex,
+  Input,
+  List,
+  Modal,
+  Spin,
+  Switch,
+  Tag,
+  Typography,
+} from 'antd';
+import { useCallback, useState } from 'react';
 
-import { AdminQX, QueryGenerator } from './model';
-import { useQuery } from './useQuery';
-import { useFramework } from './useFramework';
-import { generateUuid } from './util';
 import { colorHash } from './colorhash';
+import { AdminQX, QueryGenerator } from './model';
+import { useFramework } from './useFramework';
+import { useQuery } from './useQuery';
+import { generateUuid } from './util';
 
 const { Text } = Typography;
 
@@ -72,8 +84,12 @@ function InlineEdit({
           onPressEnter={confirm}
           autoFocus
         />
-        <Button size="small" type="primary" onClick={confirm}>OK</Button>
-        <Button size="small" onClick={() => setEditing(false)}>Cancel</Button>
+        <Button size="small" type="primary" onClick={confirm}>
+          OK
+        </Button>
+        <Button size="small" onClick={() => setEditing(false)}>
+          Cancel
+        </Button>
       </Flex>
     );
   }
@@ -97,7 +113,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
 
   // --- queries ---
 
-  const patronsLookup = useCallback(function*(qx: AdminQX): QueryGenerator<AdminPatronInfo[]> {
+  const patronsLookup = useCallback(function* (qx: AdminQX): QueryGenerator<AdminPatronInfo[]> {
     const patrons = yield* qx.get.patrons();
     const out: AdminPatronInfo[] = [];
     for (const id of Object.keys(patrons).sort()) {
@@ -107,7 +123,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
     return out;
   }, []);
 
-  const editionsLookup = useCallback(function*(qx: AdminQX): QueryGenerator<AdminEditionInfo[]> {
+  const editionsLookup = useCallback(function* (qx: AdminQX): QueryGenerator<AdminEditionInfo[]> {
     const editions = yield* qx.get.editions();
     const out: AdminEditionInfo[] = [];
     for (const isbn of Object.keys(editions)) {
@@ -128,29 +144,39 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
         const bookId = book.id;
 
         if (book.status) {
-          if ("hold" in book.status) {
+          if ('hold' in book.status) {
             const hold = yield* qx.get.hold(book.status.hold);
             books.push({
-              id: bookId, restricted: book.restricted, state: 'held',
-              patronId: hold.patron, holdId: hold.id,
+              id: bookId,
+              restricted: book.restricted,
+              state: 'held',
+              patronId: hold.patron,
+              holdId: hold.id,
             });
           } else {
             const checkout = yield* qx.get.checkout(book.status.checkout);
             books.push({
-              id: bookId, restricted: book.restricted, state: 'out',
-              patronId: checkout.patron, checkoutId: checkout.id,
+              id: bookId,
+              restricted: book.restricted,
+              state: 'out',
+              patronId: checkout.patron,
+              checkoutId: checkout.id,
             });
           }
         } else if (!book.restricted && editionHoldIdx < editionHoldIds.length) {
           const holdId = editionHoldIds[editionHoldIdx++];
           const hold = yield* qx.get.hold(holdId);
           books.push({
-            id: bookId, restricted: book.restricted, state: 'held',
-            patronId: hold.patron, holdId: hold.id,
+            id: bookId,
+            restricted: book.restricted,
+            state: 'held',
+            patronId: hold.patron,
+            holdId: hold.id,
           });
         } else {
           books.push({
-            id: bookId, restricted: book.restricted,
+            id: bookId,
+            restricted: book.restricted,
             state: book.restricted ? 'rstr' : 'open',
           });
         }
@@ -175,56 +201,69 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
         break;
       case 'held':
         setPendingAction({
-          type: 'held', bookId: book.id, restricted: book.restricted,
-          holdId: book.holdId!, patronId: book.patronId!,
+          type: 'held',
+          bookId: book.id,
+          restricted: book.restricted,
+          holdId: book.holdId!,
+          patronId: book.patronId!,
         });
         break;
       case 'out':
-        fw.sendCommands([{
-          type: "end-checkout", checkout: book.checkoutId!, timestamp: new Date(),
-        }]);
+        fw.sendCommands([
+          {
+            type: 'end-checkout',
+            checkout: book.checkoutId!,
+            timestamp: new Date(),
+          },
+        ]);
         break;
     }
   }
 
   function handleCheckout(patronId: string) {
     if (pendingAction?.type !== 'book') return;
-    fw.sendCommands([{
-      type: "try-checkout",
-      id: generateUuid(),
-      patron: patronId,
-      book: pendingAction.bookId,
-      timestamp: new Date(),
-    }]);
+    fw.sendCommands([
+      {
+        type: 'try-checkout',
+        id: generateUuid(),
+        patron: patronId,
+        book: pendingAction.bookId,
+        timestamp: new Date(),
+      },
+    ]);
     setPendingAction(null);
   }
 
   function handleToggleRestricted() {
     if (!pendingAction) return;
-    fw.sendCommands([{
-      type: "update-book-restricted",
-      id: pendingAction.bookId,
-      restricted: !pendingAction.restricted,
-      timestamp: new Date(),
-    }]);
+    fw.sendCommands([
+      {
+        type: 'update-book-restricted',
+        id: pendingAction.bookId,
+        restricted: !pendingAction.restricted,
+        timestamp: new Date(),
+      },
+    ]);
     setPendingAction(null);
   }
 
   function handleCancelHold() {
     if (pendingAction?.type !== 'held') return;
-    fw.sendCommands([{ type: "cancel-hold", id: pendingAction.holdId }]);
+    fw.sendCommands([{ type: 'cancel-hold', id: pendingAction.holdId }]);
     setPendingAction(null);
   }
 
   function handlePromoteHold() {
     if (pendingAction?.type !== 'held') return;
-    fw.sendCommands([{
-      type: "try-checkout",
-      id: generateUuid(),
-      patron: pendingAction.patronId,
-      book: pendingAction.bookId,
-      timestamp: new Date(),
-    }]);
+    fw.sendCommands([
+      {
+        type: 'try-checkout',
+        id: generateUuid(),
+        patron: pendingAction.patronId,
+        book: pendingAction.bookId,
+        timestamp: new Date(),
+      },
+    ]);
     setPendingAction(null);
   }
 
@@ -252,8 +291,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
           />
         </Flex>
       }
-      style={{ width: '32em' }}
-    >
+      style={{ width: '32em' }}>
       {/* patrons */}
       <Text strong>Patrons</Text>
       {patrons ? (
@@ -263,26 +301,40 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
           renderItem={(patron) => (
             <List.Item>
               <Flex gap="small" align="center" style={{ width: '100%' }}>
-                <span style={{
-                  backgroundColor: `${colorHash(patron.id)}`,
-                  padding: '2px 8px',
-                  borderRadius: 4,
-                }}>
+                <span
+                  style={{
+                    backgroundColor: `${colorHash(patron.id)}`,
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                  }}>
                   <InlineEdit
                     value={patron.name}
-                    onConfirm={(name) => fw.sendCommands([{
-                      type: "rename-patron", id: patron.id, name, timestamp: new Date(),
-                    }])}
+                    onConfirm={(name) =>
+                      fw.sendCommands([
+                        {
+                          type: 'rename-patron',
+                          id: patron.id,
+                          name,
+                          timestamp: new Date(),
+                        },
+                      ])
+                    }
                   />
                 </span>
                 <span style={{ flex: 1 }} />
                 <Switch
                   size="small"
                   checked={patron.researcher}
-                  onChange={(checked) => fw.sendCommands([{
-                    type: "assign-patron", id: patron.id,
-                    researcher: checked, timestamp: new Date(),
-                  }])}
+                  onChange={(checked) =>
+                    fw.sendCommands([
+                      {
+                        type: 'assign-patron',
+                        id: patron.id,
+                        researcher: checked,
+                        timestamp: new Date(),
+                      },
+                    ])
+                  }
                   checkedChildren="R"
                   unCheckedChildren="R"
                 />
@@ -290,14 +342,19 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
             </List.Item>
           )}
         />
-      ) : <Spin />}
+      ) : (
+        <Spin />
+      )}
 
       {/* editions & books */}
       <Flex align="center" gap="small" style={{ marginTop: 16 }}>
         <Text strong>Editions</Text>
         <PlusOutlined
           style={{ cursor: 'pointer' }}
-          onClick={() => { setNewEditionTitle(''); setAddingEdition(true); }}
+          onClick={() => {
+            setNewEditionTitle('');
+            setAddingEdition(true);
+          }}
         />
       </Flex>
       {editions ? (
@@ -309,23 +366,26 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
               <div style={{ width: '100%' }}>
                 <InlineEdit
                   value={edition.title}
-                  onConfirm={(title) => fw.sendCommands([{
-                    type: "update-edition-title", isbn: edition.isbn,
-                    title, timestamp: new Date(),
-                  }])}
+                  onConfirm={(title) =>
+                    fw.sendCommands([
+                      {
+                        type: 'update-edition-title',
+                        isbn: edition.isbn,
+                        title,
+                        timestamp: new Date(),
+                      },
+                    ])
+                  }
                 />
                 <Flex gap="small" style={{ marginTop: 4 }} wrap>
                   {edition.books.map((book) => {
-                    const color = book.patronId
-                      ? `${colorHash(book.patronId)}`
-                      : undefined;
+                    const color = book.patronId ? `${colorHash(book.patronId)}` : undefined;
                     return (
                       <Button
                         key={book.id}
                         size="small"
                         onClick={() => handleBookClick(book)}
-                        style={color ? { borderColor: color, borderWidth: 2 } : undefined}
-                      >
+                        style={color ? { borderColor: color, borderWidth: 2 } : undefined}>
                         {book.state}
                       </Button>
                     );
@@ -334,28 +394,33 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
                     size="small"
                     type="text"
                     icon={<PlusOutlined />}
-                    onClick={() => fw.sendCommands([{
-                      type: "add-book",
-                      id: generateUuid(),
-                      isbn: edition.isbn,
-                      restricted: false,
-                      timestamp: new Date(),
-                    }])}
+                    onClick={() =>
+                      fw.sendCommands([
+                        {
+                          type: 'add-book',
+                          id: generateUuid(),
+                          isbn: edition.isbn,
+                          restricted: false,
+                          timestamp: new Date(),
+                        },
+                      ])
+                    }
                   />
                 </Flex>
               </div>
             </List.Item>
           )}
         />
-      ) : <Spin />}
+      ) : (
+        <Spin />
+      )}
 
       {/* modal: available book actions */}
       <Modal
         title="Book actions"
         open={pendingAction?.type === 'book'}
         onCancel={() => setPendingAction(null)}
-        footer={null}
-      >
+        footer={null}>
         <Text strong>Check out to:</Text>
         <Flex gap="small" wrap style={{ marginTop: 8 }}>
           {patrons?.map((patron) => {
@@ -366,8 +431,9 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
                 key={patron.id}
                 disabled={disabled}
                 onClick={() => handleCheckout(patron.id)}
-                style={disabled ? undefined : { borderColor: `${colorHash(patron.id)}`, borderWidth: 2 }}
-              >
+                style={
+                  disabled ? undefined : { borderColor: `${colorHash(patron.id)}`, borderWidth: 2 }
+                }>
                 {patron.name}
               </Button>
             );
@@ -386,11 +452,12 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
         title="Held book"
         open={pendingAction?.type === 'held'}
         onCancel={() => setPendingAction(null)}
-        footer={null}
-      >
+        footer={null}>
         <Flex gap="small">
           <Button onClick={handleCancelHold}>Cancel Hold</Button>
-          <Button type="primary" onClick={handlePromoteHold}>Check Out</Button>
+          <Button type="primary" onClick={handlePromoteHold}>
+            Check Out
+          </Button>
         </Flex>
         <Divider />
         <Button onClick={handleToggleRestricted}>
@@ -407,28 +474,31 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
         onCancel={() => setAddingEdition(false)}
         onOk={() => {
           if (newEditionTitle.trim()) {
-            fw.sendCommands([{
-              type: "add-edition",
-              isbn: generateUuid(),
-              title: newEditionTitle.trim(),
-              timestamp: new Date(),
-            }]);
+            fw.sendCommands([
+              {
+                type: 'add-edition',
+                isbn: generateUuid(),
+                title: newEditionTitle.trim(),
+                timestamp: new Date(),
+              },
+            ]);
           }
           setAddingEdition(false);
-        }}
-      >
+        }}>
         <Input
           placeholder="Title"
           value={newEditionTitle}
           onChange={(e) => setNewEditionTitle(e.target.value)}
           onPressEnter={() => {
             if (newEditionTitle.trim()) {
-              fw.sendCommands([{
-                type: "add-edition",
-                isbn: generateUuid(),
-                title: newEditionTitle.trim(),
-                timestamp: new Date(),
-              }]);
+              fw.sendCommands([
+                {
+                  type: 'add-edition',
+                  isbn: generateUuid(),
+                  title: newEditionTitle.trim(),
+                  timestamp: new Date(),
+                },
+              ]);
             }
             setAddingEdition(false);
           }}

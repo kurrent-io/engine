@@ -8,7 +8,7 @@
  * Union type, as well as distinguishing KFramework from our own user-facing Framework.
  */
 
-export type JsonType = "null" | "int" | "string" | "boolean" | "object" | "array" | "*";
+export type JsonType = 'null' | 'int' | 'string' | 'boolean' | 'object' | 'array' | '*';
 export type LitValue = string | number | boolean;
 
 let nextId = 0;
@@ -26,46 +26,58 @@ export function members(t: KType): readonly KType[] {
 }
 
 export class KNull extends KType {
-  readonly jsonType = "null";
-  toString() { return "null"; }
+  readonly jsonType = 'null';
+  toString() {
+    return 'null';
+  }
 }
 
 export class KInt extends KType {
-  readonly jsonType = "int";
-  toString() { return "int"; }
+  readonly jsonType = 'int';
+  toString() {
+    return 'int';
+  }
 }
 
 export class KString extends KType {
-  readonly jsonType = "string";
-  toString() { return "str"; }
+  readonly jsonType = 'string';
+  toString() {
+    return 'str';
+  }
 }
 
 export class KBool extends KType {
-  readonly jsonType = "boolean";
-  toString() { return "bool"; }
+  readonly jsonType = 'boolean';
+  toString() {
+    return 'bool';
+  }
 }
 
 export class KDate extends KType {
-  readonly jsonType = "string";
-  toString() { return "Date"; }
+  readonly jsonType = 'string';
+  toString() {
+    return 'Date';
+  }
 }
 
 export class KJson extends KType {
-  readonly jsonType = "*";
-  toString() { return "json"; }
+  readonly jsonType = '*';
+  toString() {
+    return 'json';
+  }
 }
 
 export class KLiteral extends KType {
   readonly jsonType: JsonType;
   constructor(readonly value: LitValue) {
     super();
-    if (typeof value === "boolean") this.jsonType = "boolean";
-    else if (typeof value === "string") this.jsonType = "string";
-    else if (Number.isInteger(value)) this.jsonType = "int";
+    if (typeof value === 'boolean') this.jsonType = 'boolean';
+    else if (typeof value === 'string') this.jsonType = 'string';
+    else if (Number.isInteger(value)) this.jsonType = 'int';
     else throw new Error(`illegal value for KLiteral(${value})`);
   }
   toString() {
-    if (typeof this.value === "string") return `"${this.value}"`;
+    if (typeof this.value === 'string') return `"${this.value}"`;
     return String(this.value);
   }
 }
@@ -73,7 +85,7 @@ export class KLiteral extends KType {
 export type KField = readonly [name: string, type: KType, optional: boolean];
 
 export class KStruct extends KType {
-  readonly jsonType = "object";
+  readonly jsonType = 'object';
   /** all fields, regardless of maybe status, in declaration order */
   readonly fields: Map<string, KType>;
   /** only non-maybe fields */
@@ -88,31 +100,51 @@ export class KStruct extends KType {
   }
   toString() {
     if (this.name) return this.name;
-    const mkfield = (k: string, v: KType) => `${k}${this.maybes.has(k) ? "?" : ""}: ${v}`;
-    return "{" + [...this.fields].map(([k, v]) => mkfield(k, v)).join(", ") + "}";
+    const mkfield = (k: string, v: KType) => `${k}${this.maybes.has(k) ? '?' : ''}: ${v}`;
+    return '{' + [...this.fields].map(([k, v]) => mkfield(k, v)).join(', ') + '}';
   }
 }
 
 export class KObject extends KType {
-  readonly jsonType = "object";
-  constructor(readonly valueType: KType) { super(); }
-  toString() { return this.name ?? `Object[${this.valueType}]`; }
+  readonly jsonType = 'object';
+  constructor(readonly valueType: KType) {
+    super();
+  }
+  toString() {
+    return this.name ?? `Object[${this.valueType}]`;
+  }
 }
 
 export class KArray extends KType {
-  readonly jsonType = "array";
-  constructor(readonly itemType: KType) { super(); }
-  lengthRange(): [number, number] { return [0, Infinity]; }
-  typeat(_i: number): KType { return this.itemType; }
-  toString() { return this.name ?? `Array[${this.itemType}]`; }
+  readonly jsonType = 'array';
+  constructor(readonly itemType: KType) {
+    super();
+  }
+  lengthRange(): [number, number] {
+    return [0, Infinity];
+  }
+  typeat(_i: number): KType {
+    return this.itemType;
+  }
+  toString() {
+    return this.name ?? `Array[${this.itemType}]`;
+  }
 }
 
 export class KTuple extends KType {
-  readonly jsonType = "array";
-  constructor(readonly itemTypes: readonly KType[]) { super(); }
-  lengthRange(): [number, number] { return [this.itemTypes.length, this.itemTypes.length]; }
-  typeat(i: number): KType { return this.itemTypes[i]; }
-  toString() { return this.name ?? "Tuple[" + this.itemTypes.join(", ") + "]"; }
+  readonly jsonType = 'array';
+  constructor(readonly itemTypes: readonly KType[]) {
+    super();
+  }
+  lengthRange(): [number, number] {
+    return [this.itemTypes.length, this.itemTypes.length];
+  }
+  typeat(i: number): KType {
+    return this.itemTypes[i];
+  }
+  toString() {
+    return this.name ?? 'Tuple[' + this.itemTypes.join(', ') + ']';
+  }
 }
 
 export class KUnion extends KType {
@@ -124,9 +156,11 @@ export class KUnion extends KType {
   }
   // A union has no single json type.  Solver inputs are always flattened members (never nested
   // unions), so reaching this indicates a bug in the caller.
-  get jsonType(): JsonType { throw new Error(`unions have no single json type: ${this}`); }
+  get jsonType(): JsonType {
+    throw new Error(`unions have no single json type: ${this}`);
+  }
   toString() {
-    return this.name ?? this.types.map(String).sort().join("|");
+    return this.name ?? this.types.map(String).sort().join('|');
   }
 }
 
@@ -153,22 +187,36 @@ export class KTypeRegistry {
     return val;
   }
 
-  null_(): KNull { return this.intern("null", () => new KNull()); }
-  int(): KInt { return this.intern("int", () => new KInt()); }
-  string(): KString { return this.intern("string", () => new KString()); }
-  bool(): KBool { return this.intern("bool", () => new KBool()); }
-  date(): KDate { return this.intern("date", () => new KDate()); }
-  json(): KJson { return this.intern("json", () => new KJson()); }
+  null_(): KNull {
+    return this.intern('null', () => new KNull());
+  }
+  int(): KInt {
+    return this.intern('int', () => new KInt());
+  }
+  string(): KString {
+    return this.intern('string', () => new KString());
+  }
+  bool(): KBool {
+    return this.intern('bool', () => new KBool());
+  }
+  date(): KDate {
+    return this.intern('date', () => new KDate());
+  }
+  json(): KJson {
+    return this.intern('json', () => new KJson());
+  }
 
   literal(value: LitValue): KLiteral {
     return this.intern(`lit:${typeof value}:${JSON.stringify(value)}`, () => new KLiteral(value));
   }
 
   struct(fields: readonly KField[]): KStruct {
-    const key = "struct:" + [...fields]
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([k, t, opt]) => `${k}${opt ? "?" : ""}=${t.id}`)
-      .join(",");
+    const key =
+      'struct:' +
+      [...fields]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, t, opt]) => `${k}${opt ? '?' : ''}=${t.id}`)
+        .join(',');
     return this.intern(key, () => new KStruct(fields));
   }
 
@@ -181,7 +229,7 @@ export class KTypeRegistry {
   }
 
   tuple(itemTypes: readonly KType[]): KTuple {
-    return this.intern(`tup:${itemTypes.map((t) => t.id).join(",")}`, () => new KTuple(itemTypes));
+    return this.intern(`tup:${itemTypes.map((t) => t.id).join(',')}`, () => new KTuple(itemTypes));
   }
 
   /**
@@ -193,12 +241,20 @@ export class KTypeRegistry {
     const seen = new Set<KType>();
     for (const t of types) {
       for (const m of members(t)) {
-        if (!seen.has(m)) { seen.add(m); flat.push(m); }
+        if (!seen.has(m)) {
+          seen.add(m);
+          flat.push(m);
+        }
       }
     }
-    if (flat.length === 0) throw new Error("no types in union!");
+    if (flat.length === 0) throw new Error('no types in union!');
     if (flat.length === 1) return flat[0];
-    const key = "union:" + flat.map((t) => t.id).sort((a, b) => a - b).join(",");
+    const key =
+      'union:' +
+      flat
+        .map((t) => t.id)
+        .sort((a, b) => a - b)
+        .join(',');
     return this.intern(key, () => new KUnion(flat));
   }
 }
@@ -219,8 +275,8 @@ export class KStoreItem {
   ) {}
 
   static fromSpec(tpl: string, type: KType, origin: KStore): KStoreItem {
-    const name = tpl.split(".")[0];
-    if (name.includes("{")) {
+    const name = tpl.split('.')[0];
+    if (name.includes('{')) {
       throw new Error(`store key template '${tpl}' does not have a name before a '.'`);
     }
     const [chunks, params] = KStoreItem.parseTpl(tpl);
@@ -275,7 +331,7 @@ export class KStore {
   }
 
   toString() {
-    return "Store(\n  " + this.items.map((si) => `${si.tpl}: ${si.type}`).join(",\n  ") + "\n)";
+    return 'Store(\n  ' + this.items.map((si) => `${si.tpl}: ${si.type}`).join(',\n  ') + '\n)';
   }
 }
 

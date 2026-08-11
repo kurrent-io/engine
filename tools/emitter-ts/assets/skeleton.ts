@@ -3,10 +3,10 @@
 // json_typeof returns the json type of a value that came out of parsing json
 // (so 'undefined' is not handled, since it isn't allowed in json)
 export function json_typeof(val: any): string {
-  const t = typeof(val);
-  if (t === "object") {
-    if (val === null) return "null";
-    if (Array.isArray(val)) return "array";
+  const t = typeof val;
+  if (t === 'object') {
+    if (val === null) return 'null';
+    if (Array.isArray(val)) return 'array';
   }
   return t;
 }
@@ -24,7 +24,8 @@ const NIBBLE = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c',
 
 // generateUuid is either injected into the environment or we expect to use crypto.getRandomValues()
 if (!(globalThis as any).generateUuid) {
-  var generateUuid = function(): string {
+  // eslint-disable-next-line no-var -- we mean to mutate the global state in an if statement
+  var generateUuid = function (): string {
     let out = '';
 
     // Get 128 bits of randomness.
@@ -46,7 +47,7 @@ if (!(globalThis as any).generateUuid) {
       out.substring(16, 20),
       out.substring(20, 32),
     ].join('-');
-  }
+  };
 }
 
 // protoJSONReplacer is a JSON.stringify() replacer; it is more efficient than EncodeProto because
@@ -66,22 +67,22 @@ export function protoStringify(obj: any): any {
 
 export function EncodeProto(base: any): any {
   switch (typeof base) {
-    case "boolean":
-    case "bigint":
-    case "number":
-    case "string":
-    case "undefined":
+    case 'boolean':
+    case 'bigint':
+    case 'number':
+    case 'string':
+    case 'undefined':
       // these types are already immutable
       return base;
 
-    case "object":
+    case 'object':
       // null handled here
       if (base === null) return base;
       // general objects handled below
       break;
 
-    case "symbol":
-    case "function":
+    case 'symbol':
+    case 'function':
     default:
       throw new Error(`base of type "${typeof base}" not handled by EncodeProto`);
   }
@@ -91,7 +92,7 @@ export function EncodeProto(base: any): any {
 
   if (Array.isArray(base)) return base.map(EncodeProto);
   if (base instanceof Map) return [...base.entries()].map(EncodeProto);
-  if (base instanceof Set) return [...base.keys()];  // object keys not supported
+  if (base instanceof Set) return [...base.keys()]; // object keys not supported
   return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, EncodeProto(v)]));
 }
 
@@ -99,22 +100,22 @@ const copySym = Symbol();
 
 export function deepCopy<T>(base: T): T {
   switch (typeof base) {
-    case "boolean":
-    case "bigint":
-    case "number":
-    case "string":
-    case "undefined":
+    case 'boolean':
+    case 'bigint':
+    case 'number':
+    case 'string':
+    case 'undefined':
       // these types are already immutable
       return base;
 
-    case "object":
+    case 'object':
       // null handled here
       if (base === null) return base;
       // general objects handled below
       break;
 
-    case "symbol":
-    case "function":
+    case 'symbol':
+    case 'function':
     default:
       throw new Error(`base of type "${typeof base}" not handled by deepCopy`);
   }
@@ -130,7 +131,7 @@ export function deepCopy<T>(base: T): T {
     for (const [k, v] of base) out.set(k, deepCopy(v));
     return out as T;
   }
-  if (base instanceof Set) return new Set(base) as T;  // object keys not allowed anyway
+  if (base instanceof Set) return new Set(base) as T; // object keys not allowed anyway
   if (base instanceof Date) return new Date(base) as T;
   const proto = Object.getPrototypeOf(base);
   if (proto && proto !== Object.prototype) {
@@ -142,22 +143,22 @@ export function deepCopy<T>(base: T): T {
 
 export function readOnly<T>(base: T): Readonly<T> {
   switch (typeof base) {
-    case "boolean":
-    case "bigint":
-    case "number":
-    case "string":
-    case "undefined":
+    case 'boolean':
+    case 'bigint':
+    case 'number':
+    case 'string':
+    case 'undefined':
       // these types are already immutable
       return base;
 
-    case "object":
+    case 'object':
       // null handled here
       if (base === null) return base;
       // general objects handled below
       break;
 
-    case "symbol":
-    case "function":
+    case 'symbol':
+    case 'function':
     default:
       throw new Error(`base of type "${typeof base}" not handled by readOnly`);
   }
@@ -176,7 +177,7 @@ export function readOnly<T>(base: T): Readonly<T> {
 }
 
 function throwReadOnlyError(): any {
-  throw new Error("object is read-only and may not be modified");
+  throw new Error('object is read-only and may not be modified');
 }
 
 function readOnlyObject<T>(base: Record<string, T>): Readonly<Record<string, T>> {
@@ -196,7 +197,7 @@ function readOnlyObject<T>(base: Record<string, T>): Readonly<Record<string, T>>
         return value;
       }
 
-      let value = base[prop];
+      const value = base[prop];
 
       if (value === undefined) {
         return value;
@@ -225,7 +226,7 @@ function readOnlyArray<T>(base: T[]): Readonly<T[]> {
     return ro;
   }
 
-  function dirtyAll(){
+  function dirtyAll() {
     // all items at once
     if (filled) return cache;
     filled = true;
@@ -321,7 +322,7 @@ const roDatePrototype = {
   setUTCMonth: throwReadOnlyError,
   setUTCSeconds: throwReadOnlyError,
   setYear: throwReadOnlyError,
-}
+};
 Object.setPrototypeOf(roDatePrototype, Date.prototype);
 
 function readOnlyDate(base: Date): Readonly<Date> {
@@ -402,7 +403,7 @@ function readOnlySet<K>(base: Set<K>): Readonly<Set<K>> {
       if (prop === copySym) return () => deepCopy(base);
 
       // just disallow mutations
-      if (prop === "add" || prop === "delete" || prop === "clear") return throwReadOnlyError;
+      if (prop === 'add' || prop === 'delete' || prop === 'clear') return throwReadOnlyError;
 
       const value = (base as any)[prop];
       if (value instanceof Function) {
@@ -415,23 +416,23 @@ function readOnlySet<K>(base: Set<K>): Readonly<Set<K>> {
 
 export function copyOnWrite<T>(base: T, parent?: () => void): T {
   switch (typeof base) {
-    case "boolean":
-    case "bigint":
-    case "number":
-    case "string":
-    case "undefined":
+    case 'boolean':
+    case 'bigint':
+    case 'number':
+    case 'string':
+    case 'undefined':
       // these types are already immutable
       return base;
 
-    case "object":
+    case 'object':
       // null handled here
       if (base === null) return base;
       if (base instanceof Date) return new Date(base) as T; // trivial copy
       // general objects handled below
       break;
 
-    case "symbol":
-    case "function":
+    case 'symbol':
+    case 'function':
     default:
       throw new Error(`base of type "${typeof base}" not handled by copyOnWrite`);
   }
@@ -452,22 +453,22 @@ const recoverSym = Symbol();
 
 export function recover<T>(base: T): T {
   switch (typeof base) {
-    case "boolean":
-    case "bigint":
-    case "number":
-    case "string":
-    case "undefined":
+    case 'boolean':
+    case 'bigint':
+    case 'number':
+    case 'string':
+    case 'undefined':
       // leaf type found; nothing was cow
       return base;
 
-    case "object":
+    case 'object':
       if (base === null) return base;
       if (base instanceof Date) return base;
       // general objects handled below
       break;
 
-    case "symbol":
-    case "function":
+    case 'symbol':
+    case 'function':
     default:
       throw new Error(`base of type "${typeof base}" not handled by recover`);
   }
@@ -489,7 +490,7 @@ export function recover<T>(base: T): T {
   }
 
   if (base instanceof Map) {
-    for(const [key, value] of base.entries()) {
+    for (const [key, value] of base.entries()) {
       const r = recover(value);
       if (r !== value) {
         base.set(key, r);
@@ -516,13 +517,13 @@ export function recover<T>(base: T): T {
   return base as T;
 }
 
-const DELETED = Symbol("DELETED");
+const DELETED = Symbol('DELETED');
 
 function copyOnWriteObject<T>(base: Record<string, T>, parent?: () => void): Record<string, T> {
   // build our cache incrementally, to reduce the number of copyOnWrite calls to a minimum
   const cache: Record<string, T | typeof DELETED> = {};
   let clean = true;
-  let full = false;
+  const full = false;
 
   function mark() {
     if (clean) {
@@ -570,7 +571,7 @@ function copyOnWriteObject<T>(base: Record<string, T>, parent?: () => void): Rec
 
   return new Proxy(base, {
     defineProperty() {
-      throw new Error("not supported by copyOnWrite");
+      throw new Error('not supported by copyOnWrite');
     },
 
     deleteProperty(_, prop: any) {
@@ -581,8 +582,9 @@ function copyOnWriteObject<T>(base: Record<string, T>, parent?: () => void): Rec
 
     getOwnPropertyDescriptor(_, prop: any) {
       if (cache[prop] === DELETED) return undefined;
-      return Object.getOwnPropertyDescriptor(cache, prop) ??
-        Object.getOwnPropertyDescriptor(base, prop);
+      return (
+        Object.getOwnPropertyDescriptor(cache, prop) ?? Object.getOwnPropertyDescriptor(base, prop)
+      );
     },
 
     get(_, prop: any) {
@@ -647,9 +649,9 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
     }
   }
 
-  function dirty1(n: number){
+  function dirty1(n: number) {
     if (full) return cache[n];
-    if (Object.hasOwn(cache, n)){
+    if (Object.hasOwn(cache, n)) {
       const out = cache[n];
       return out !== DELETED ? out : undefined;
     }
@@ -659,7 +661,7 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
     return ro;
   }
 
-  function dirtyAll(){
+  function dirtyAll() {
     if (full) return cache;
     full = true;
     // use Object.keys() instead of .keys() to preserve holes
@@ -679,7 +681,6 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
     // special
     at: (index: number) => dirty1(index > -1 ? index : base.length + index),
     push: (...args: any[]) => (mark(), cache.push(...args)),
-
 
     // things which require dirtyAll(), then run against the full shallow copy
     concat: (...args: any) => base.concat.apply(dirtyAll(), args),
@@ -771,7 +772,7 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
     // was any modification made?
     if (clean) return base;
     if (full) {
-      const out = Array(cache.length)
+      const out = Array(cache.length);
       for (const [key, val] of Object.entries(cache)) {
         out[key as any] = recover(val);
       }
@@ -789,7 +790,7 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
 
   return new Proxy(base, {
     defineProperty() {
-      throw new Error("not supported by copyOnWrite");
+      throw new Error('not supported by copyOnWrite');
     },
 
     deleteProperty(_, prop: any) {
@@ -806,8 +807,9 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
     getOwnPropertyDescriptor(_, prop: any) {
       if (full) return Object.getOwnPropertyDescriptor(cache, prop);
       if (cache[prop] === DELETED) return undefined;
-      return Object.getOwnPropertyDescriptor(cache, prop) ??
-        Object.getOwnPropertyDescriptor(base, prop);
+      return (
+        Object.getOwnPropertyDescriptor(cache, prop) ?? Object.getOwnPropertyDescriptor(base, prop)
+      );
     },
 
     get(_, prop: any) {
@@ -855,7 +857,7 @@ function copyOnWriteArray<T>(base: T[], parent?: () => void): T[] {
 
     ownKeys() {
       if (full) return Object.getOwnPropertyNames(cache);
-      const out = ["length"];
+      const out = ['length'];
       for (const key of Object.keys(base)) {
         if (cache[key as any] === DELETED) continue;
         out.push(key);
@@ -908,7 +910,7 @@ function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
     return cow;
   }
 
-  function dirtyAll(){
+  function dirtyAll() {
     if (full) return cache;
     full = true;
     const deleted = new Set<K>();
@@ -990,7 +992,7 @@ function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
     [Symbol.iterator]: (...args: any) => base[Symbol.iterator].apply(dirtyAll(), args),
 
     // mutators
-    delete: (key: K) =>{
+    delete: (key: K) => {
       mark();
       if (full) return cache.delete(key);
       const old = cache.get(key);
@@ -1061,26 +1063,26 @@ function copyOnWriteMap<K, V>(base: Map<K, V>, parent?: () => void): Map<K, V> {
 
   proxy = new Proxy(base, {
     defineProperty() {
-      throw new Error("not supported by copyOnWrite");
+      throw new Error('not supported by copyOnWrite');
     },
 
     deleteProperty() {
-      throw new Error("not supported by copyOnWriteMap");
+      throw new Error('not supported by copyOnWriteMap');
     },
 
     getOwnPropertyDescriptor() {
-      throw new Error("not supported by copyOnWriteMap");
+      throw new Error('not supported by copyOnWriteMap');
     },
 
     set() {
-      throw new Error("not supported by copyOnWriteMap");
+      throw new Error('not supported by copyOnWriteMap');
     },
 
     get(_, prop: any) {
       if (prop === copySym) return copy;
       if (prop === recoverSym) return rcvr;
 
-      if (prop === "size") return size();
+      if (prop === 'size') return size();
 
       // get methods
       const method = cowMapMethods[prop];
@@ -1113,30 +1115,30 @@ function copyOnWriteSet<K>(base: Set<K>, parent?: () => void) {
 
   return new Proxy(base, {
     defineProperty() {
-      throw new Error("not supported by copyOnWrite");
+      throw new Error('not supported by copyOnWrite');
     },
 
     deleteProperty() {
-      throw new Error("not supported by copyOnWriteSet");
+      throw new Error('not supported by copyOnWriteSet');
     },
 
     getOwnPropertyDescriptor() {
-      throw new Error("not supported by copyOnWriteSet");
+      throw new Error('not supported by copyOnWriteSet');
     },
 
     set() {
-      throw new Error("not supported by copyOnWriteSet");
+      throw new Error('not supported by copyOnWriteSet');
     },
 
     get(_, prop: any) {
       if (prop === copySym) return () => deepCopy(cache ?? base);
       if (prop === recoverSym) return () => cache ?? base;
 
-      if (prop === "add" || prop === "delete" || prop === "clear") {
+      if (prop === 'add' || prop === 'delete' || prop === 'clear') {
         if (cache === undefined) {
           // break the glass
           cache = new Set(base);
-          if(parent) parent();
+          if (parent) parent();
         }
       }
 
@@ -1190,7 +1192,7 @@ export class FutureContext {
 
   throw(e: Error) {
     // if we're actually inside the coro, throw the error now
-    if (this.#awake) throw(e);
+    if (this.#awake) throw e;
     this.#awake = true;
     try {
       this.#coro.throw(e);
@@ -1220,109 +1222,111 @@ export interface Storage {
   withRTxn<T>(fx: FutureContext, fn: (txn: RTxn) => Future<T>): Future<T>;
 }
 
-export type StorageValue = {value: unknown} | {err: Error};
-export type StorageDone = {value: true} | {err: Error};
+export type StorageValue = { value: unknown } | { err: Error };
+export type StorageDone = { value: true } | { err: Error };
 
 export interface WTxn {
   get(key: string, cb: (result: StorageValue) => void): void;
   set(key: string, value: unknown, cb: (result: StorageDone) => void): void;
   del(key: string, cb: (result: StorageDone) => void): void;
-};
+}
 
 export interface RTxn {
   get(key: string, cb: (result: StorageValue) => void): void;
-};
+}
 
 export type WStorageQuestion = {
   // keys to look up
-  get?: Record<string, true>,
+  get?: Record<string, true>;
   // key-values to set
-  set?: Record<string, unknown>,
+  set?: Record<string, unknown>;
   // key-values to delete
-  del?: Record<string, true>,
+  del?: Record<string, true>;
 };
 
 export type RStorageQuestion = {
   // keys to look up
-  get?: Record<string, true>,
+  get?: Record<string, true>;
 };
 
 export type StorageAnswer = {
   // key-value lookup results
-  get: Record<string, StorageValue>,
+  get: Record<string, StorageValue>;
   // keys done setting
-  set: Record<string, StorageDone>,
+  set: Record<string, StorageDone>;
   // keys done deleting
-  del: Record<string, StorageDone>,
+  del: Record<string, StorageDone>;
 };
 
 export type WStorageGenerator<T> = Generator<WStorageQuestion, T, StorageAnswer>;
 export type RStorageGenerator<T> = Generator<RStorageQuestion, T, StorageAnswer>;
 
 // function to interact with the StorageGenerator
-export function *txnGet(key: string): RStorageGenerator<unknown>{
-  const ans = (yield {"get": {[key]: true}}).get[key];
-  if ("err" in ans) {
+export function* txnGet(key: string): RStorageGenerator<unknown> {
+  const ans = (yield { get: { [key]: true } }).get[key];
+  if ('err' in ans) {
     throw ans.err;
   }
   return ans.value;
 }
 
 // a function to interact with the StorageGenerator
-export function *txnSet(key: string, value: unknown): WStorageGenerator<void> {
-  const ans = (yield {"set": {[key]: value}}).set[key];
-  if ("err" in ans) {
+export function* txnSet(key: string, value: unknown): WStorageGenerator<void> {
+  const ans = (yield { set: { [key]: value } }).set[key];
+  if ('err' in ans) {
     throw ans.err;
   }
 }
 
 // a function to interact with the StorageGenerator
-export function *txnDel(key: string): WStorageGenerator<void> {
-  const ans = (yield {"del": {[key]: true}}).del[key];
-  if ("err" in ans) {
+export function* txnDel(key: string): WStorageGenerator<void> {
+  const ans = (yield { del: { [key]: true } }).del[key];
+  if ('err' in ans) {
     throw ans.err;
   }
 }
 
 // a function to hide some of the boilerplate of opening a WTxn
-export function *withWTxn<T>(
-  fx: FutureContext, s: Storage, fn: () => WStorageGenerator<T>,
+export function* withWTxn<T>(
+  fx: FutureContext,
+  s: Storage,
+  fn: () => WStorageGenerator<T>,
 ): Future<T> {
-  return yield* s.withWTxn(fx, function*(txn){
+  return yield* s.withWTxn(fx, function* (txn) {
     return yield* runWTxn(fx, txn, fn());
   });
 }
 
 // a function to hide some of the boilerplate of opening a RTxn
-export function *withRTxn<T>(
-  fx: FutureContext, s: Storage, fn: () => RStorageGenerator<T>,
+export function* withRTxn<T>(
+  fx: FutureContext,
+  s: Storage,
+  fn: () => RStorageGenerator<T>,
 ): Future<T> {
-  return yield* s.withRTxn(fx, function*(txn){
+  return yield* s.withRTxn(fx, function* (txn) {
     return yield* runRTxn(fx, txn, fn());
   });
 }
 
 // run a StorageGenerator to completion, converting potentially many parallel callbacks into a
 // generator interface.
-function *runWTxn<T>(
-  fx: FutureContext, txn: WTxn, g: WStorageGenerator<T>,
-): Future<T> {
+function* runWTxn<T>(fx: FutureContext, txn: WTxn, g: WStorageGenerator<T>): Future<T> {
   // ignore late callbacks
   let valid = true;
   try {
-    let ans: StorageAnswer = {get: {}, set: {}, del: {}};
+    let ans: StorageAnswer = { get: {}, set: {}, del: {} };
     let ready = false;
     while (true) {
-      const {value, done} = g.next(ans);
+      const { value, done } = g.next(ans);
       if (done) return value;
 
-      ans = {get: {}, set: {}, del: {}};
+      ans = { get: {}, set: {}, del: {} };
       ready = false;
 
       // start gets
       for (const key of Object.keys(value.get ?? {})) {
         txn.get(key, (result) => {
-          if (!valid) return;  // ignore late callback
+          if (!valid) return; // ignore late callback
           ans.get[key] = result;
           ready = true;
           fx.wakeup();
@@ -1332,7 +1336,7 @@ function *runWTxn<T>(
       // start sets
       for (const [key, val] of Object.entries(value.set ?? {})) {
         txn.set(key, val, (result) => {
-          if (!valid) return;  // ignore late callback
+          if (!valid) return; // ignore late callback
           ans.set[key] = result;
           ready = true;
           fx.wakeup();
@@ -1342,7 +1346,7 @@ function *runWTxn<T>(
       // start deletes
       for (const key of Object.keys(value.del ?? {})) {
         txn.del(key, (result) => {
-          if (!valid) return;  // ignore late callback
+          if (!valid) return; // ignore late callback
           ans.del[key] = result;
           ready = true;
           fx.wakeup();
@@ -1359,25 +1363,23 @@ function *runWTxn<T>(
 
 // run a StorageGenerator to completion, converting potentially many parallel callbacks into a
 // generator interface.
-function *runRTxn<T>(
-  fx: FutureContext, txn: RTxn, g: RStorageGenerator<T>,
-): Future<T> {
+function* runRTxn<T>(fx: FutureContext, txn: RTxn, g: RStorageGenerator<T>): Future<T> {
   // ignore late callbacks
   let valid = true;
   try {
-    let ans: StorageAnswer = {get: {}, set: {}, del: {}};
+    let ans: StorageAnswer = { get: {}, set: {}, del: {} };
     let ready = false;
     while (true) {
-      const {value, done} = g.next(ans);
+      const { value, done } = g.next(ans);
       if (done) return value;
 
-      ans = {get: {}, set: {}, del: {}};
+      ans = { get: {}, set: {}, del: {} };
       ready = false;
 
       // start gets
       for (const key of Object.keys(value.get ?? {})) {
         txn.get(key, (result) => {
-          if (!valid) return;  // ignore late callback
+          if (!valid) return; // ignore late callback
           ans.get[key] = result;
           ready = true;
           fx.wakeup();
@@ -1393,8 +1395,8 @@ function *runRTxn<T>(
 }
 
 type StorageCoders = {
-  encoder: (key: string, val: unknown) => unknown,
-  decoder: (key: string, val: unknown) => unknown,
+  encoder: (key: string, val: unknown) => unknown;
+  decoder: (key: string, val: unknown) => unknown;
 };
 
 export class IndexedDBStorage {
@@ -1405,18 +1407,20 @@ export class IndexedDBStorage {
   constructor(db: IDBDatabase, store: string, coders: StorageCoders) {
     this.#db = db;
     this.#store = store;
-    this.#coders = coders
+    this.#coders = coders;
   }
 
   *#withTxn<T>(
-    fx: FutureContext, mode: IDBTransactionMode, fn: (txn: WTxn) => Future<T>,
+    fx: FutureContext,
+    mode: IDBTransactionMode,
+    fn: (txn: WTxn) => Future<T>,
   ): Future<T> {
     // create the transaction
     let ready = false;
     const txn = this.#db.transaction([this.#store], mode);
     txn.onerror = (/*event*/) => {
       // nobody to send the error to, so just crash the coroutine
-      fx.throw(new Error("txn failed"));
+      fx.throw(new Error('txn failed'));
     };
     txn.onabort = (/*event*/) => {
       ready = true;
@@ -1444,11 +1448,11 @@ export class IndexedDBStorage {
   }
 
   *withWTxn<T>(fx: FutureContext, fn: (txn: WTxn) => Future<T>): Future<T> {
-    return yield* this.#withTxn(fx, "readwrite", fn);
+    return yield* this.#withTxn(fx, 'readwrite', fn);
   }
 
   *withRTxn<T>(fx: FutureContext, fn: (txn: RTxn) => Future<T>): Future<T> {
-    return yield* this.#withTxn(fx, "readonly", fn);
+    return yield* this.#withTxn(fx, 'readonly', fn);
   }
 }
 
@@ -1464,37 +1468,37 @@ class IndexedDBTxn {
   get(key: string, cb: (result: StorageValue) => void): void {
     const req = this.#store.get(key);
     req.onsuccess = () => {
-      cb({value: this.#coders.decoder(key, req.result)});
+      cb({ value: this.#coders.decoder(key, req.result) });
     };
     req.onerror = () => {
-      cb({err: new Error(`failed to look up "${key}"`)});
+      cb({ err: new Error(`failed to look up "${key}"`) });
     };
   }
 
   set(key: string, value: unknown, cb: (result: StorageDone) => void): void {
     const req = this.#store.put(this.#coders.encoder(key, value), key);
     req.onsuccess = () => {
-      cb({value: true});
+      cb({ value: true });
     };
     req.onerror = () => {
-      cb({err: new Error(`failed to set "${key}"`)});
+      cb({ err: new Error(`failed to set "${key}"`) });
     };
   }
 
   del(key: string, cb: (result: StorageDone) => void): void {
     const req = this.#store.delete(key);
     req.onsuccess = () => {
-      cb({value: true});
+      cb({ value: true });
     };
     req.onerror = () => {
-      cb({err: new Error(`failed to delete "${key}"`)});
+      cb({ err: new Error(`failed to delete "${key}"`) });
     };
   }
 }
 
 // InMemoryStorage does not require any StorageCoders because it never encodes or decodes.
 export class InMemStorage {
-  #data: Record<string, unknown> ;
+  #data: Record<string, unknown>;
 
   constructor(data?: Record<string, unknown>) {
     this.#data = data !== undefined ? data : {};
@@ -1536,20 +1540,20 @@ class InMemTxn {
 
   get(key: string, cb: (result: StorageValue) => void): void {
     if (key in this.#updates) {
-      cb({value: this.#updates[key]});
+      cb({ value: this.#updates[key] });
     } else {
-      cb({value: this.#data[key]});
+      cb({ value: this.#data[key] });
     }
   }
 
   set(key: string, value: unknown, cb: (result: StorageDone) => void): void {
     this.#updates[key] = value;
-    cb({value: true});
+    cb({ value: true });
   }
 
   del(key: string, cb: (result: StorageDone) => void): void {
     this.#updates[key] = undefined;
-    cb({value: true});
+    cb({ value: true });
   }
 }
 
@@ -1568,7 +1572,7 @@ export class OverlayStorage {
   *#withTxn<T>(fx: FutureContext, fn: (txn: WTxn) => Future<T>): Future<T> {
     // regardless of read/write status on the overlay txn, we only ever open a read txn on #base
     const self = this;
-    return yield* this.#base.withRTxn(fx, function*(baseTxn){
+    return yield* this.#base.withRTxn(fx, function* (baseTxn) {
       const updates: Record<string, unknown> = {};
       const txn = new OverlayTxn(baseTxn, self.#data, updates);
       // abort case is that we don't catch the exception here:
@@ -1594,7 +1598,7 @@ export class OverlayStorage {
 class OverlayTxn {
   #base: RTxn;
   #data: Record<string, unknown>;
-  #updates: Record<string, unknown>
+  #updates: Record<string, unknown>;
 
   constructor(base: RTxn, data: Record<string, unknown>, updates: Record<string, unknown>) {
     this.#base = base;
@@ -1604,9 +1608,9 @@ class OverlayTxn {
 
   get(key: string, cb: (result: StorageValue) => void): void {
     if (key in this.#updates) {
-      cb({value: this.#updates[key]});
+      cb({ value: this.#updates[key] });
     } else if (key in this.#data) {
-      cb({value: this.#data[key]});
+      cb({ value: this.#data[key] });
     } else {
       this.#base.get(key, cb);
     }
@@ -1614,12 +1618,12 @@ class OverlayTxn {
 
   set(key: string, value: unknown, cb: (result: StorageDone) => void): void {
     this.#updates[key] = value;
-    cb({value: true});
+    cb({ value: true });
   }
 
   del(key: string, cb: (result: StorageDone) => void): void {
     this.#updates[key] = undefined;
-    cb({value: true});
+    cb({ value: true });
   }
 }
 
@@ -1642,43 +1646,43 @@ export interface ExternalStorageTxn {
   abort(): MaybePromise<void>;
 }
 
-
 /* ExternalStorage implements Storage with automatic conversions between native return values and
    the generator-based reducers runtime */
 export class ExternalStorage {
   #txnFn: (writable: boolean) => MaybePromise<ExternalStorageTxn>;
 
   constructor(txnFn: (writable: boolean) => MaybePromise<ExternalStorageTxn>) {
-    this.#txnFn = txnFn
+    this.#txnFn = txnFn;
   }
 
-  *#withTxn<T>(
-    fx: FutureContext, writable: boolean, fn: (txn: WTxn) => Future<T>,
-  ): Future<T> {
+  *#withTxn<T>(fx: FutureContext, writable: boolean, fn: (txn: WTxn) => Future<T>): Future<T> {
     const toPromise = <P>(p: MaybePromise<P>) => {
-      if (p && typeof p === "object" && "then" in p && typeof p.then === "function") {
+      if (p && typeof p === 'object' && 'then' in p && typeof p.then === 'function') {
         return p;
       }
       return {
         then(onFufilled: (result: P) => void) {
           onFufilled(p as P);
-        }
+        },
       };
-    }
+    };
 
-    const resolve = function*<P>(p: MaybePromise<P>): Future<P> {
+    const resolve = function* <P>(p: MaybePromise<P>): Future<P> {
       let val: P;
       let ready = false;
-      toPromise(p).then((t) => {
-        val = t;
-        ready = true;
-        fx.wakeup();
-      }, (e: unknown) => {
-        fx.throw(e as Error);
-      });
+      toPromise(p).then(
+        (t) => {
+          val = t;
+          ready = true;
+          fx.wakeup();
+        },
+        (e: unknown) => {
+          fx.throw(e as Error);
+        },
+      );
       while (!ready) yield;
       return val!;
-    }
+    };
 
     const userTxn = yield* resolve(this.#txnFn(writable));
     const txn: WTxn = {
@@ -1699,7 +1703,7 @@ export class ExternalStorage {
           () => cb({ value: true }),
           (e: unknown) => cb({ err: e as Error }),
         );
-      }
+      },
     };
 
     let result: T;
@@ -1729,23 +1733,23 @@ export class ExternalStorage {
 
 export type ReducerQuestion = {
   // keys to look up
-  old?: Record<string, true>,
+  old?: Record<string, true>;
   // keys to look up
-  get?: Record<string, true>,
+  get?: Record<string, true>;
   // key-values to set
-  set?: Record<string, unknown>,
+  set?: Record<string, unknown>;
   // key-values to delete
-  del?: Record<string, true>,
+  del?: Record<string, true>;
 };
 
 export type ReducerAnswer = {
-  old: Record<string, StorageValue>,
+  old: Record<string, StorageValue>;
   // key-value lookup results
-  get: Record<string, StorageValue>,
+  get: Record<string, StorageValue>;
   // keys done setting
-  set: Record<string, StorageDone>,
+  set: Record<string, StorageDone>;
   // keys done deleting
-  del: Record<string, StorageDone>,
+  del: Record<string, StorageDone>;
 };
 
 export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
@@ -1755,15 +1759,18 @@ export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
 // yield* rx.old.project(key): explicitly get the old value for key
 
 // wrap a Reducer so it acts like a WStorageGenerator, returning a set of updated keys
-export function *runReducer(g: Reducer<any[] | void>, simulate?: boolean): WStorageGenerator<[string[], any[]]> {
+export function* runReducer(
+  g: Reducer<any[] | void>,
+  simulate?: boolean,
+): WStorageGenerator<[string[], any[]]> {
   // our cache of get's we've already completed
   const old: Record<string, unknown> = Object.create(null);
   // our planned sets and dels that we submit at the end
   const cur: Record<string, unknown> = Object.create(null);
 
-  function *finish(retVal: any[]): WStorageGenerator<[string[], any[]]> {
+  function* finish(retVal: any[]): WStorageGenerator<[string[], any[]]> {
     const updates = [];
-    const question: WStorageQuestion = {get: {}, set: {}, del: {}};
+    const question: WStorageQuestion = { get: {}, set: {}, del: {} };
     for (const [k, v] of Object.entries(cur)) {
       if (v === DELETED) {
         question.del![k] = true;
@@ -1788,42 +1795,42 @@ export function *runReducer(g: Reducer<any[] | void>, simulate?: boolean): WStor
       const ans = yield question;
       // check every result
       for (const [k, v] of Object.entries(ans.set ?? {})) {
-        if ("err" in v) throw new Error(`setting "${k}" after reducer: ${v.err}`)
+        if ('err' in v) throw new Error(`setting "${k}" after reducer: ${v.err}`);
         nupdated++;
       }
       for (const [k, v] of Object.entries(ans.del ?? {})) {
-        if ("err" in v) throw new Error(`deleting "${k}" after reducer: ${v.err}`)
+        if ('err' in v) throw new Error(`deleting "${k}" after reducer: ${v.err}`);
         nupdated++;
       }
     }
     return [updates, retVal];
   }
 
-  let ans: ReducerAnswer = {old: {}, get: {}, set: {}, del: {}};
+  let ans: ReducerAnswer = { old: {}, get: {}, set: {}, del: {} };
   // inflight is for gets we have submitted but haven't received
   // (you can have many olds or gets in flight simultaneously, but only one set, and it cannot be
   //  simultaneous with any gets)
-  let inflight: Record<string, true> = {};
+  const inflight: Record<string, true> = {};
   // pending is for answers we're trying to deliver
   // {key: pending_ops}
-  let pending: Record<string, {old?: true, get?: true}> = {};
-  let storageQuestion: WStorageQuestion = {get: {}, set: {}, del: {}};
+  const pending: Record<string, { old?: true; get?: true }> = {};
+  let storageQuestion: WStorageQuestion = { get: {}, set: {}, del: {} };
 
   // run the reducer to completion
   while (true) {
     let ready = true;
     while (ready) {
-      const {value, done} = g.next(ans);
+      const { value, done } = g.next(ans);
       if (done) return yield* finish(value ?? []);
 
-      ans = {old: {}, get: {}, set: {}, del: {}};
+      ans = { old: {}, get: {}, set: {}, del: {} };
       ready = false;
 
       for (const key of Object.keys(value.old ?? {})) {
         if (key in old) {
           // we already know this one
           // note that copyOnWrite() is applied inside the ReducerContext; not here
-          ans.old[key] = {value: old[key]};
+          ans.old[key] = { value: old[key] };
           ready = true;
         } else if (!inflight[key]) {
           inflight[key] = true;
@@ -1838,12 +1845,12 @@ export function *runReducer(g: Reducer<any[] | void>, simulate?: boolean): WStor
           // TODO: let copyOnWrite() fork an existing copyOnWrite object, so we don't have to
           //       materialize the updated object until we call finish()
           const cached = cur[key];
-          ans.get[key] = {value: recover(cached !== DELETED ? cached : undefined)};
+          ans.get[key] = { value: recover(cached !== DELETED ? cached : undefined) };
           ready = true;
         } else if (key in old) {
           // we looked this up before
           // note that copyOnWrite() is applied inside the ReducerContext; not here
-          ans.get[key] = {value: old[key]};
+          ans.get[key] = { value: old[key] };
           ready = true;
         } else if (!inflight[key]) {
           inflight[key] = true;
@@ -1855,14 +1862,14 @@ export function *runReducer(g: Reducer<any[] | void>, simulate?: boolean): WStor
       for (const [key, val] of Object.entries(value.set ?? {})) {
         // just store this in memory for now
         cur[key] = val;
-        ans.set[key] = {value: true};
+        ans.set[key] = { value: true };
         ready = true;
       }
 
       for (const key of Object.keys(value.del ?? {})) {
         // just store this in memory for now
         cur[key] = DELETED;
-        ans.del[key] = {value: true};
+        ans.del[key] = { value: true };
         ready = true;
       }
     }
@@ -1870,11 +1877,11 @@ export function *runReducer(g: Reducer<any[] | void>, simulate?: boolean): WStor
     // interact with storage until we have an answer to return to the reducers
     while (!ready) {
       const storageAnswer = yield storageQuestion;
-      storageQuestion = {get: {}, set: {}, del: {}};
+      storageQuestion = { get: {}, set: {}, del: {} };
 
       for (const [key, val] of Object.entries(storageAnswer.get)) {
         // cache successful results
-        if ("value" in val) old[key] = val.value;
+        if ('value' in val) old[key] = val.value;
         // done with this query
         delete inflight[key];
         const pnd = pending[key];
@@ -1932,21 +1939,25 @@ export interface Query<T> {
 
 export type QueryQuestion = {
   // which keys to look up in storage
-  store?: Record<string, true>,
+  store?: Record<string, true>;
   // which query ids to await their result
-  query?: Record<string, true>,
+  query?: Record<string, true>;
 };
 
 export type QueryAnswer = {
   // the value for each storage lookup
-  store: Record<string, StorageValue>,
+  store: Record<string, StorageValue>;
   // the [result, dirty] for each asked query
-  query: Record<string, [unknown, boolean]>,
+  query: Record<string, [unknown, boolean]>;
 };
 
 export type QueryGenerator<T> = Generator<QueryQuestion, T, QueryAnswer>;
 
-export type QueryFunction<QX, T> = (qx: QX, prev: T | undefined, prevIsValid: boolean) => QueryGenerator<T>;
+export type QueryFunction<QX, T> = (
+  qx: QX,
+  prev: T | undefined,
+  prevIsValid: boolean,
+) => QueryGenerator<T>;
 
 // graph-facing api, which hides typing info from the graph
 interface QueryWrapper<QX> {
@@ -1984,11 +1995,11 @@ class _Query<QX, T> {
   // part of public api
   *awaitResult(): QueryGenerator<T> {
     if (this.#onStart) {
-      throw new Error("cannot await result of unstarted Query");
+      throw new Error('cannot await result of unstarted Query');
     }
     // don't try to coordinate our own #result vaule with the graph being executed; just use this as
     // an idiomatic way to ask the graph run for the result from our .id.
-    const ans = yield {query: {[this.id]: true}};
+    const ans = yield { query: { [this.id]: true } };
     const [result] = ans.query[this.id];
     return result as T;
   }
@@ -2003,11 +2014,11 @@ class _Query<QX, T> {
 
   start(): void {
     if (this.closed) {
-      throw new Error("call to Query.start() on closed query");
+      throw new Error('call to Query.start() on closed query');
     }
     if (this.#onStart) {
       this.#onStart();
-      this.#onStart = undefined
+      this.#onStart = undefined;
     }
   }
 
@@ -2029,8 +2040,8 @@ class _Query<QX, T> {
 
     // check if any query dependency changed its result
     for (const qid of Object.keys(this.#queryDeps)) {
-      const ans = yield {"query": {[qid]: true}};
-      const [, dirty] = ans["query"][qid];
+      const ans = yield { query: { [qid]: true } };
+      const [, dirty] = ans['query'][qid];
       if (dirty) return false;
     }
 
@@ -2044,7 +2055,7 @@ class _Query<QX, T> {
     this.#runs++;
 
     if (yield* this.#shouldSkip(commitKeys)) {
-      return [this.#result, false]
+      return [this.#result, false];
     }
 
     // rebuild deps
@@ -2052,14 +2063,14 @@ class _Query<QX, T> {
     this.#queryDeps = {};
 
     const g = this.#fn(qx, oldResult, this.#runs > 1);
-    let ans: QueryAnswer = {query: {}, store: {}};
+    let ans: QueryAnswer = { query: {}, store: {} };
     // run query function to completion
     while (true) {
       // pass the current answer to the coroutine
-      const {value, done} = g.next(ans);
+      const { value, done } = g.next(ans);
       if (done) {
         this.#result = value;
-        const dirty = (this.#runs === 1) || (this.#result !== oldResult);
+        const dirty = this.#runs === 1 || this.#result !== oldResult;
         return [this.#result, dirty];
       }
       // capture dependencies before yielding up to the graph for answers
@@ -2128,7 +2139,7 @@ class GraphRun<QX> {
       const g = q.run(this.#qx, this.#commitKeys);
       active[q.id] = g;
       // provide a phony first answer to start the generator off
-      runnable[q.id] = {store: {}, query: {}};
+      runnable[q.id] = { store: {}, query: {} };
     }
 
     // run the graph to completion
@@ -2139,7 +2150,7 @@ class GraphRun<QX> {
         if (answers.length === 0) break;
         runnable = {};
         for (const [qid, ans] of answers) {
-          const {value, done} = active[qid].next(ans);
+          const { value, done } = active[qid].next(ans);
           if (done) {
             // query finished
             delete active[qid];
@@ -2150,7 +2161,7 @@ class GraphRun<QX> {
             if (waiting !== undefined) {
               delete wantResults[qid];
               for (const id of waiting) {
-                setdefault(runnable, id, {query: {}, store: {}}).query[qid] = result;
+                setdefault(runnable, id, { query: {}, store: {} }).query[qid] = result;
               }
             }
             continue;
@@ -2163,7 +2174,7 @@ class GraphRun<QX> {
             // has this query ran yet?
             if (id in this.#ran) {
               // we already have this result
-              setdefault(runnable, qid, {query: {}, store: {}}).query[id] = this.#ran[id];
+              setdefault(runnable, qid, { query: {}, store: {} }).query[id] = this.#ran[id];
             } else {
               // wake this query up when the other query finishes
               setdefault(wantResults, id, []).push(qid);
@@ -2180,16 +2191,16 @@ class GraphRun<QX> {
       for (const key of Object.keys(wantAnswers)) {
         gets[key] = true;
       }
-      const answers = (yield {get: gets}).get;
+      const answers = (yield { get: gets }).get;
 
       // process answers
       const answerEntries = Object.entries(answers);
       if (answerEntries.length === 0) {
-        throw new Error("empty answer");
+        throw new Error('empty answer');
       }
-      for (const [key, value] of answerEntries){
+      for (const [key, value] of answerEntries) {
         for (const qid of wantAnswers[key]) {
-          setdefault(runnable, qid, {query: {}, store: {}}).store[key] = value;
+          setdefault(runnable, qid, { query: {}, store: {} }).store[key] = value;
         }
         delete wantAnswers[key];
       }
@@ -2198,7 +2209,7 @@ class GraphRun<QX> {
     // return a callback to notify query subscribers
     return () => {
       for (const q of queries) {
-        const [,dirty] = this.#ran[q.id];
+        const [, dirty] = this.#ran[q.id];
         if (dirty) q.notify();
       }
     };
@@ -2291,9 +2302,7 @@ class RemoteQuery<T> {
   // RemoteQuery is passed a subcription factory.  The factory receives an onResults hook and
   // returns a closer function.  This dance avoids hardcoding things like "every subscription gets
   // a unique subId" since that is a wire protocol detail, not an API detail.
-  constructor(
-    subscriptionFactory: (onResult: (result: T) => void) => () => void,
-  ) {
+  constructor(subscriptionFactory: (onResult: (result: T) => void) => () => void) {
     this.#onClose = subscriptionFactory((result: T) => this.#onResult(result));
   }
 
@@ -2314,7 +2323,7 @@ class RemoteQuery<T> {
   }
 
   close(): void {
-    if(this.#closed) return;
+    if (this.#closed) return;
     this.#onClose();
     this.closed = true;
   }
@@ -2336,11 +2345,9 @@ export class RemoteQueries {
   }
 
   newQuery<T>(raw: any[], decoder: (result: any) => T): Query<T> {
-    return new RemoteQuery<T>(
-      (onResult: (result: T) => void) => {
-        return this.#io.createQuery(raw, (result: any) => onResult(decoder(result)));
-      },
-    );
+    return new RemoteQuery<T>((onResult: (result: T) => void) => {
+      return this.#io.createQuery(raw, (result: any) => onResult(decoder(result)));
+    });
   }
 }
 
@@ -2349,13 +2356,13 @@ export class RemoteQueries {
 // Event wraps a proto type T with a client id.  An Event may have originated from KurrentDB, or
 // it may have been emitted by a forecaster, or it may be a command we are about to send.
 export type Event<T> = {
-  id: string,
-  data: T,
+  id: string;
+  data: T;
 };
 
 // RealEvent extends Event with stream position data that originates from KurrentDB.
 export type RealEvent<T> = Event<T> & {
-  position: number,
+  position: number;
 };
 
 export function DecodeRealEvent<T>(val: any, subdecoder: (val: any) => T): RealEvent<T> {
@@ -2365,23 +2372,23 @@ export function DecodeRealEvent<T>(val: any, subdecoder: (val: any) => T): RealE
 function matchSent<C>(tpl: any, cmd: C): boolean {
   if (typeof tpl !== typeof cmd) return false;
   switch (typeof tpl) {
-    case "boolean":
-    case "bigint":
-    case "number":
-    case "string":
-    case "undefined":
+    case 'boolean':
+    case 'bigint':
+    case 'number':
+    case 'string':
+    case 'undefined':
       return tpl === cmd;
 
-    case "function":
+    case 'function':
       return tpl(cmd);
 
-    case "object":
+    case 'object':
       // null handled here
       if (tpl === null) return cmd === null;
       // general objects handled below
       break;
 
-    case "symbol":
+    case 'symbol':
     default:
       throw new Error(`mark of type "${typeof tpl}" not handled by matchSent`);
   }
@@ -2426,9 +2433,7 @@ export class Framework<QX, RX, E, C> {
   #scheduled: boolean = false;
 
   // #reconnects is a list of promise resolve functions
-  #reconnects: (
-    (value: {checkpoint: number | undefined, commands: Event<any>[]}) => void
-  )[] = [];
+  #reconnects: ((value: { checkpoint: number | undefined; commands: Event<any>[] }) => void)[] = [];
   #recvdEvents: RealEvent<E>[] = [];
   // commands that came to us from the client
   #sendCommands: C[] = [];
@@ -2447,17 +2452,17 @@ export class Framework<QX, RX, E, C> {
     storage: Storage | null,
     callbacks: {
       // required: convert from json format to full type
-      decodeEvent: (raw: any) => E,
+      decodeEvent: (raw: any) => E;
       // required if using sendCommands: convert from storage/wire format
-      decodeCommand: (raw: any) => C,
+      decodeCommand: (raw: any) => C;
       // optional: configure storage before any events arrive
-      migrate?: (rx: RX) => Reducer<void>,
+      migrate?: (rx: RX) => Reducer<void>;
       // required: reduce a batch of events into the read model
-      reducer: (rx: RX, events: E[]) => Reducer<void | any[]>,
+      reducer: (rx: RX, events: E[]) => Reducer<void | any[]>;
       // optional: forecast the events a server will send for a batch of commands
-      forecaster?: (commands: C) => E[],
+      forecaster?: (commands: C) => E[];
       // required if using sendCommands: receive events to send on the wire
-      onCommands?: (commands: any[])=> void,
+      onCommands?: (commands: any[]) => void;
     },
   ) {
     this.#rx = rx;
@@ -2482,7 +2487,7 @@ export class Framework<QX, RX, E, C> {
 
   // request info needed to resume a connection: last committed checkpoint and unsent commands
   reconnect(
-    cb: (result: {checkpoint: number | undefined, commands: Event<any>[]}) => void,
+    cb: (result: { checkpoint: number | undefined; commands: Event<any>[] }) => void,
   ): void {
     this.#reconnects.push(cb);
     this.#schedule();
@@ -2511,11 +2516,11 @@ export class Framework<QX, RX, E, C> {
   sendCommands(commands: C[]): void {
     if (!this.#onCommands || !this.#decodeCommand) {
       throw new Error(
-        "if sendCommands() is used, the following callbacks must be defined: "
-        + "onCommands and decodeCommand"
+        'if sendCommands() is used, the following callbacks must be defined: ' +
+          'onCommands and decodeCommand',
       );
     }
-    this.#sendCommands.push.apply(this.#sendCommands, commands);
+    this.#sendCommands.push(...commands);
     this.#schedule();
   }
 
@@ -2541,7 +2546,7 @@ export class Framework<QX, RX, E, C> {
     undecodedEvents?: Event<any>[],
   ): void {
     const self = this;
-    this.#simulates.push(function*() {
+    this.#simulates.push(function* () {
       // unwrap and decode events
       const decoded = (undecodedEvents ?? []).map((u) => self.#decodeEvent(u.data));
       // run provided function
@@ -2568,7 +2573,7 @@ export class Framework<QX, RX, E, C> {
 
     // run migration logic on the data store
     if (self.#migrate) {
-      yield* withWTxn(this.#fx, this.#storage, function*() {
+      yield* withWTxn(this.#fx, this.#storage, function* () {
         yield* runReducer(self.#migrate!(self.#rx));
         // ignore updated keys and don't trigger a run of the graph
       });
@@ -2576,8 +2581,8 @@ export class Framework<QX, RX, E, C> {
 
     // load unsent commands from storage
     const commands: Event<any>[] = [];
-    yield* withRTxn(this.#fx, this.#storage, function*() {
-      const index = (yield* txnGet(".commands")) as string[] ?? [];
+    yield* withRTxn(this.#fx, this.#storage, function* () {
+      const index = ((yield* txnGet('.commands')) as string[]) ?? [];
       for (const id of index) {
         const command = (yield* txnGet(`.command-${id}`)) as Event<any>;
         commands.push(command);
@@ -2606,7 +2611,7 @@ export class Framework<QX, RX, E, C> {
     if (forecasts.length === 0) return;
 
     // populate the initial overlay
-    yield* withWTxn(this.#fx, this.#overlay, function*() {
+    yield* withWTxn(this.#fx, this.#overlay, function* () {
       yield* runReducer(self.#reducer(self.#rx, forecasts));
       // ignore updated keys and don't trigger a run of the graph
     });
@@ -2634,7 +2639,7 @@ export class Framework<QX, RX, E, C> {
     //     - extend the graph
     // - recieve a reconnect request
     //     - then return the checkpoint in storage
-    while(true){
+    while (true) {
       if (this.#live && !this.#setLive) {
         // we fell behind; freeze graph and overlay, and when caughtUp() is called, we'll process
         // all changes from now until then with a single run of the graph
@@ -2648,7 +2653,7 @@ export class Framework<QX, RX, E, C> {
 
       if (this.#roundTripped.length > 0) {
         yield* this.#onRoundTripped();
-        continue
+        continue;
       }
 
       if (!this.#live && this.#setLive) {
@@ -2679,7 +2684,7 @@ export class Framework<QX, RX, E, C> {
       }
 
       // if we got here we probably had a spurious wakeup, or perhaps a newQuery() while not #live
-      yield
+      yield;
     }
   }
 
@@ -2691,9 +2696,9 @@ export class Framework<QX, RX, E, C> {
     this.#recvdEvents = [];
 
     // open a write txn to real storage
-    const updates = yield* withWTxn(this.#fx, this.#storage, function*(){
+    const updates = yield* withWTxn(this.#fx, this.#storage, function* () {
       // update our checkpoint when this txn finishes
-      yield* txnSet(".checkpoint", checkpoint);
+      yield* txnSet('.checkpoint', checkpoint);
 
       // run the reducer with our new events
       const eventsData = events.map((event) => event.data);
@@ -2710,7 +2715,7 @@ export class Framework<QX, RX, E, C> {
         // discard commands that match what the reducer says was sent
         if (markedSent.length > 0) {
           const toIgnore = self.#roundTripped.reduce(
-            (acc, id) => (acc[id] = true, acc),
+            (acc, id) => ((acc[id] = true), acc),
             {} as Record<string, true>,
           );
           for (const id of self.#unsent.keys()) {
@@ -2729,7 +2734,7 @@ export class Framework<QX, RX, E, C> {
       yield* self.#discardRoundTripped();
 
       return updates;
-    })
+    });
     this.#graph.dirty(updates);
     this.#roundTripped.map((id) => this.#unsent.delete(id));
     this.#roundTripped = [];
@@ -2749,13 +2754,13 @@ export class Framework<QX, RX, E, C> {
     // rebuild overlay with current forecasts
     const forecasts = [...this.#unsent.values()].flat();
     if (forecasts.length > 0) {
-      const [updates, _markedSent] = yield* withWTxn(this.#fx, this.#overlay, function*(){
+      const [updates, _markedSent] = yield* withWTxn(this.#fx, this.#overlay, function* () {
         return yield* runReducer(self.#reducer(self.#rx, forecasts));
       });
       self.#graph.dirty(updates);
     }
 
-    const cbs = yield* withRTxn(this.#fx, this.#overlay, function*(){
+    const cbs = yield* withRTxn(this.#fx, this.#overlay, function* () {
       // this will run all queries, even new ones
       self.#newQueries = false;
       return yield* self.#graph.run();
@@ -2773,7 +2778,7 @@ export class Framework<QX, RX, E, C> {
     const encoded: Event<any>[] = commands.map((c) => ({ id: c.id, data: EncodeProto(c.data) }));
 
     // open a write txn to real storage
-    yield* withWTxn(this.#fx, this.#storage, function*(){
+    yield* withWTxn(this.#fx, this.#storage, function* () {
       const added = [];
       // write each command to storage
       for (const ec of encoded) {
@@ -2781,8 +2786,8 @@ export class Framework<QX, RX, E, C> {
         added.push(ec.id);
       }
       // update the index
-      const index = (yield* txnGet(".commands")) as string[] ?? [];
-      yield* txnSet(".commands", [...index, ...added]);
+      const index = ((yield* txnGet('.commands')) as string[]) ?? [];
+      yield* txnSet('.commands', [...index, ...added]);
     });
 
     // schedule a callback for the user to know it is time to send these commands
@@ -2809,12 +2814,12 @@ export class Framework<QX, RX, E, C> {
     if (forecasts.length === 0 || !this.#live) return;
 
     // open a write txn against the existing overlay
-    const [updates, _markedSent] = yield* withWTxn(this.#fx, this.#overlay, function*(){
+    const [updates, _markedSent] = yield* withWTxn(this.#fx, this.#overlay, function* () {
       return yield* runReducer(self.#reducer(self.#rx, forecasts));
     });
     this.#graph.dirty(updates);
 
-    const cbs = yield* withRTxn(this.#fx, this.#overlay, function*(){
+    const cbs = yield* withRTxn(this.#fx, this.#overlay, function* () {
       // this will run all queries, even new ones
       self.#newQueries = false;
       return yield* self.#graph.run();
@@ -2832,34 +2837,34 @@ export class Framework<QX, RX, E, C> {
       roundTripped[id] = true;
     }
     // load the index of batches of commands
-    const index = (yield* txnGet(".commands")) as string[] ?? [];
+    const index = ((yield* txnGet('.commands')) as string[]) ?? [];
     // decide what to delete
     const toDelete = index.filter((id) => roundTripped[id]);
     if (toDelete.length === 0) return false;
     for (const id of toDelete) {
-      yield *txnDel(`.command-${id}`);
+      yield* txnDel(`.command-${id}`);
     }
     // update the index
     const toKeep = index.filter((id) => !roundTripped[id]);
-    yield* txnSet(".commands", toKeep);
+    yield* txnSet('.commands', toKeep);
     return true;
   }
 
   *#onRoundTripped(): Generator<void, void, void> {
     const self = this;
-    const changed = yield* withWTxn(this.#fx, this.#storage, function*(){
+    const changed = yield* withWTxn(this.#fx, this.#storage, function* () {
       return yield* self.#discardRoundTripped();
     });
     this.#roundTripped.map((id) => this.#unsent.delete(id));
     this.#roundTripped = [];
     if (changed && this.#live) {
-      yield* this.#rebuildOverlay()
+      yield* this.#rebuildOverlay();
     }
   }
 
   *#onNewQueries(): Generator<void, void, void> {
     const self = this;
-    const cbs = yield* withRTxn(this.#fx, this.#overlay, function*(){
+    const cbs = yield* withRTxn(this.#fx, this.#overlay, function* () {
       self.#newQueries = false;
       return yield* self.#graph.extend();
     });
@@ -2867,15 +2872,15 @@ export class Framework<QX, RX, E, C> {
   }
 
   *#onReconnects(): Generator<void, void, void> {
-    const {checkpoint, commands} = yield* withRTxn(this.#fx, this.#storage, function*(){
-      const checkpoint = (yield* txnGet(".checkpoint")) as (number | undefined);
+    const { checkpoint, commands } = yield* withRTxn(this.#fx, this.#storage, function* () {
+      const checkpoint = (yield* txnGet('.checkpoint')) as number | undefined;
       const commands: Event<any>[] = [];
-      const index = (yield* txnGet(".commands")) as string[] ?? [];
+      const index = ((yield* txnGet('.commands')) as string[]) ?? [];
       for (const id of index) {
         const command = (yield* txnGet(`.command-${id}`)) as Event<any>;
         commands.push(command);
       }
-      return {checkpoint, commands};
+      return { checkpoint, commands };
     });
     for (const resolve of this.#reconnects) {
       resolve({ checkpoint, commands });
@@ -2887,7 +2892,7 @@ export class Framework<QX, RX, E, C> {
     const simulates = this.#simulates;
     this.#simulates = [];
     // use a single read txn for all simulations, since runReducer() with simulate=true doesn't write
-    yield* withRTxn(this.#fx, this.#storage, function*() {
+    yield* withRTxn(this.#fx, this.#storage, function* () {
       for (const fn of simulates) {
         yield* runReducer(fn(), true);
       }
@@ -2923,25 +2928,25 @@ export class ReducerTester<RX, E, S> {
     let fx: FutureContext;
     let result: [string[], any[]] | undefined = undefined;
     const self = this;
-    const coro = function*() {
-      result = yield* withWTxn(fx!, self.#storage, function*() {
+    const coro = (function* () {
+      result = yield* withWTxn(fx!, self.#storage, function* () {
         return yield* runReducer(g, false);
       });
-    }();
+    })();
     fx = new FutureContext(coro);
 
     // with InMemStorage, this should always be completed in a single shot
     fx.wakeup();
     if (!result) {
-      throw new Error("expected test coroutine to complete in one shot");
+      throw new Error('expected test coroutine to complete in one shot');
     }
     return result;
   }
 
   // run events against provided reducer
-  run(events: E[]): {updates: string[], markedSent: any[]} {
+  run(events: E[]): { updates: string[]; markedSent: any[] } {
     const g = this.#reducer(this.#rx, events);
-    const [ updates, markedSent ] = this.#run(g);
+    const [updates, markedSent] = this.#run(g);
     updates.sort();
     return { updates, markedSent };
   }

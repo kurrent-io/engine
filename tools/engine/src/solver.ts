@@ -12,10 +12,10 @@ import {
   KStruct,
   KTuple,
   KType,
+  KTypeRegistry,
   LitValue,
   members,
-  KTypeRegistry,
-} from "./ktypes.js";
+} from './ktypes.js';
 
 /** Match means there is only one option remaining. */
 export class Match {
@@ -38,19 +38,28 @@ export class CheckLiteral {
  */
 export class CheckLength {
   readonly default: Solution | null;
-  constructor(readonly options: Map<number, Solution>, dflt: Solution | null = null) {
+  constructor(
+    readonly options: Map<number, Solution>,
+    dflt: Solution | null = null,
+  ) {
     this.default = dflt;
   }
 }
 
 /** GetIndex means you should select the index from the array and feed that to the solution. */
 export class GetIndex {
-  constructor(readonly i: number, readonly solution: Solution) {}
+  constructor(
+    readonly i: number,
+    readonly solution: Solution,
+  ) {}
 }
 
 /** GetField means you should select the field from the struct and feed that to the solution. */
 export class GetField {
-  constructor(readonly key: string, readonly solution: Solution) {}
+  constructor(
+    readonly key: string,
+    readonly solution: Solution,
+  ) {}
 }
 
 /** HasField means you should check for each field in order, and pick the corresponding solution. */
@@ -59,13 +68,7 @@ export class HasField {
 }
 
 export type Solution =
-  | Match
-  | CheckJsonType
-  | CheckLiteral
-  | CheckLength
-  | GetIndex
-  | GetField
-  | HasField;
+  Match | CheckJsonType | CheckLiteral | CheckLength | GetIndex | GetField | HasField;
 
 export function solveUnion(registry: KTypeRegistry, types: Iterable<KType>): CheckJsonType {
   // outer layer: check json type
@@ -81,25 +84,25 @@ export function solveUnion(registry: KTypeRegistry, types: Iterable<KType>): Che
     if (matches.length === 1) {
       // only one option for this json type
       out.set(jt, new Match(matches[0]));
-    } else if (jt === "string" || jt === "boolean" || jt === "int") {
+    } else if (jt === 'string' || jt === 'boolean' || jt === 'int') {
       // union of multiple literals
       if (!matches.every((t) => t instanceof KLiteral)) {
-        throw new Error(`unable to solve union between ${matches.join(", ")}`);
+        throw new Error(`unable to solve union between ${matches.join(', ')}`);
       }
       out.set(jt, solveUnionLiterals(matches as KLiteral[]));
-    } else if (jt === "object") {
+    } else if (jt === 'object') {
       // union of multiple structs
       if (!matches.every((t) => t instanceof KStruct)) {
-        throw new Error(`unable to solve union of non-struct objects: ${matches.join(" | ")}`);
+        throw new Error(`unable to solve union of non-struct objects: ${matches.join(' | ')}`);
       }
       out.set(jt, solveUnionStructs(matches as KStruct[]));
-    } else if (jt === "array") {
+    } else if (jt === 'array') {
       // union of tuples, or maybe of non-empty arrays
       out.set(jt, solveUnionArrays(registry, matches as (KArray | KTuple)[]));
     } else {
       // null can't have union types because there's only one
       // float can't have union types because equality checks are flaky
-      throw new Error("union not allowed between multiple types that encode as " + jt);
+      throw new Error('union not allowed between multiple types that encode as ' + jt);
     }
   }
 
@@ -149,7 +152,7 @@ function solveUnionStructs(types: readonly KStruct[]): Solution {
   }
 
   if (litkeys.size === 0) {
-    throw new Error(`union without discriminator: ${types.join(" | ")}`);
+    throw new Error(`union without discriminator: ${types.join(' | ')}`);
   }
 
   // we expect a discriminator to exist which is common to all structs
@@ -157,7 +160,7 @@ function solveUnionStructs(types: readonly KStruct[]): Solution {
     [...litkeys].filter(([, e]) => e.count === types.length).map(([k, e]) => [k, e.values]),
   );
   if (keysOnAllTypes.size === 0) {
-    throw new Error(`union has no discriminator common to all structs: ${types.join(" | ")}`);
+    throw new Error(`union has no discriminator common to all structs: ${types.join(' | ')}`);
   }
 
   // check for a key that uniquely identifies all types
@@ -166,12 +169,12 @@ function solveUnionStructs(types: readonly KStruct[]): Solution {
     .map(([k]) => k);
   if (perfectKeys.length > 0) {
     // sort "v" to the end; if another discriminator is present we should never need it
-    perfectKeys.sort((a, b) => Number(a === "v") - Number(b === "v"));
+    perfectKeys.sort((a, b) => Number(a === 'v') - Number(b === 'v'));
     // multiple discriminators may mean the solver has done something weird, except the special
     // case where one is .v, because that could just mean a new union was created using two
     // event types where the second one is on v=2.
-    if (perfectKeys.length - Number(perfectKeys[perfectKeys.length - 1] === "v") > 1) {
-      throw new Error(`warning: multiple discriminators (${perfectKeys}): ${types.join(" | ")}`);
+    if (perfectKeys.length - Number(perfectKeys[perfectKeys.length - 1] === 'v') > 1) {
+      throw new Error(`warning: multiple discriminators (${perfectKeys}): ${types.join(' | ')}`);
     }
     const k = perfectKeys[0];
     const out = new Map<LitValue, Solution>();
@@ -185,15 +188,15 @@ function solveUnionStructs(types: readonly KStruct[]): Solution {
   if (keysOnAllTypes.size === 1) {
     const k = keysOnAllTypes.keys().next().value;
     throw new Error(
-      `union's only discriminator (${k}) does not uniquely identify all options: ${types.join(" | ")}`,
+      `union's only discriminator (${k}) does not uniquely identify all options: ${types.join(' | ')}`,
     );
   }
 
   // at this point, we'll assume the only valid case is a set of discriminators like [.type, .v],
   // which is probably unnecessarily strict, but we'll allow more cases when we have a reason to
-  const keys = [...keysOnAllTypes.keys()].sort((a, b) => Number(a === "v") - Number(b === "v"));
-  if (keys.length !== 2 || keys[keys.length - 1] !== "v") {
-    throw new Error(`unexpected discriminators: (${keys} != [*, v]): ${types.join(" | ")}`);
+  const keys = [...keysOnAllTypes.keys()].sort((a, b) => Number(a === 'v') - Number(b === 'v'));
+  if (keys.length !== 2 || keys[keys.length - 1] !== 'v') {
+    throw new Error(`unexpected discriminators: (${keys} != [*, v]): ${types.join(' | ')}`);
   }
 
   // build a map of discriminator value to subtypes
@@ -212,17 +215,14 @@ function solveUnionStructs(types: readonly KStruct[]): Solution {
   return new GetField(k, new CheckLiteral(out));
 }
 
-function solveUnionArrays(
-  registry: KTypeRegistry,
-  types: readonly (KArray | KTuple)[],
-): Solution {
+function solveUnionArrays(registry: KTypeRegistry, types: readonly (KArray | KTuple)[]): Solution {
   const out = new Map<number, Solution>();
   let remaining = [...types];
 
   // first handle empties; if more than one type can be empty we'll be unable to distinguish them
   const empties = remaining.filter((t) => t.lengthRange()[0] === 0);
   if (empties.length > 1) {
-    throw new Error("unable to union multiple possibly-empty arrays");
+    throw new Error('unable to union multiple possibly-empty arrays');
   }
   if (empties.length === 1) {
     const t = empties[0];
@@ -235,7 +235,10 @@ function solveUnionArrays(
 
   // length check for all fixed-length types
   const fixies = new Set(
-    remaining.map((t) => t.lengthRange()).filter(([m, M]) => m === M).map(([m]) => m),
+    remaining
+      .map((t) => t.lengthRange())
+      .filter(([m, M]) => m === M)
+      .map(([m]) => m),
   );
   for (const n of fixies) {
     const matches = remaining.filter((t) => {
@@ -271,7 +274,7 @@ function solveUnionArrays(
     }
     if (solution === null) {
       // ok, I'm actually not going to write a more advanced solver until I know I have to
-      throw new Error("Not implemented: multi-step tuple distinguisher");
+      throw new Error('Not implemented: multi-step tuple distinguisher');
     }
     // map subtype matches to our original types and prune the resulting decision tree
     solution = remapAndPrune(solution, subtypes, matches);

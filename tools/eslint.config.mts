@@ -6,20 +6,15 @@ import pluginTs from '@typescript-eslint/eslint-plugin';
 import pluginViTest from '@vitest/eslint-plugin';
 import configPrettier from 'eslint-config-prettier/flat';
 import pluginImport from 'eslint-plugin-import';
-import globals from 'globals';
 
 export default [
   pluginJs.configs.recommended,
+  pluginTs.configs['flat/eslint-recommended'],
   pluginImport.flatConfigs.recommended,
   { ignores: ['**/dist/', 'tests/tsp-output/', '**/*.mts'] },
   {
     files: ['**/*.ts'],
     languageOptions: {
-      // the emitted skeletons run in browsers and embedded JS engines, not just node
-      globals: {
-        ...globals.browser,
-        ...globals.node,
-      },
       parser: parserTs,
       parserOptions: {
         projectService: {
@@ -33,7 +28,7 @@ export default [
     },
     rules: {
       '@typescript-eslint/ban-ts-comment': ['error', { 'ts-nocheck': 'allow-with-description' }],
-      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-redeclare': 'error',
       '@typescript-eslint/no-unused-vars': [
         'error',
         {
@@ -45,7 +40,10 @@ export default [
         },
       ],
       '@typescript-eslint/prefer-optional-chain': 'error',
-      '@typescript-eslint/switch-exhaustiveness-check': 'error',
+      '@typescript-eslint/switch-exhaustiveness-check': [
+        'error',
+        { considerDefaultExhaustiveForUnions: true },
+      ],
       'eqeqeq': ['error', 'smart'],
       'import/extensions': ['warn', { ts: 'never' }],
       'import/order': [
@@ -56,11 +54,12 @@ export default [
           'newlines-between': 'always',
         },
       ],
+      'import/no-duplicates': 'error',
       'no-console': 'error',
       'no-constant-condition': 'off',
-      'no-duplicate-imports': 'error',
       'no-throw-literal': 'error',
       'no-unused-vars': 'off',
+      'prefer-const': ['error', { ignoreReadBeforeAssign: true }],
       'require-await': 'error',
       'sort-imports': [
         'error',
@@ -80,6 +79,9 @@ export default [
     plugins: { vitest: pluginViTest },
     rules: {
       ...pluginViTest.configs.recommended.rules,
+      // generated fixtures are imported straight from tsp-output with their .ts extension
+      'import/extensions': 'off',
+      'vitest/expect-expect': ['error', { assertFunctionNames: ['expect', 'ok', 'fails'] }],
     },
   },
   configPrettier,

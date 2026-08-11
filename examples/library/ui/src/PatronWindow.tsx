@@ -1,27 +1,16 @@
-import { useCallback, useRef, useState } from 'react';
-import { Alert, Button, Card, Flex, Input, List, Space, Switch, Spin, Tag, Typography } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Flex, Input, List, Space, Spin, Switch, Tag, Typography } from 'antd';
+import { useCallback, useRef, useState } from 'react';
 
-import {
-  UserFramework,
-  UserQX,
-  QueryGenerator,
-  VHold,
-} from './model';
-import { useQuery } from './useQuery';
-import { useFramework } from './useFramework';
-import { generateUuid } from './util';
 import { colorHash } from './colorhash';
+import { QueryGenerator, UserFramework, UserQX, VHold } from './model';
+import { useFramework } from './useFramework';
+import { useQuery } from './useQuery';
+import { generateUuid } from './util';
 
 const { Text } = Typography;
 
-function PatronName({
-  name,
-  onRename,
-}: {
-  name: string;
-  onRename: (newName: string) => void;
-}) {
+function PatronName({ name, onRename }: { name: string; onRename: (newName: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
 
@@ -51,8 +40,12 @@ function PatronName({
           onPressEnter={confirm}
           autoFocus
         />
-        <Button size="small" type="primary" onClick={confirm}>OK</Button>
-        <Button size="small" onClick={cancel}>Cancel</Button>
+        <Button size="small" type="primary" onClick={confirm}>
+          OK
+        </Button>
+        <Button size="small" onClick={cancel}>
+          Cancel
+        </Button>
       </Flex>
     );
   }
@@ -91,40 +84,54 @@ function BookItem({
   onHoldRestricted: (isbn: string) => void;
   onCancelHold: (holdId: string) => void;
 }) {
-  const heldNormal = book.hold && "edition" in book.hold.target;
+  const heldNormal = book.hold && 'edition' in book.hold.target;
   // this assumes book-targeting holds are only used for restricted books, but whatever
-  const heldRestricted = book.hold && "book" in book.hold.target;
+  const heldRestricted = book.hold && 'book' in book.hold.target;
   return (
     <List.Item>
       <div style={{ width: '100%' }}>
         <div>{book.title}</div>
         <Flex gap="small" style={{ marginTop: 4 }}>
           {/* hold or cancel-hold */}
-          {heldNormal ? <Button
+          {heldNormal ? (
+            <Button
               size="small"
               loading={book.hold!.forecasted}
               onClick={() => onCancelHold(book.hold!.id)}
-              color={"green"}
-              variant={"solid"}>Cancel Hold</Button>
-          : <Button
+              color={'green'}
+              variant={'solid'}>
+              Cancel Hold
+            </Button>
+          ) : (
+            <Button
               size="small"
               disabled={heldRestricted || book.availableNormal < 1}
               onClick={() => onHold(book.isbn)}
-              color={"default"}
-              variant={"outlined"}>Hold</Button> }
+              color={'default'}
+              variant={'outlined'}>
+              Hold
+            </Button>
+          )}
           {/* hold-restricted or cancel-hold-restricted */}
-          {heldRestricted ? <Button
+          {heldRestricted ? (
+            <Button
               size="small"
               loading={book.hold!.forecasted}
               onClick={() => onCancelHold(book.hold!.id)}
-              color={"green"}
-              variant={"solid"}>Cancel Hold</Button>
-          : <Button
+              color={'green'}
+              variant={'solid'}>
+              Cancel Hold
+            </Button>
+          ) : (
+            <Button
               size="small"
               disabled={heldNormal || !researcher || book.availableRestricted.length === 0}
               onClick={() => onHoldRestricted(book.availableRestricted[0])}
-              color={"default"}
-              variant={"outlined"}>Hold Restricted</Button> }
+              color={'default'}
+              variant={'outlined'}>
+              Hold Restricted
+            </Button>
+          )}
         </Flex>
       </div>
     </List.Item>
@@ -146,48 +153,54 @@ function Books({
   onHoldRestricted: (bookId: string) => void;
   onCancelHold: (holdId: string) => void;
 }) {
-  const booksLookup = useCallback(function*(qx: UserQX): QueryGenerator<BookInfo[]> {
-    const patron = yield* qx.get.patron(patronId);
-    // build maps of this patron's holds by target
-    const holdsByEdition: Record<string, VHold> = {};
-    const holdsByBook: Record<string, VHold> = {};
-    for (const holdId of Object.keys(patron.holds)) {
-      const hold = yield* qx.get.hold(holdId);
-      if ("edition" in hold.target) {
-        holdsByEdition[hold.target.edition] = hold;
-      } else {
-        holdsByBook[hold.target.book] = hold;
-      }
-    }
-    const editions = yield* qx.get.editions();
-    const out: BookInfo[] = [];
-    for (const isbn of Object.keys(editions)) {
-      const edition = yield* qx.get.edition(isbn);
-      let availableNormal = 0;
-      const restrictedBooks: {id: string, timestamp: Date}[] = [];
-      for (const bookId of Object.keys(edition.books)) {
-        const book = yield* qx.get.book(bookId);
-        if (book.status) continue; // held or checked out
-        if (book.restricted) {
-          restrictedBooks.push({id: book.id, timestamp: book.timestamp});
+  const booksLookup = useCallback(
+    function* (qx: UserQX): QueryGenerator<BookInfo[]> {
+      const patron = yield* qx.get.patron(patronId);
+      // build maps of this patron's holds by target
+      const holdsByEdition: Record<string, VHold> = {};
+      const holdsByBook: Record<string, VHold> = {};
+      for (const holdId of Object.keys(patron.holds)) {
+        const hold = yield* qx.get.hold(holdId);
+        if ('edition' in hold.target) {
+          holdsByEdition[hold.target.edition] = hold;
         } else {
-          availableNormal++;
+          holdsByBook[hold.target.book] = hold;
         }
       }
-      restrictedBooks.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-      const availableRestricted = restrictedBooks.map(b => b.id);
-      // edition-level holds consume normal copies
-      availableNormal -= Object.keys(edition.holds).length;
-      // check if patron holds this edition or any book in it
-      let hold = holdsByEdition[isbn];
-      for (const bookId of Object.keys(edition.books)) {
-        if (holdsByBook[bookId]) { hold = holdsByBook[bookId]; break; }
+      const editions = yield* qx.get.editions();
+      const out: BookInfo[] = [];
+      for (const isbn of Object.keys(editions)) {
+        const edition = yield* qx.get.edition(isbn);
+        let availableNormal = 0;
+        const restrictedBooks: { id: string; timestamp: Date }[] = [];
+        for (const bookId of Object.keys(edition.books)) {
+          const book = yield* qx.get.book(bookId);
+          if (book.status) continue; // held or checked out
+          if (book.restricted) {
+            restrictedBooks.push({ id: book.id, timestamp: book.timestamp });
+          } else {
+            availableNormal++;
+          }
+        }
+        restrictedBooks.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+        const availableRestricted = restrictedBooks.map((b) => b.id);
+        // edition-level holds consume normal copies
+        availableNormal -= Object.keys(edition.holds).length;
+        // check if patron holds this edition or any book in it
+        let hold = holdsByEdition[isbn];
+        for (const bookId of Object.keys(edition.books)) {
+          if (holdsByBook[bookId]) {
+            hold = holdsByBook[bookId];
+            break;
+          }
+        }
+        out.push({ isbn, title: edition.title, availableNormal, availableRestricted, hold });
       }
-      out.push({ isbn, title: edition.title, availableNormal, availableRestricted, hold });
-    }
-    out.sort((a, b) => a.title.localeCompare(b.title));
-    return out;
-  }, [patronId]);
+      out.sort((a, b) => a.title.localeCompare(b.title));
+      return out;
+    },
+    [patronId],
+  );
 
   const books = useQuery(fw, booksLookup);
   if (!books) return <Spin />;
@@ -218,13 +231,16 @@ export default function PatronWindow({
   const [enabled, setEnabled] = useState(true);
   const [fw, connState] = useFramework(relayUrl, enabled, patronId);
 
-  const patronLookup = useCallback(function*(qx: UserQX): QueryGenerator<PatronInfo> {
-    const patron = yield* qx.get.patron(patronId);
-    return { name: patron.name, researcher: patron.researcher };
-  }, [patronId]);
+  const patronLookup = useCallback(
+    function* (qx: UserQX): QueryGenerator<PatronInfo> {
+      const patron = yield* qx.get.patron(patronId);
+      return { name: patron.name, researcher: patron.researcher };
+    },
+    [patronId],
+  );
   const patron = useQuery(fw, patronLookup);
 
-  const messagesLookup = useCallback(function*(qx: UserQX): QueryGenerator<string[]> {
+  const messagesLookup = useCallback(function* (qx: UserQX): QueryGenerator<string[]> {
     return yield* qx.get.messages();
   }, []);
 
@@ -253,18 +269,25 @@ export default function PatronWindow({
     <Card
       title={
         <Flex align="center" gap="small">
-          {patron
-            ? <span style={{
+          {patron ? (
+            <span
+              style={{
                 backgroundColor: colorHash(patronId),
                 padding: '2px 8px',
                 borderRadius: 4,
               }}>
-                <PatronName name={patron.name} onRename={(newName) => fw.sendCommands([
-                  { type: "rename-patron", id: patronId, name: newName, timestamp: new Date() },
-                ])} />
-              </span>
-            : <Spin size="small" />
-          }
+              <PatronName
+                name={patron.name}
+                onRename={(newName) =>
+                  fw.sendCommands([
+                    { type: 'rename-patron', id: patronId, name: newName, timestamp: new Date() },
+                  ])
+                }
+              />
+            </span>
+          ) : (
+            <Spin size="small" />
+          )}
           {patron?.researcher && <Tag color="green">researcher</Tag>}
           <span style={{ flex: 1 }} />
           <Tag color={stateColor}>{connState}</Tag>
@@ -277,30 +300,37 @@ export default function PatronWindow({
           />
         </Flex>
       }
-      style={{ width: '32em' }}
-    >
+      style={{ width: '32em' }}>
       <Books
         fw={fw}
         patronId={patronId}
         researcher={patron?.researcher ?? false}
-        onHold={(isbn) => fw.sendCommands([{
-          type: "try-hold",
-          id: generateUuid(),
-          patron: patronId,
-          target: { edition: isbn },
-          open: false,
-          timestamp: new Date(),
-        }])}
-        onHoldRestricted={(bookId) => fw.sendCommands([{
-          type: "try-hold",
-          id: generateUuid(),
-          patron: patronId,
-          target: { book: bookId },
-          open: false,
-          timestamp: new Date(),
-        }])}
+        onHold={(isbn) =>
+          fw.sendCommands([
+            {
+              type: 'try-hold',
+              id: generateUuid(),
+              patron: patronId,
+              target: { edition: isbn },
+              open: false,
+              timestamp: new Date(),
+            },
+          ])
+        }
+        onHoldRestricted={(bookId) =>
+          fw.sendCommands([
+            {
+              type: 'try-hold',
+              id: generateUuid(),
+              patron: patronId,
+              target: { book: bookId },
+              open: false,
+              timestamp: new Date(),
+            },
+          ])
+        }
         onCancelHold={(holdId) => {
-          fw.sendCommands([{ type: "cancel-hold", id: holdId }]);
+          fw.sendCommands([{ type: 'cancel-hold', id: holdId }]);
         }}
       />
       {visibleMessages.length > 0 && (

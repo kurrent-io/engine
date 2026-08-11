@@ -1,16 +1,9 @@
+import { InMemStorage, migrateTodos, reduceTodos, TodoFramework } from '@todo-basic/model/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  TodoFramework,
-  migrateTodos,
-  reduceTodos,
-  InMemStorage,
-} from '@todo-basic/model/ui';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
-export function useFramework(
-  serverUrl: string,
-): [TodoFramework, ConnectionState] {
+export function useFramework(serverUrl: string): [TodoFramework, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -18,19 +11,16 @@ export function useFramework(
   const fw = useMemo<TodoFramework>(() => {
     const onCommands = (commands: any[]) => {
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (ws?.readyState !== WebSocket.OPEN) return;
       for (const cmd of commands) {
         ws.send(JSON.stringify(cmd));
       }
     };
-    return new TodoFramework(
-      new InMemStorage(),
-      {
-        migrate: migrateTodos,
-        reducer: reduceTodos,
-        onCommands,
-      },
-    );
+    return new TodoFramework(new InMemStorage(), {
+      migrate: migrateTodos,
+      reducer: reduceTodos,
+      onCommands,
+    });
   }, []);
 
   useEffect(() => {
@@ -50,12 +40,17 @@ export function useFramework(
         wsRef.current = ws;
 
         ws.onopen = () => {
-          if (cancelled) { ws.close(); return; }
+          if (cancelled) {
+            ws.close();
+            return;
+          }
           backoff = 1000;
           // handshake: identify where to resume
-          ws.send(JSON.stringify({
-            since: result.checkpoint ?? null,
-          }));
+          ws.send(
+            JSON.stringify({
+              since: result.checkpoint ?? null,
+            }),
+          );
           setConnState('connected');
           // resend any commands that were persisted but which haven't round-tripped
           for (const cmd of result.commands) {
@@ -64,8 +59,8 @@ export function useFramework(
         };
 
         ws.onmessage = (msg) => {
-          console.log("recv:", msg.data);
-          if (msg.data === "caughtup") {
+          console.log('recv:', msg.data);
+          if (msg.data === 'caughtup') {
             fw.caughtUp();
           } else {
             const event = JSON.parse(msg.data);

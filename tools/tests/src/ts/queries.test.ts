@@ -8,18 +8,19 @@
  * and remote provider constructions.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { describe, it, expect, beforeAll } from "vitest";
-import { resolvePath } from "@typespec/compiler";
-import { createTester } from "@typespec/compiler/testing";
-import { lowerProgram } from "@kurrent/typespec-engine";
-import { generateTs } from "@kurrent/typespec-engine-ts";
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const base = fileURLToPath(new URL("../..", import.meta.url));
-const Tester = createTester(resolvePath(base), { libraries: ["@kurrent/typespec-engine"] })
-  .import("@kurrent/typespec-engine")
-  .using("KurrentEngine");
+import { lowerProgram } from '@kurrent/typespec-engine';
+import { generateTs } from '@kurrent/typespec-engine-ts';
+import { resolvePath } from '@typespec/compiler';
+import { createTester } from '@typespec/compiler/testing';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+const base = fileURLToPath(new URL('../..', import.meta.url));
+const Tester = createTester(resolvePath(base), { libraries: ['@kurrent/typespec-engine'] })
+  .import('@kurrent/typespec-engine')
+  .using('KurrentEngine');
 
 const SOURCE = `
   model PatronInfo { id: string; name: string; since: utcDateTime; }
@@ -81,19 +82,21 @@ export class RemoteQueries {
 }
 `;
 
-const ISO = "2024-01-02T03:04:05Z";
+const ISO = '2024-01-02T03:04:05Z';
 
 let text: string;
 let M: any;
 
 beforeAll(async () => {
   const [result, diagnostics] = await Tester.compileAndDiagnose(SOURCE);
-  expect(diagnostics).toEqual([]);
+  if (diagnostics.length > 0) {
+    throw new Error(`compile diagnostics: ${diagnostics.map((d) => d.message).join('\n')}`);
+  }
   text = generateTs(lowerProgram(result.program), STUB_SKELETON);
 
-  const dir = resolvePath(base, "tsp-output/.queries-test");
+  const dir = resolvePath(base, 'tsp-output/.queries-test');
   mkdirSync(dir, { recursive: true });
-  const file = resolvePath(dir, "queries.gen.ts");
+  const file = resolvePath(dir, 'queries.gen.ts');
   writeFileSync(file, text);
   M = await import(file);
 });
@@ -107,51 +110,51 @@ function ok(fn: (val: any) => string[], value: any): void {
 function fails(fn: (val: any) => string[], value: any, needle?: string): void {
   const problems = fn(value);
   expect(problems).not.toEqual([]);
-  if (needle !== undefined) expect(problems.join("\n")).toContain(needle);
+  if (needle !== undefined) expect(problems.join('\n')).toContain(needle);
 }
 
-describe("wire ids", () => {
-  it("are interface-qualified op names", () => {
+describe('wire ids', () => {
+  it('are interface-qualified op names', () => {
     expect(M.AdminQueryIds).toEqual({
-      allPatrons: "AdminQueries.allPatrons",
-      patronsNamed: "AdminQueries.patronsNamed",
-      patronsSince: "AdminQueries.patronsSince",
+      allPatrons: 'AdminQueries.allPatrons',
+      patronsNamed: 'AdminQueries.patronsNamed',
+      patronsSince: 'AdminQueries.patronsSince',
     });
-    expect(M.UserQueryIds).toEqual({ myPatron: "UserQueries.myPatron" });
+    expect(M.UserQueryIds).toEqual({ myPatron: 'UserQueries.myPatron' });
   });
 });
 
-describe("wire message checker", () => {
-  it("accepts well-formed query messages", () => {
-    ok(M.checkAdminQuery, ["AdminQueries.allPatrons"]);
-    ok(M.checkAdminQuery, ["AdminQueries.patronsNamed", "bob", 3]);
-    ok(M.checkAdminQuery, ["AdminQueries.patronsNamed", "bob", null]);
-    ok(M.checkAdminQuery, ["AdminQueries.patronsSince", ISO]);
-    ok(M.checkUserQuery, ["UserQueries.myPatron", "u1"]);
+describe('wire message checker', () => {
+  it('accepts well-formed query messages', () => {
+    ok(M.checkAdminQuery, ['AdminQueries.allPatrons']);
+    ok(M.checkAdminQuery, ['AdminQueries.patronsNamed', 'bob', 3]);
+    ok(M.checkAdminQuery, ['AdminQueries.patronsNamed', 'bob', null]);
+    ok(M.checkAdminQuery, ['AdminQueries.patronsSince', ISO]);
+    ok(M.checkUserQuery, ['UserQueries.myPatron', 'u1']);
   });
 
-  it("rejects unknown ids, wrong arity, and wrong arg types", () => {
-    fails(M.checkAdminQuery, ["AdminQueries.nope"]);
-    fails(M.checkAdminQuery, ["AdminQueries.patronsNamed", "bob"]);
-    fails(M.checkAdminQuery, ["AdminQueries.patronsNamed", 5, 3]);
-    fails(M.checkAdminQuery, ["AdminQueries.patronsSince", "not a date"], "invalid timestamp");
-    fails(M.checkAdminQuery, "AdminQueries.allPatrons");
-    fails(M.checkUserQuery, ["UserQueries.myPatron"]);
+  it('rejects unknown ids, wrong arity, and wrong arg types', () => {
+    fails(M.checkAdminQuery, ['AdminQueries.nope']);
+    fails(M.checkAdminQuery, ['AdminQueries.patronsNamed', 'bob']);
+    fails(M.checkAdminQuery, ['AdminQueries.patronsNamed', 5, 3]);
+    fails(M.checkAdminQuery, ['AdminQueries.patronsSince', 'not a date'], 'invalid timestamp');
+    fails(M.checkAdminQuery, 'AdminQueries.allPatrons');
+    fails(M.checkUserQuery, ['UserQueries.myPatron']);
   });
 });
 
-describe("wire message decoder", () => {
-  it("produces the typed tuple, reviving dates", () => {
-    const decoded = M.DecodeAdminQuery(["AdminQueries.patronsSince", ISO]);
-    expect(decoded[0]).toBe("AdminQueries.patronsSince");
+describe('wire message decoder', () => {
+  it('produces the typed tuple, reviving dates', () => {
+    const decoded = M.DecodeAdminQuery(['AdminQueries.patronsSince', ISO]);
+    expect(decoded[0]).toBe('AdminQueries.patronsSince');
     expect(decoded[1]).toBeInstanceOf(Date);
-    expect(decoded[1].toISOString()).toBe("2024-01-02T03:04:05.000Z");
+    expect(decoded[1].toISOString()).toBe('2024-01-02T03:04:05.000Z');
   });
 
-  it("passes nullable args through", () => {
-    expect(M.DecodeAdminQuery(["AdminQueries.patronsNamed", "bob", null])).toEqual([
-      "AdminQueries.patronsNamed",
-      "bob",
+  it('passes nullable args through', () => {
+    expect(M.DecodeAdminQuery(['AdminQueries.patronsNamed', 'bob', null])).toEqual([
+      'AdminQueries.patronsNamed',
+      'bob',
       null,
     ]);
   });
@@ -169,28 +172,28 @@ function fakeIo() {
   };
 }
 
-describe("remote provider", () => {
-  it("encodes each call as [id, ...args]", () => {
+describe('remote provider', () => {
+  it('encodes each call as [id, ...args]', () => {
     const io = fakeIo();
     const remote = new M.RemoteAdminQueries(io);
     remote.allPatrons();
-    remote.patronsNamed("bob", 3);
-    remote.patronsNamed("bob");
+    remote.patronsNamed('bob', 3);
+    remote.patronsNamed('bob');
     remote.patronsSince(new Date(ISO));
 
     expect(io.calls.map((c) => c.raw)).toEqual([
-      ["AdminQueries.allPatrons"],
-      ["AdminQueries.patronsNamed", "bob", 3],
-      ["AdminQueries.patronsNamed", "bob", null],
-      ["AdminQueries.patronsSince", "2024-01-02T03:04:05.000Z"],
+      ['AdminQueries.allPatrons'],
+      ['AdminQueries.patronsNamed', 'bob', 3],
+      ['AdminQueries.patronsNamed', 'bob', null],
+      ['AdminQueries.patronsSince', '2024-01-02T03:04:05.000Z'],
     ]);
   });
 
-  it("every encoded call passes its own checker", () => {
+  it('every encoded call passes its own checker', () => {
     const io = fakeIo();
     const remote = new M.RemoteAdminQueries(io);
     remote.allPatrons();
-    remote.patronsNamed("bob");
+    remote.patronsNamed('bob');
     remote.patronsSince(new Date(ISO));
     for (const call of io.calls) {
       ok(M.checkAdminQuery, JSON.parse(JSON.stringify(call.raw)));
@@ -201,22 +204,30 @@ describe("remote provider", () => {
     const io = fakeIo();
     const remote = new M.RemoteAdminQueries(io);
     remote.allPatrons();
-    const decoded = io.calls[0].decoder([{ id: "p1", name: "n", since: ISO }]);
+    const decoded = io.calls[0].decoder([{ id: 'p1', name: 'n', since: ISO }]);
     expect(decoded[0].since).toBeInstanceOf(Date);
   });
 });
 
-describe("local provider", () => {
-  it("curries call args into the defs body along with the query context", () => {
+describe('local provider', () => {
+  it('curries call args into the defs body along with the query context', () => {
     const seen: any[] = [];
+    /* eslint-disable require-yield -- stubs satisfy the generator-typed defs contract without touching storage */
     const defs = {
-      *allPatrons(qx: any) { seen.push(["allPatrons", qx]); return []; },
-      *patronsNamed(qx: any, name: string, limit?: number) {
-        seen.push(["patronsNamed", qx, name, limit]);
+      *allPatrons(qx: any) {
+        seen.push(['allPatrons', qx]);
         return [];
       },
-      *patronsSince(qx: any, when: Date) { seen.push(["patronsSince", qx, when]); return []; },
+      *patronsNamed(qx: any, name: string, limit?: number) {
+        seen.push(['patronsNamed', qx, name, limit]);
+        return [];
+      },
+      *patronsSince(qx: any, when: Date) {
+        seen.push(['patronsSince', qx, when]);
+        return [];
+      },
     };
+    /* eslint-enable require-yield */
     const captured: any[] = [];
     const fw = {
       newQuery(fn: (qx: any) => Generator<any, any, any>) {
@@ -226,79 +237,88 @@ describe("local provider", () => {
     };
 
     const local = M.LocalAdminQueries(fw, defs);
-    local.patronsNamed("bob", 5);
+    local.patronsNamed('bob', 5);
     local.allPatrons();
     expect(captured).toHaveLength(2);
-    for (const fn of captured) fn("QX").next();
+    for (const fn of captured) fn('QX').next();
     expect(seen).toEqual([
-      ["patronsNamed", "QX", "bob", 5],
-      ["allPatrons", "QX"],
+      ['patronsNamed', 'QX', 'bob', 5],
+      ['allPatrons', 'QX'],
     ]);
   });
 });
 
-describe("dispatcher", () => {
+describe('dispatcher', () => {
   function fakeQueries() {
     const calls: any[][] = [];
     return {
       calls,
-      allPatrons: (...args: any[]) => { calls.push(["allPatrons", ...args]); return "q-all"; },
-      patronsNamed: (...args: any[]) => { calls.push(["patronsNamed", ...args]); return "q-named"; },
-      patronsSince: (...args: any[]) => { calls.push(["patronsSince", ...args]); return "q-since"; },
+      allPatrons: (...args: any[]) => {
+        calls.push(['allPatrons', ...args]);
+        return 'q-all';
+      },
+      patronsNamed: (...args: any[]) => {
+        calls.push(['patronsNamed', ...args]);
+        return 'q-named';
+      },
+      patronsSince: (...args: any[]) => {
+        calls.push(['patronsSince', ...args]);
+        return 'q-since';
+      },
     };
   }
 
-  it("routes a decoded message to the matching provider method", () => {
+  it('routes a decoded message to the matching provider method', () => {
     const queries = fakeQueries();
-    const q1 = M.dispatchAdminQuery(queries, M.DecodeAdminQuery(["AdminQueries.allPatrons"]));
+    const q1 = M.dispatchAdminQuery(queries, M.DecodeAdminQuery(['AdminQueries.allPatrons']));
     const q2 = M.dispatchAdminQuery(
       queries,
-      M.DecodeAdminQuery(["AdminQueries.patronsNamed", "bob", 3]),
+      M.DecodeAdminQuery(['AdminQueries.patronsNamed', 'bob', 3]),
     );
-    expect(q1).toBe("q-all");
-    expect(q2).toBe("q-named");
-    expect(queries.calls).toEqual([["allPatrons"], ["patronsNamed", "bob", 3]]);
+    expect(q1).toBe('q-all');
+    expect(q2).toBe('q-named');
+    expect(queries.calls).toEqual([['allPatrons'], ['patronsNamed', 'bob', 3]]);
   });
 
-  it("passes nullable wire args as absent", () => {
+  it('passes nullable wire args as absent', () => {
     const queries = fakeQueries();
-    M.dispatchAdminQuery(queries, M.DecodeAdminQuery(["AdminQueries.patronsNamed", "bob", null]));
-    expect(queries.calls).toEqual([["patronsNamed", "bob", undefined]]);
+    M.dispatchAdminQuery(queries, M.DecodeAdminQuery(['AdminQueries.patronsNamed', 'bob', null]));
+    expect(queries.calls).toEqual([['patronsNamed', 'bob', undefined]]);
   });
 
-  it("revived args arrive as their decoded types", () => {
+  it('revived args arrive as their decoded types', () => {
     const queries = fakeQueries();
-    M.dispatchAdminQuery(queries, M.DecodeAdminQuery(["AdminQueries.patronsSince", ISO]));
+    M.dispatchAdminQuery(queries, M.DecodeAdminQuery(['AdminQueries.patronsSince', ISO]));
     expect(queries.calls[0][1]).toBeInstanceOf(Date);
   });
 
-  it("throws on an unknown id", () => {
-    expect(() => M.dispatchAdminQuery(fakeQueries(), ["AdminQueries.nope"])).toThrow(
-      "unexpected query ID: AdminQueries.nope",
+  it('throws on an unknown id', () => {
+    expect(() => M.dispatchAdminQuery(fakeQueries(), ['AdminQueries.nope'])).toThrow(
+      'unexpected query ID: AdminQueries.nope',
     );
   });
 });
 
-describe("generated type surface", () => {
-  it("declares the defs and provider interfaces", () => {
-    expect(text).toContain("export interface AdminQueryDefs<QX> {");
-    expect(text).toContain("allPatrons(qx: QX): QueryGenerator<PatronInfo[]>;");
+describe('generated type surface', () => {
+  it('declares the defs and provider interfaces', () => {
+    expect(text).toContain('export interface AdminQueryDefs<QX> {');
+    expect(text).toContain('allPatrons(qx: QX): QueryGenerator<PatronInfo[]>;');
     expect(text).toContain(
-      "patronsNamed(qx: QX, name: string, limit?: number): QueryGenerator<PatronInfo[]>;",
+      'patronsNamed(qx: QX, name: string, limit?: number): QueryGenerator<PatronInfo[]>;',
     );
-    expect(text).toContain("export interface AdminQueries {");
-    expect(text).toContain("patronsNamed(name: string, limit?: number): Query<PatronInfo[]>;");
-    expect(text).toContain("export type AdminQuery =");
-    expect(text).toContain("export type UserQuery =");
+    expect(text).toContain('export interface AdminQueries {');
+    expect(text).toContain('patronsNamed(name: string, limit?: number): Query<PatronInfo[]>;');
+    expect(text).toContain('export type AdminQuery =');
+    expect(text).toContain('export type UserQuery =');
     expect(text).toContain(
-      "export class RemoteAdminQueries extends RemoteQueries implements AdminQueries {",
+      'export class RemoteAdminQueries extends RemoteQueries implements AdminQueries {',
     );
-    expect(text).toContain("export function LocalAdminQueries<QX>(");
+    expect(text).toContain('export function LocalAdminQueries<QX>(');
     expect(text).toContain(
-      "export function dispatchAdminQuery(queries: AdminQueries, query: AdminQuery): Query<any> {",
+      'export function dispatchAdminQuery(queries: AdminQueries, query: AdminQuery): Query<any> {',
     );
     expect(text).toContain(
-      "export function dispatchUserQuery(queries: UserQueries, query: UserQuery): Query<any> {",
+      'export function dispatchUserQuery(queries: UserQueries, query: UserQuery): Query<any> {',
     );
   });
 });

@@ -33,6 +33,7 @@ import {
   AddEdition,
   AddPatron,
   AdminCommands,
+  AdminRX,
   AssignPatron,
   Book,
   BookRX,
@@ -51,7 +52,6 @@ import {
   NewVHold,
   NoSet,
   OverdueCheckout,
-  UserCommands,
   PatronRX,
   Reducer,
   RelayRX,
@@ -62,8 +62,8 @@ import {
   TryHold,
   UpdateBookRestricted,
   UpdateEditionTitle,
+  UserCommands,
   UserRX,
-  AdminRX,
   VCheckout,
   VHold,
   VHoldRejected,
@@ -72,55 +72,45 @@ import {
 
 /* ----- migrations ----- */
 
-function *migrateBooks(rx: BookRX): Reducer<void> {
-  yield* rx.set.editions(
-    (yield* rx.get.editions()) ?? {}
-  );
+function* migrateBooks(rx: BookRX): Reducer<void> {
+  yield* rx.set.editions((yield* rx.get.editions()) ?? {});
 }
 
-function *migratePatrons(rx: PatronRX): Reducer<void> {
-  yield* rx.set.patrons(
-    (yield* rx.get.patrons()) ?? {}
-  );
+function* migratePatrons(rx: PatronRX): Reducer<void> {
+  yield* rx.set.patrons((yield* rx.get.patrons()) ?? {});
 }
 
-function *migrateStatus(rx: StatusRX): Reducer<void> {
-  yield* rx.set.active_holds(
-    (yield* rx.get.active_holds()) ?? {}
-  );
-  yield* rx.set.active_checkouts(
-    (yield* rx.get.active_checkouts()) ?? {}
-  );
+function* migrateStatus(rx: StatusRX): Reducer<void> {
+  yield* rx.set.active_holds((yield* rx.get.active_holds()) ?? {});
+  yield* rx.set.active_checkouts((yield* rx.get.active_checkouts()) ?? {});
 }
 
-export function *deciderMigrate(rx: DeciderRX): Reducer<void> {
+export function* deciderMigrate(rx: DeciderRX): Reducer<void> {
   yield* migrateBooks(rx);
   yield* migratePatrons(rx);
   yield* migrateStatus(rx);
-  yield* rx.set.decider_events(
-    (yield* rx.get.decider_events()) ?? []
-  );
+  yield* rx.set.decider_events((yield* rx.get.decider_events()) ?? []);
 }
 
-export function *adminMigrate(rx: AdminRX): Reducer<void> {
+export function* adminMigrate(rx: AdminRX): Reducer<void> {
   yield* migrateBooks(rx);
   yield* migratePatrons(rx);
   yield* migrateStatus(rx);
 }
 
-export function *userMigrate(rx: UserRX): Reducer<void> {
+export function* userMigrate(rx: UserRX): Reducer<void> {
   yield* migrateBooks(rx);
   yield* migratePatrons(rx);
   yield* rx.set.messages([]);
 }
 
-export function *relayMigrate(_rx: RelayRX): Reducer<void> {
+export function* relayMigrate(_rx: RelayRX): Reducer<void> {
   // noop for now
 }
 
 /* ----- individual reducers ----- */
 
-function *reduceAddEdition(rx: BookRX, e: AddEdition): Reducer<void> {
+function* reduceAddEdition(rx: BookRX, e: AddEdition): Reducer<void> {
   // add this edition
   yield* rx.set.edition(e.isbn, {
     isbn: e.isbn,
@@ -134,11 +124,11 @@ function *reduceAddEdition(rx: BookRX, e: AddEdition): Reducer<void> {
   yield* rx.set.editions(editions);
 }
 
-function *reduceUpdateEditionTitle(rx: BookRX, e: UpdateEditionTitle): Reducer<void> {
-  yield* rx.update.edition(e.isbn, (edition) => edition.title = e.title);
+function* reduceUpdateEditionTitle(rx: BookRX, e: UpdateEditionTitle): Reducer<void> {
+  yield* rx.update.edition(e.isbn, (edition) => (edition.title = e.title));
 }
 
-function *reduceAddBook(rx: BookRX, e: AddBook): Reducer<void> {
+function* reduceAddBook(rx: BookRX, e: AddBook): Reducer<void> {
   // create new book
   yield* rx.set.book(e.id, {
     id: e.id,
@@ -147,16 +137,14 @@ function *reduceAddBook(rx: BookRX, e: AddBook): Reducer<void> {
     timestamp: e.timestamp,
   });
   // add book to edition
-  yield* rx.update.edition(e.isbn, (edition) => edition.books[e.id] = true);
+  yield* rx.update.edition(e.isbn, (edition) => (edition.books[e.id] = true));
 }
 
-type RebalanceRX = BookRX & NoSet<StatusRX|VStatusRX> & PatronRX;
+type RebalanceRX = BookRX & NoSet<StatusRX | VStatusRX> & PatronRX;
 
 // End the most-recently-added edition-level holds until holds <= available unrestricted books.
 // Returns IDs of ended holds.  Caller must emit end-vhold decider events for each.
-function *rebalanceEditionHolds(
-  rx: RebalanceRX, edition: Edition,
-): Reducer<string[]> {
+function* rebalanceEditionHolds(rx: RebalanceRX, edition: Edition): Reducer<string[]> {
   const editionHoldIds = Object.keys(edition.holds);
   if (editionHoldIds.length === 0) return [];
   let available = 0;
@@ -186,9 +174,7 @@ function *rebalanceEditionHolds(
 }
 
 // returns nowInvalidHolds (edition-level holds that exceed available unrestricted books)
-function *reduceUpdateBookRestricted(
-  rx: RebalanceRX, e: UpdateBookRestricted,
-): Reducer<string[]> {
+function* reduceUpdateBookRestricted(rx: RebalanceRX, e: UpdateBookRestricted): Reducer<string[]> {
   const book = yield* rx.get.book(e.id);
   // be idempotent
   if (book.restricted === e.restricted) return [];
@@ -203,16 +189,14 @@ function *reduceUpdateBookRestricted(
 }
 
 // returns nowInvalidHolds
-function *reduceRemoveBook(
-  rx: RebalanceRX, e: RemoveBook,
-): Reducer<string[]> {
+function* reduceRemoveBook(rx: RebalanceRX, e: RemoveBook): Reducer<string[]> {
   const book = yield* rx.get.book(e.id);
   yield* rx.del.book(e.id);
   const edition = yield* rx.get.edition(book.isbn);
   delete edition.books[e.id];
   const invalidHolds: string[] = [];
   // if book had a book-level hold, end it
-  if (book.status && "hold" in book.status) {
+  if (book.status && 'hold' in book.status) {
     const hold = yield* rx.get.hold(book.status.hold);
     yield* rx.del.hold(hold.id);
     if (hold.patron) {
@@ -228,7 +212,7 @@ function *reduceRemoveBook(
   return invalidHolds;
 }
 
-function *reduceAddPatron(rx: PatronRX, e: AddPatron): Reducer<void> {
+function* reduceAddPatron(rx: PatronRX, e: AddPatron): Reducer<void> {
   yield* rx.set.patron(e.id, {
     id: e.id,
     name: e.name,
@@ -236,16 +220,17 @@ function *reduceAddPatron(rx: PatronRX, e: AddPatron): Reducer<void> {
     checkouts: {},
     holds: {},
   });
-  yield* rx.update.patrons((patrons) => patrons[e.id] = true);
+  yield* rx.update.patrons((patrons) => (patrons[e.id] = true));
 }
 
-function *reduceRenamePatron(rx: PatronRX, e: RenamePatron): Reducer<void> {
-  yield* rx.update.patron(e.id, (patron) => patron.name = e.name);
+function* reduceRenamePatron(rx: PatronRX, e: RenamePatron): Reducer<void> {
+  yield* rx.update.patron(e.id, (patron) => (patron.name = e.name));
 }
 
 // returns nowInvalidHolds
-function *reduceAssignPatron(
-  rx: PatronRX & BookRX & NoSet<StatusRX|VStatusRX>, e: AssignPatron,
+function* reduceAssignPatron(
+  rx: PatronRX & BookRX & NoSet<StatusRX | VStatusRX>,
+  e: AssignPatron,
 ): Reducer<string[]> {
   const patron = yield* rx.get.patron(e.id);
   patron.researcher = e.researcher;
@@ -254,7 +239,7 @@ function *reduceAssignPatron(
   if (!patron.researcher) {
     for (const hold_uuid of Object.keys(patron.holds)) {
       const hold = yield* rx.get.hold(hold_uuid);
-      if ("edition" in hold.target) continue;
+      if ('edition' in hold.target) continue;
       const book = yield* rx.get.book(hold.target.book);
       if (!book.restricted) continue;
       // hold is now invalid!
@@ -274,17 +259,17 @@ function *reduceAssignPatron(
 type FullStatusRX = StatusRX & PatronRX & BookRX;
 
 // returns rejection reason, or an empty string
-function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
+function* reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
   // patron checks
   const patron = yield* rx.get.patron(e.patron);
   if (!patron.researcher && e.open) {
     // non-researcher not allowed to issue open hold;
-    return "non-researcher not allowed to issue open hold";
+    return 'non-researcher not allowed to issue open hold';
   }
   const nholds = Object.keys(patron.holds).length;
   const ncheckouts = Object.keys(patron.checkouts).length;
   if (!patron.researcher && nholds + ncheckouts >= 5) {
-    return `too many holds (${nholds}) + checkouts (${ncheckouts})`
+    return `too many holds (${nholds}) + checkouts (${ncheckouts})`;
   }
   let overdue = 0;
   for (const checkout_uuid of Object.keys(patron.checkouts)) {
@@ -292,24 +277,24 @@ function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
     if (checkout.overdue) overdue++;
   }
   if (overdue >= 2) {
-    return "too many overdue checkouts";
+    return 'too many overdue checkouts';
   }
 
   let isbn: string;
   let targetsRestrictedBook = false;
-  if ("book" in e.target) {
+  if ('book' in e.target) {
     // hold is targeting a specific book
     const book = yield* rx.get.book(e.target.book);
     targetsRestrictedBook = book.restricted;
-    if (!patron.researcher && book.restricted){
-      return "non-researcher not allowed to issue hold for restricted book";
+    if (!patron.researcher && book.restricted) {
+      return 'non-researcher not allowed to issue hold for restricted book';
     }
     if (book.status) {
-      if ("hold" in book.status) {
-        return "book is already on hold";
+      if ('hold' in book.status) {
+        return 'book is already on hold';
       }
-      if ("checkout" in book.status) {
-        return "book is already checked out";
+      if ('checkout' in book.status) {
+        return 'book is already checked out';
       }
     }
     isbn = book.isbn;
@@ -329,7 +314,7 @@ function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
       if (!book.status && !book.restricted) books.push(book);
     }
     if (Object.keys(edition.holds).length >= books.length) {
-      return "all remaining books are already on hold";
+      return 'all remaining books are already on hold';
     }
   }
 
@@ -343,27 +328,27 @@ function *reduceTryHold(rx: FullStatusRX, e: TryHold): Reducer<string> {
     timestamp: e.timestamp,
   };
   if (!e.open) {
-    hold.expires = new Date(e.timestamp.getTime() + 1000 * 60 * 60 * 24 * 5)
+    hold.expires = new Date(e.timestamp.getTime() + 1000 * 60 * 60 * 24 * 5);
   }
   yield* rx.set.hold(e.id, hold);
 
-  if ("book" in e.target) {
+  if ('book' in e.target) {
     // add the hold to this book
-    yield* rx.update.book(e.target.book, (book) => book.status = { hold: hold.id });
+    yield* rx.update.book(e.target.book, (book) => (book.status = { hold: hold.id }));
   } else {
     // add the hold to this edition
-    yield* rx.update.edition(e.target.edition, (edition) => edition.holds[hold.id] = true);
+    yield* rx.update.edition(e.target.edition, (edition) => (edition.holds[hold.id] = true));
   }
 
   // update patron.holds
-  yield* rx.update.patron(e.patron, (patron) => patron.holds[e.id] = true);
+  yield* rx.update.patron(e.patron, (patron) => (patron.holds[e.id] = true));
   // update active_holds
-  yield* rx.update.active_holds((holds) => holds[e.id] = true);
+  yield* rx.update.active_holds((holds) => (holds[e.id] = true));
 
-  return "";
+  return '';
 }
 
-function *reduceEndHold(rx: FullStatusRX, e: CancelHold|ExpireHold): Reducer<void> {
+function* reduceEndHold(rx: FullStatusRX, e: CancelHold | ExpireHold): Reducer<void> {
   // look up the hold
   const hold = yield* rx.get.hold(e.id);
   // be idempotent
@@ -371,7 +356,7 @@ function *reduceEndHold(rx: FullStatusRX, e: CancelHold|ExpireHold): Reducer<voi
   // delete the hold
   yield* rx.del.hold(e.id);
   // update hold target (book or edition)
-  if ("book" in hold.target) {
+  if ('book' in hold.target) {
     yield* rx.update.book(hold.target.book, (book) => delete book.status);
   } else {
     yield* rx.update.edition(hold.target.edition, (edition) => delete edition.holds[e.id]);
@@ -383,7 +368,7 @@ function *reduceEndHold(rx: FullStatusRX, e: CancelHold|ExpireHold): Reducer<voi
 }
 
 // returns rejection reason, or an empty string
-function *reduceTryCheckout(rx: FullStatusRX, e: TryCheckout): Reducer<string> {
+function* reduceTryCheckout(rx: FullStatusRX, e: TryCheckout): Reducer<string> {
   /* the domain description does not mention if hold limits and overdue restrictions
      apply to checkouts, but let us assume that they do */
 
@@ -392,17 +377,17 @@ function *reduceTryCheckout(rx: FullStatusRX, e: TryCheckout): Reducer<string> {
   const edition = yield* rx.get.edition(book.isbn);
 
   // sanity check
-  if (book.status && "checkout" in book.status) {
-    return "book is already checked out";
+  if (book.status && 'checkout' in book.status) {
+    return 'book is already checked out';
   }
 
   // restricted books cannot be checked out
   if (!patron.researcher && book.restricted) {
-    return "book is restricted";
+    return 'book is restricted';
   }
 
   // does this patron have a hold on this book?
-  let ourHold: string = "";
+  let ourHold: string = '';
   if (book.status?.hold) {
     if (book.status.hold in patron.holds) {
       ourHold = book.status.hold;
@@ -433,13 +418,13 @@ function *reduceTryCheckout(rx: FullStatusRX, e: TryCheckout): Reducer<string> {
     if (checkout.overdue) overdue++;
   }
   if (overdue >= 2) {
-    return "too many overdue checkouts";
+    return 'too many overdue checkouts';
   }
 
   // is book on hold by someone else?
   if (!ourHold) {
-    if (book.status && "hold" in book.status) {
-      return "book is on hold by someone else";
+    if (book.status && 'hold' in book.status) {
+      return 'book is on hold by someone else';
     }
     if (!book.restricted) {
       const books: Book[] = [];
@@ -450,7 +435,7 @@ function *reduceTryCheckout(rx: FullStatusRX, e: TryCheckout): Reducer<string> {
         if (!book.status && !book.restricted) books.push(book);
       }
       if (Object.keys(edition.holds).length >= books.length) {
-        return "all remaining books are already on hold";
+        return 'all remaining books are already on hold';
       }
     }
   }
@@ -485,10 +470,10 @@ function *reduceTryCheckout(rx: FullStatusRX, e: TryCheckout): Reducer<string> {
   // update active_checkouts
   yield* rx.update.active_holds((holds) => delete holds[e.id]);
 
-  return "";
+  return '';
 }
 
-function *reduceEndCheckout(rx: FullStatusRX, e: EndCheckout): Reducer<void> {
+function* reduceEndCheckout(rx: FullStatusRX, e: EndCheckout): Reducer<void> {
   const checkout = yield* rx.get.checkout(e.checkout);
   /* no need for idempotency; only the front desk can end a checkout and that system should
      guarantee exactly-once behavior */
@@ -498,19 +483,20 @@ function *reduceEndCheckout(rx: FullStatusRX, e: EndCheckout): Reducer<void> {
   // update patron
   yield* rx.update.patron(checkout.patron, (patron) => delete patron.checkouts[e.checkout]);
   // update active checkouts
-  yield* rx.update.active_checkouts((active_checkouts) => delete active_checkouts[e.checkout])
+  yield* rx.update.active_checkouts((active_checkouts) => delete active_checkouts[e.checkout]);
 }
 
 // reusable for either status or vstatus stores
-function *reduceOverdueCheckout(
-  rx: NoSet<StatusRX | VStatusRX>, e: OverdueCheckout,
+function* reduceOverdueCheckout(
+  rx: NoSet<StatusRX | VStatusRX>,
+  e: OverdueCheckout,
 ): Reducer<void> {
-  yield* rx.update.checkout(e.checkout, (checkout) => checkout.overdue = true);
+  yield* rx.update.checkout(e.checkout, (checkout) => (checkout.overdue = true));
 }
 
 type FullVStatusRX = VStatusRX & BookRX & PatronRX;
 
-function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold, sent: any[]): Reducer<void> {
+function* reduceNewVHold(rx: FullVStatusRX, e: NewVHold, sent: any[]): Reducer<void> {
   // create the vhold
   const hold: VHold = {
     id: e.id,
@@ -520,27 +506,27 @@ function *reduceNewVHold(rx: FullVStatusRX, e: NewVHold, sent: any[]): Reducer<v
   if (e.patron) {
     hold.patron = e.patron;
     // patron-id is guaranteed to be our patron-id, so this is our hold
-    yield* rx.update.patron(e.patron, (patron) => patron.holds[e.id] = true);
-    sent.push({ type: "try-hold", id: e.id });
+    yield* rx.update.patron(e.patron, (patron) => (patron.holds[e.id] = true));
+    sent.push({ type: 'try-hold', id: e.id });
   }
   // handle special forecasted flag, to indicate unresolved requests
   if (e.forecasted) hold.forecasted = true;
   yield* rx.set.hold(e.id, hold);
   // update hold target (book or edition)
-  if ("book" in hold.target) {
-    yield* rx.update.book(hold.target.book, (book) => book.status = { hold: e.id });
+  if ('book' in hold.target) {
+    yield* rx.update.book(hold.target.book, (book) => (book.status = { hold: e.id }));
   } else {
-    yield* rx.update.edition(hold.target.edition, (edition) => edition.holds[e.id] = true);
+    yield* rx.update.edition(hold.target.edition, (edition) => (edition.holds[e.id] = true));
   }
 }
 
-function *reduceVHoldRejected(rx: UserRX, e: VHoldRejected, sent: any[]): Reducer<void> {
-  yield *rx.update.messages((msgs) => msgs.push(e.reason));
+function* reduceVHoldRejected(rx: UserRX, e: VHoldRejected, sent: any[]): Reducer<void> {
+  yield* rx.update.messages((msgs) => msgs.push(e.reason));
   // the presence of a vhold-rejected means our try-hold has round-tripped
-  sent.push({ type: "try-hold", id: e.id })
+  sent.push({ type: 'try-hold', id: e.id });
 }
 
-function *reduceEndVHold(rx: FullVStatusRX, e: EndVHold|CancelHold|ExpireHold): Reducer<void> {
+function* reduceEndVHold(rx: FullVStatusRX, e: EndVHold | CancelHold | ExpireHold): Reducer<void> {
   // look up the hold
   const hold = yield* rx.get.hold(e.id);
   // be idempotent
@@ -548,7 +534,7 @@ function *reduceEndVHold(rx: FullVStatusRX, e: EndVHold|CancelHold|ExpireHold): 
   // delete the hold
   yield* rx.del.hold(e.id);
   // update hold target (book or edition)
-  if ("book" in hold.target) {
+  if ('book' in hold.target) {
     yield* rx.update.book(hold.target.book, (book) => delete book.status);
   } else {
     yield* rx.update.edition(hold.target.edition, (edition) => delete edition.holds[e.id]);
@@ -559,7 +545,7 @@ function *reduceEndVHold(rx: FullVStatusRX, e: EndVHold|CancelHold|ExpireHold): 
   }
 }
 
-function *reduceNewVCheckout(rx: FullVStatusRX, e: NewVCheckout): Reducer<void> {
+function* reduceNewVCheckout(rx: FullVStatusRX, e: NewVCheckout): Reducer<void> {
   const checkout: VCheckout = {
     id: e.id,
     book: e.book,
@@ -567,14 +553,14 @@ function *reduceNewVCheckout(rx: FullVStatusRX, e: NewVCheckout): Reducer<void> 
     overdue: false,
   };
   yield* rx.set.checkout(e.id, checkout);
-  if (e.patron){
+  if (e.patron) {
     checkout.patron = e.patron;
     // also update our patron object
-    yield *rx.update.patron(e.patron, (patron) => patron.checkouts[e.id] = true);
+    yield* rx.update.patron(e.patron, (patron) => (patron.checkouts[e.id] = true));
   }
 }
 
-function *reduceVEndCheckout(rx: FullVStatusRX, e: EndCheckout): Reducer<void> {
+function* reduceVEndCheckout(rx: FullVStatusRX, e: EndCheckout): Reducer<void> {
   const checkout = yield* rx.get.checkout(e.checkout);
   /* no need for idempotency; only the front desk can end a checkout and that system should
      guarantee exactly-once behavior */
@@ -591,144 +577,206 @@ function *reduceVEndCheckout(rx: FullVStatusRX, e: EndCheckout): Reducer<void> {
 
 // The decider and the front desk admin both have access to all events, so we can share the same
 // reducer logic for both components.
-function *privilegedReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<DeciderEvents[]> {
+function* privilegedReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<DeciderEvents[]> {
   const deciderEvents: DeciderEvents[] = [];
 
   // several event-level reducers return invalid hold uuids, so we'll write a helper
-  const asEndVHolds = function*(g: Reducer<string[]>) {
+  const asEndVHolds = function* (g: Reducer<string[]>) {
     const invalidHolds = yield* g;
     for (const hold_uuid of invalidHolds) {
-      deciderEvents.push({ type: "end-vhold", id: hold_uuid, timestamp: new Date() })
+      deciderEvents.push({ type: 'end-vhold', id: hold_uuid, timestamp: new Date() });
     }
-  }
+  };
 
   for (const e of events) {
-    switch(e.type){
-      case "add-edition":            yield* reduceAddEdition(rx, e);           break;
-      case "update-edition-title":   yield* reduceUpdateEditionTitle(rx, e);   break;
-      case "add-book":               yield* reduceAddBook(rx, e);              break;
-      case "update-book-restricted": yield* asEndVHolds(reduceUpdateBookRestricted(rx, e)); break;
-      case "remove-book":            yield* asEndVHolds(reduceRemoveBook(rx, e));           break;
+    switch (e.type) {
+      case 'add-edition':
+        yield* reduceAddEdition(rx, e);
+        break;
+      case 'update-edition-title':
+        yield* reduceUpdateEditionTitle(rx, e);
+        break;
+      case 'add-book':
+        yield* reduceAddBook(rx, e);
+        break;
+      case 'update-book-restricted':
+        yield* asEndVHolds(reduceUpdateBookRestricted(rx, e));
+        break;
+      case 'remove-book':
+        yield* asEndVHolds(reduceRemoveBook(rx, e));
+        break;
 
-      case "add-patron":    yield* reduceAddPatron(rx, e);    break;
-      case "rename-patron": yield* reduceRenamePatron(rx, e); break;
-      case "assign-patron": yield* asEndVHolds(reduceAssignPatron(rx, e)); break;
+      case 'add-patron':
+        yield* reduceAddPatron(rx, e);
+        break;
+      case 'rename-patron':
+        yield* reduceRenamePatron(rx, e);
+        break;
+      case 'assign-patron':
+        yield* asEndVHolds(reduceAssignPatron(rx, e));
+        break;
 
-      case "cancel-hold":      // fallthru
-      case "expire-hold":      yield* reduceEndHold(rx, e);         break;
-      case "end-checkout":     yield* reduceEndCheckout(rx, e);     break;
-      case "overdue-checkout": yield* reduceOverdueCheckout(rx, e); break;
-      case "try-hold": {
-        const rejected = yield* reduceTryHold(rx, e);
-        if (rejected) {
-          deciderEvents.push({
-            type: "vhold-rejected", id: e.id, reason: rejected, patron: e.patron,
-          });
-        } else {
-          // TODO: needs expiration too, I think.
-          deciderEvents.push({ ...e, type: "new-vhold" });
+      case 'cancel-hold': // fallthru
+      case 'expire-hold':
+        yield* reduceEndHold(rx, e);
+        break;
+      case 'end-checkout':
+        yield* reduceEndCheckout(rx, e);
+        break;
+      case 'overdue-checkout':
+        yield* reduceOverdueCheckout(rx, e);
+        break;
+      case 'try-hold':
+        {
+          const rejected = yield* reduceTryHold(rx, e);
+          if (rejected) {
+            deciderEvents.push({
+              type: 'vhold-rejected',
+              id: e.id,
+              reason: rejected,
+              patron: e.patron,
+            });
+          } else {
+            // TODO: needs expiration too, I think.
+            deciderEvents.push({ ...e, type: 'new-vhold' });
+          }
         }
-      } break;
-      case "try-checkout": {
-        const rejected = yield* reduceTryCheckout(rx, e);
-        if (rejected) {
-          // note: there is no VCheckoutRejected event needed in the system
-        } else {
-          // steal .expires from reach checkout
-          const checkout = yield* rx.get.checkout(e.id);
-          deciderEvents.push({ ...e, type: "new-vcheckout", expires: checkout.expires });
+        break;
+      case 'try-checkout':
+        {
+          const rejected = yield* reduceTryCheckout(rx, e);
+          if (rejected) {
+            // note: there is no VCheckoutRejected event needed in the system
+          } else {
+            // steal .expires from reach checkout
+            const checkout = yield* rx.get.checkout(e.id);
+            deciderEvents.push({ ...e, type: 'new-vcheckout', expires: checkout.expires });
+          }
         }
-      } break;
+        break;
 
       // ignored events
-      case "new-vhold":
-      case "vhold-rejected":
-      case "end-vhold":
-      case "new-vcheckout":
-        break
+      case 'new-vhold':
+      case 'vhold-rejected':
+      case 'end-vhold':
+      case 'new-vcheckout':
+        break;
 
-      default:
+      default: {
         const _typecheck: never = e;
         return _typecheck;
+      }
     }
   }
 
   return deciderEvents;
 }
 
-export function *deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer<void> {
+export function* deciderReducer(rx: DeciderRX, events: LibraryEvents[]): Reducer<void> {
   // save the deciderEvents we just created
   const deciderEvents = yield* privilegedReducer(rx, events);
   yield* rx.set.decider_events(deciderEvents);
 }
 
 // administrator composition of reducers; for ui (priviledged)
-export function *adminReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<void> {
+export function* adminReducer(rx: AdminRX, events: LibraryEvents[]): Reducer<void> {
   // like deciderReducer, we can use the privilegedReducer, only we then discard the decider events
   yield* privilegedReducer(rx, events);
 }
 
 // patron composition of reducers; for ui (unprivileged)
-export function *userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]> {
+export function* userReducer(rx: UserRX, events: LibraryEvents[]): Reducer<any[]> {
   const sent: any[] = [];
   for (const e of events) {
     // extend read model
-    switch(e.type){
-      case "add-edition":            yield* reduceAddEdition(rx, e);           break;
-      case "update-edition-title":   yield* reduceUpdateEditionTitle(rx, e);   break;
-      case "add-book":               yield* reduceAddBook(rx, e);              break;
-      case "update-book-restricted": yield* reduceUpdateBookRestricted(rx, e); break;
-      case "remove-book":            yield* reduceRemoveBook(rx, e);           break;
-
-      case "add-patron":    yield* reduceAddPatron(rx, e);    break;
-      case "rename-patron": yield* reduceRenamePatron(rx, e); break;
-      case "assign-patron": yield* reduceAssignPatron(rx, e); break;
-
-      case "new-vhold":        yield* reduceNewVHold(rx, e, sent);       break;
-      case "vhold-rejected":   yield* reduceVHoldRejected(rx, e, sent);  break;
-      case "cancel-hold":      // fallthru
-      case "expire-hold":      // fallthru
-      case "end-vhold":        yield* reduceEndVHold(rx, e);             break;
-      case "new-vcheckout":    yield* reduceNewVCheckout(rx, e);         break;
-      case "end-checkout":     yield* reduceVEndCheckout(rx, e);         break;
-      case "overdue-checkout": yield* reduceOverdueCheckout(rx, e);      break;
-
-      // events we aren't allowed to receive
-      case "try-hold":
-      case "try-checkout":
+    switch (e.type) {
+      case 'add-edition':
+        yield* reduceAddEdition(rx, e);
+        break;
+      case 'update-edition-title':
+        yield* reduceUpdateEditionTitle(rx, e);
+        break;
+      case 'add-book':
+        yield* reduceAddBook(rx, e);
+        break;
+      case 'update-book-restricted':
+        yield* reduceUpdateBookRestricted(rx, e);
+        break;
+      case 'remove-book':
+        yield* reduceRemoveBook(rx, e);
         break;
 
-      default:
+      case 'add-patron':
+        yield* reduceAddPatron(rx, e);
+        break;
+      case 'rename-patron':
+        yield* reduceRenamePatron(rx, e);
+        break;
+      case 'assign-patron':
+        yield* reduceAssignPatron(rx, e);
+        break;
+
+      case 'new-vhold':
+        yield* reduceNewVHold(rx, e, sent);
+        break;
+      case 'vhold-rejected':
+        yield* reduceVHoldRejected(rx, e, sent);
+        break;
+      case 'cancel-hold': // fallthru
+      case 'expire-hold': // fallthru
+      case 'end-vhold':
+        yield* reduceEndVHold(rx, e);
+        break;
+      case 'new-vcheckout':
+        yield* reduceNewVCheckout(rx, e);
+        break;
+      case 'end-checkout':
+        yield* reduceVEndCheckout(rx, e);
+        break;
+      case 'overdue-checkout':
+        yield* reduceOverdueCheckout(rx, e);
+        break;
+
+      // events we aren't allowed to receive
+      case 'try-hold':
+      case 'try-checkout':
+        break;
+
+      default: {
         const _typecheck: never = e;
         return _typecheck;
+      }
     }
   }
   return sent;
 }
 
 export function userForecaster(cmd: UserCommands): LibraryEvents[] {
-  switch(cmd.type){
+  switch (cmd.type) {
     // commands which are virtually guaranteed to land don't need any kind of visualization
-    case "rename-patron":
-    case "cancel-hold":
+    case 'rename-patron':
+    case 'cancel-hold':
       return [cmd];
 
     // while commands which are racy need an indicator so the UI can show they're unresolved.
-    case "try-hold":
-      return [{
-        type: "new-vhold",
-        id: cmd.id,
-        target: cmd.target,
-        open: cmd.open,
-        timestamp: cmd.timestamp,
-        patron: cmd.patron,
-        // here's our special indicator
-        forecasted: true,
-      }];
+    case 'try-hold':
+      return [
+        {
+          type: 'new-vhold',
+          id: cmd.id,
+          target: cmd.target,
+          open: cmd.open,
+          timestamp: cmd.timestamp,
+          patron: cmd.patron,
+          // here's our special indicator
+          forecasted: true,
+        },
+      ];
 
-    default:
+    default: {
       const _typecheck: never = cmd;
       return _typecheck;
+    }
   }
 }
 
@@ -745,47 +793,56 @@ export function userForecaster(cmd: UserCommands): LibraryEvents[] {
    ignore those events in a safe, deterministic way.
 */
 
-function *relayReduceOne(rx: RelayRX, e: LibraryEvents): Reducer<void> {
-  switch(e.type){
+function* relayReduceOne(rx: RelayRX, e: LibraryEvents): Reducer<void> {
+  switch (e.type) {
     // otheriwse, the read model in the relay is mostly concerned with the existence of objects...
-    case "add-edition":  yield* rx.set.edition(e.isbn, true); break;
-    case "add-book":     yield* rx.set.book(e.id, true);      break;
-    case "add-patron":   yield* rx.set.patron(e.id, true);    break;
-    case "try-checkout": yield* rx.set.checkout(e.id, true);  break;
+    case 'add-edition':
+      yield* rx.set.edition(e.isbn, true);
+      break;
+    case 'add-book':
+      yield* rx.set.book(e.id, true);
+      break;
+    case 'add-patron':
+      yield* rx.set.patron(e.id, true);
+      break;
+    case 'try-checkout':
+      yield* rx.set.checkout(e.id, true);
+      break;
 
     // ...but for holds, we'll need to know which user it belongs to, so we can validate if a
     // cancel-hold is authorized or not
-    case "try-hold":
+    case 'try-hold':
       yield* rx.set.hold(e.id, { patron: e.patron });
       break;
 
     // mutations don't matter to us
-    case "update-edition-title":
-    case "update-book-restricted":
-    case "remove-book":
-    case "rename-patron":
-    case "assign-patron":
-    case "cancel-hold":
-    case "expire-hold":
-    case "end-checkout":
-    case "overdue-checkout":
+    case 'update-edition-title':
+    case 'update-book-restricted':
+    case 'remove-book':
+    case 'rename-patron':
+    case 'assign-patron':
+    case 'cancel-hold':
+    case 'expire-hold':
+    case 'end-checkout':
+    case 'overdue-checkout':
       break;
 
     // vstatus doesn't matter to us; we do read them from the $all stream but not for the purpose of
     // building state
-    case "new-vhold":
-    case "vhold-rejected":
-    case "end-vhold":
-    case "new-vcheckout":
+    case 'new-vhold':
+    case 'vhold-rejected':
+    case 'end-vhold':
+    case 'new-vcheckout':
       break;
 
-    default:
+    default: {
       const _typecheck: never = e;
       return _typecheck;
+    }
   }
 }
 
-export function *relayReducer(rx: RelayRX, events: LibraryEvents[]): Reducer<void> {
+export function* relayReducer(rx: RelayRX, events: LibraryEvents[]): Reducer<void> {
   for (const e of events) {
     yield* relayReduceOne(rx, e);
   }
@@ -794,116 +851,121 @@ export function *relayReducer(rx: RelayRX, events: LibraryEvents[]): Reducer<voi
 /* -- validation logic for incoming commands to relay -- */
 
 // Validate incoming commands from a patron.  Returns an error, or an empty string.
-function *validatePatronOne(
-  rx: RelayRX, patron: string, e: UserCommands, newUuids: string[],
+function* validatePatronOne(
+  rx: RelayRX,
+  patron: string,
+  e: UserCommands,
+  newUuids: string[],
 ): Reducer<string> {
-  switch(e.type){
-    case "rename-patron":
-      if (e.id !== patron) return "unauthorized rename of other patron";
+  switch (e.type) {
+    case 'rename-patron':
+      if (e.id !== patron) return 'unauthorized rename of other patron';
       // I suppose the relay should not allow a phony login for this to ever occur, but this is
       // a demo without real authentication so we'll leave this line here.
-      if (!(yield* rx.get.patron(e.id))) return "no such patron";
-      return "";
+      if (!(yield* rx.get.patron(e.id))) return 'no such patron';
+      return '';
 
-    case "try-hold":
-      if (e.patron !== patron) return "unauthorized hold for of other patron";
-      if (!(yield* rx.get.patron(e.patron))) return "no such patron";
-      if ("book" in e.target) {
-        if (!(yield* rx.get.book(e.target.book))) return "no such book";
+    case 'try-hold':
+      if (e.patron !== patron) return 'unauthorized hold for of other patron';
+      if (!(yield* rx.get.patron(e.patron))) return 'no such patron';
+      if ('book' in e.target) {
+        if (!(yield* rx.get.book(e.target.book))) return 'no such book';
       } else {
-        if (!(yield* rx.get.edition(e.target.edition))) return "no such edition";
+        if (!(yield* rx.get.edition(e.target.edition))) return 'no such edition';
       }
       // note: we do not worry about non-researcher patrons creating open holds at this point.
       // Those could be caused by a race condition if a researcher places a hold while also being
       // demoted.  Race conditions are handled by the decider, not by us.
       newUuids.push(e.id);
-      return "";
+      return '';
 
-    case "cancel-hold":
+    case 'cancel-hold': {
       // an admin can cancel a hold for anyone, a patron can only cancel a hold for themself
       const hold = yield* rx.get.hold(e.id);
-      if (!hold) return "no such hold";
-      if (hold.patron !== patron) return "unauthorized cancel-hold for other patron";
-      return "";
+      if (!hold) return 'no such hold';
+      if (hold.patron !== patron) return 'unauthorized cancel-hold for other patron';
+      return '';
+    }
 
-    default:
+    default: {
       const _typecheck: never = e;
       return _typecheck;
+    }
   }
 }
 
 // Validate incoming commands from an admin.  Returns an error, or an empty string.
-function *validateAdminOne(
-  rx: RelayRX, e: AdminCommands, newUuids: string[],
-): Reducer<string> {
-  switch(e.type){
-    case "add-edition":
+function* validateAdminOne(rx: RelayRX, e: AdminCommands, newUuids: string[]): Reducer<string> {
+  switch (e.type) {
+    case 'add-edition':
       newUuids.push(e.isbn);
-      return "";
+      return '';
 
-    case "update-edition-title":
-      if (!(yield* rx.get.edition(e.isbn))) return "no such edition";
-      return "";
+    case 'update-edition-title':
+      if (!(yield* rx.get.edition(e.isbn))) return 'no such edition';
+      return '';
 
-    case "add-book":
-      if (!(yield* rx.get.edition(e.isbn))) return "no such edition";
+    case 'add-book':
+      if (!(yield* rx.get.edition(e.isbn))) return 'no such edition';
       newUuids.push(e.id);
-      return "";
+      return '';
 
-    case "update-book-restricted":
-    case "remove-book":
-      if (!(yield* rx.get.book(e.id))) return "no such book";
-      return "";
+    case 'update-book-restricted':
+    case 'remove-book':
+      if (!(yield* rx.get.book(e.id))) return 'no such book';
+      return '';
 
-    case "add-patron":
+    case 'add-patron':
       newUuids.push(e.id);
-      return "";
+      return '';
 
-    case "rename-patron":
-      if (!(yield* rx.get.patron(e.id))) return "no such patron";
-      return "";
+    case 'rename-patron':
+      if (!(yield* rx.get.patron(e.id))) return 'no such patron';
+      return '';
 
-    case "assign-patron":
-      if (!(yield* rx.get.patron(e.id))) return "no such patron";
-      return "";
+    case 'assign-patron':
+      if (!(yield* rx.get.patron(e.id))) return 'no such patron';
+      return '';
 
-    case "try-hold":
-      if (!(yield* rx.get.patron(e.patron))) return "no such patron";
-      if ("book" in e.target) {
-        if (!(yield* rx.get.book(e.target.book))) return "no such book";
+    case 'try-hold':
+      if (!(yield* rx.get.patron(e.patron))) return 'no such patron';
+      if ('book' in e.target) {
+        if (!(yield* rx.get.book(e.target.book))) return 'no such book';
       } else {
-        if (!(yield* rx.get.edition(e.target.edition))) return "no such edition";
+        if (!(yield* rx.get.edition(e.target.edition))) return 'no such edition';
       }
       // note: we do not worry about non-researcher patrons creating open holds at this point.
       // Those could be caused by a race condition if a researcher places a hold while also being
       // demoted.  Race conditions are handled by the decider, not by us.
       newUuids.push(e.id);
-      return "";
+      return '';
 
-    case "cancel-hold":
-      if (!(yield* rx.get.hold(e.id))) return "no such hold";
-      return "";
+    case 'cancel-hold':
+      if (!(yield* rx.get.hold(e.id))) return 'no such hold';
+      return '';
 
-    case "try-checkout":
-      if (!(yield* rx.get.patron(e.patron))) return "no such patron";
-      if (!(yield* rx.get.book(e.book))) return "no such book";
+    case 'try-checkout':
+      if (!(yield* rx.get.patron(e.patron))) return 'no such patron';
+      if (!(yield* rx.get.book(e.book))) return 'no such book';
       newUuids.push(e.id);
-      return "";
+      return '';
 
-    case "end-checkout":
-      if (!(yield* rx.get.checkout(e.checkout))) return "no such checkout";
-      return "";
+    case 'end-checkout':
+      if (!(yield* rx.get.checkout(e.checkout))) return 'no such checkout';
+      return '';
 
-    default:
+    default: {
       const _typecheck: never = e;
       return _typecheck;
+    }
   }
 }
 
 // events shall be raw json (still needs decoding)
 // returns [newUuids[], error]
-export function *validateAdminCommands(
-  rx: RelayRX, events: unknown[],
+export function* validateAdminCommands(
+  rx: RelayRX,
+  events: unknown[],
 ): Reducer<[string[], string]> {
   const newUuids: string[] = [];
   for (const e of events) {
@@ -914,13 +976,15 @@ export function *validateAdminCommands(
     // update our read model between each validation
     yield* relayReduceOne(rx, d);
   }
-  return [newUuids, ""];
+  return [newUuids, ''];
 }
 
 // events shall be raw json (still needs decoding)
 // returns [newUuids[], error]
-export function *validateUserCommands(
-  rx: RelayRX, events: unknown[], patron: string,
+export function* validateUserCommands(
+  rx: RelayRX,
+  events: unknown[],
+  patron: string,
 ): Reducer<[string[], string]> {
   const newUuids: string[] = [];
   for (const e of events) {
@@ -929,5 +993,5 @@ export function *validateUserCommands(
     if (err) return [newUuids, err];
     yield* relayReduceOne(rx, d);
   }
-  return [newUuids, ""];
+  return [newUuids, ''];
 }

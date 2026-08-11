@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
 import type { Query } from '@todo-thin/model/ui';
+import { useEffect, useMemo, useState } from 'react';
 
 // useQuery is the generic react hook for consuming a query.
 //
@@ -25,7 +25,7 @@ import type { Query } from '@todo-thin/model/ui';
 export function useQuery<
   Q,
   K extends keyof Q,
-  T extends Q[K] extends (...a: any[]) => Query<infer R> ? R : never
+  T extends (Q[K] extends (...a: any[]) => Query<infer R> ? R : never),
 >(
   queries: Q,
   name: K,
@@ -38,9 +38,15 @@ export function useQuery<
     const q = (queries as any)[name](...args);
     q.subscribe((val: T) => setState(val));
     return q;
-  }, [queries, name, ...args])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- checker doesn't understand spreads
+  }, [queries, name, ...args]);
 
-  useEffect(() => () => { query.close() }, [query]);
+  useEffect(
+    () => () => {
+      query.close();
+    },
+    [query],
+  );
 
   return state;
 }

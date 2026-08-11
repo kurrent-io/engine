@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+
 import type { Query, QueryFunction } from './model';
 
 export function useQuery<QX, T>(
@@ -14,7 +15,12 @@ export function useQuery<QX, T>(
     return q;
   }, [fw, fn]);
 
-  useEffect(() => () => { query.close() }, [query]);
+  useEffect(
+    () => () => {
+      query.close();
+    },
+    [query],
+  );
 
   return state;
 }

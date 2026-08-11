@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  TodoEvents,
+  ClientMessage,
   EncodeProto,
   RemoteTodoQueries,
-  TodoQueries,
-  ClientMessage,
   ServerMessage,
+  TodoEvents,
+  TodoQueries,
 } from '@todo-thin/model/ui';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { generateUuid } from './util';
 
@@ -20,19 +20,17 @@ interface Server {
 
 // ok, so the Framework instance is on the server, and this name doesn't make perfect sense, but
 // we'll still call this "useFramework" for consistency with the thin-basic example.
-export function useFramework(
-  serverUrl: string,
-): [Server, ConnectionState] {
+export function useFramework(serverUrl: string): [Server, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
 
   const mem = useRef<{
-    ws: WebSocket | null,
-    outbox: any[],
-    activeQueries: Record<string, {raw: any, onResult: (result: any) => void}>,
+    ws: WebSocket | null;
+    outbox: any[];
+    activeQueries: Record<string, { raw: any; onResult: (result: any) => void }>;
   }>({
-      ws: null,
-      outbox: [],
-      activeQueries: {},
+    ws: null,
+    outbox: [],
+    activeQueries: {},
   });
 
   const server = useMemo(() => {
@@ -40,19 +38,19 @@ export function useFramework(
       if (mem.current.ws) {
         mem.current.ws.send(JSON.stringify(msg));
       }
-    }
+    };
 
     // Track active queries.  Active queries get re-opened for each connection.
     let queryId: number = 1;
     const queriesIO = {
       createQuery(raw: any[], onResult: (result: any) => void): () => void {
         const qid = `${queryId++}`;
-        mem.current.activeQueries[qid] = {raw, onResult};
-        wsMaybeSend({"subscribeQueries": {[qid]: raw}});
+        mem.current.activeQueries[qid] = { raw, onResult };
+        wsMaybeSend({ subscribeQueries: { [qid]: raw } });
         const onClose = () => {
           delete mem.current.activeQueries[qid];
-          wsMaybeSend({"closeQueries": [qid]});
-        }
+          wsMaybeSend({ closeQueries: [qid] });
+        };
         return onClose;
       },
     };
@@ -63,13 +61,13 @@ export function useFramework(
         data: EncodeProto(command),
       };
       mem.current.outbox.push(raw);
-      wsMaybeSend({commands: [raw]});
+      wsMaybeSend({ commands: [raw] });
     };
 
-    const queries = new RemoteTodoQueries(queriesIO)
+    const queries = new RemoteTodoQueries(queriesIO);
 
     return { sendCommand, queries };
-  }, [mem]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,7 +93,7 @@ export function useFramework(
         // re-submit our active queries
         if (Object.keys(mem.current.activeQueries).length > 0) {
           const queries: Record<string, any> = {};
-          for (const [qid, {raw}] of Object.entries(mem.current.activeQueries)) {
+          for (const [qid, { raw }] of Object.entries(mem.current.activeQueries)) {
             queries[qid] = raw;
           }
           msg.subscribeQueries = queries;
@@ -147,10 +145,11 @@ export function useFramework(
       clearTimeout(reconnectTimer);
       if (mem.current.ws) {
         mem.current.ws.close();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- we know this is the right `mem`
         mem.current.ws = null;
       }
     };
-  }, [serverUrl, mem]);
+  }, [serverUrl]);
 
   return [server, connState];
 }

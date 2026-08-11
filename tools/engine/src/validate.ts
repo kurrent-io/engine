@@ -4,11 +4,12 @@
  * every union, so problems surface as compiler/IDE diagnostics instead of emitter crashes.
  */
 
-import { NoTarget, type Program } from "@typespec/compiler";
-import { KUnion } from "./ktypes.js";
-import { reportDiagnostic } from "./lib.js";
-import { lowerProgram } from "./lower.js";
-import { solveUnion } from "./solver.js";
+import { NoTarget, type Program } from '@typespec/compiler';
+
+import { KUnion } from './ktypes.js';
+import { reportDiagnostic } from './lib.js';
+import { lowerProgram } from './lower.js';
+import { solveUnion } from './solver.js';
 
 export function $onValidate(program: Program): void {
   // checker errors (unknown identifiers etc.) produce error types that would only cascade into
@@ -27,7 +28,7 @@ export function $onValidate(program: Program): void {
       solveUnion(lowered.registry, ct.types);
     } catch (e) {
       reportDiagnostic(program, {
-        code: "union-unsolvable",
+        code: 'union-unsolvable',
         format: { message: (e as Error).message },
         target: lowered.targets.get(ct) ?? NoTarget,
       });

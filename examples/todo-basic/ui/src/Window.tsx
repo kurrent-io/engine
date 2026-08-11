@@ -1,21 +1,15 @@
-import { useCallback } from 'react';
+import { QueryGenerator, TodoQX } from '@todo-basic/model/ui';
 import { Card, Flex, Spin, Tag, Typography } from 'antd';
+import { useCallback } from 'react';
 
-import { TodoQX, QueryGenerator } from '@todo-basic/model/ui';
-import { useQuery } from './useQuery';
-import { useFramework } from './useFramework';
-import { generateUuid } from './util';
 import ListView, { InlineAdd, ListData } from './ListView';
+import { useFramework } from './useFramework';
+import { useQuery } from './useQuery';
+import { generateUuid } from './util';
 
 const { Text } = Typography;
 
-export default function Window({
-  name,
-  serverUrl,
-}: {
-  name: string;
-  serverUrl: string;
-}) {
+export default function Window({ name, serverUrl }: { name: string; serverUrl: string }) {
   const [fw, connState] = useFramework(serverUrl);
 
   const listsLookup = useCallback(function* (qx: TodoQX): QueryGenerator<ListData[]> {
@@ -43,9 +37,7 @@ export default function Window({
   }[connState];
 
   function addList(listName: string) {
-    fw.sendCommands([
-      { type: 'new-list', id: generateUuid(), name: listName },
-    ]);
+    fw.sendCommands([{ type: 'new-list', id: generateUuid(), name: listName }]);
   }
 
   function renameList(id: string, listName: string) {
@@ -57,9 +49,7 @@ export default function Window({
   }
 
   function addItem(listId: string, itemText: string) {
-    fw.sendCommands([
-      { type: 'new-item', id: generateUuid(), list: listId, text: itemText },
-    ]);
+    fw.sendCommands([{ type: 'new-item', id: generateUuid(), list: listId, text: itemText }]);
   }
 
   function toggleItem(id: string, done: boolean) {
@@ -79,11 +69,12 @@ export default function Window({
       className="window"
       title={
         <Flex align="center" gap="small">
-          <Text strong className="grow">{name}</Text>
+          <Text strong className="grow">
+            {name}
+          </Text>
           <Tag color={stateColor}>{connState}</Tag>
         </Flex>
-      }
-    >
+      }>
       {lists === undefined ? (
         <Spin />
       ) : (
@@ -100,11 +91,7 @@ export default function Window({
               onArchiveItem={archiveItem}
             />
           ))}
-          <InlineAdd
-            label="add list"
-            placeholder="list name"
-            onSubmit={addList}
-          />
+          <InlineAdd label="add list" placeholder="list name" onSubmit={addList} />
         </>
       )}
     </Card>

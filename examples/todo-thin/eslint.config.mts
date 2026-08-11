@@ -8,10 +8,10 @@ import pluginImport from 'eslint-plugin-import';
 import pluginReact from 'eslint-plugin-react';
 import pluginReactHooks from 'eslint-plugin-react-hooks';
 import pluginReactRefresh from 'eslint-plugin-react-refresh';
-import globals from 'globals';
 
 export default [
   pluginJs.configs.recommended,
+  pluginTs.configs['flat/eslint-recommended'],
   pluginImport.flatConfigs.recommended,
   pluginReactRefresh.configs.recommended,
   { ignores: ['**/dist/', 'model/*.gen.ts', '**/*.mts'] },
@@ -19,10 +19,6 @@ export default [
     ...pluginReact.configs.flat.recommended,
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
-      globals: {
-        ...globals.browser,
-        ...globals.node,
-      },
       parser: parserTs,
       parserOptions: {
         ecmaFeatures: { jsx: true },
@@ -39,7 +35,7 @@ export default [
     },
     rules: {
       '@typescript-eslint/ban-ts-comment': ['error', { 'ts-nocheck': 'allow-with-description' }],
-      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-redeclare': 'error',
       '@typescript-eslint/no-unused-vars': [
         'error',
         {
@@ -63,10 +59,11 @@ export default [
           'pathGroups': [{ group: 'external', pattern: '@/**', position: 'after' }],
         },
       ],
+      'import/no-duplicates': 'error',
       'no-constant-condition': 'off',
-      'no-duplicate-imports': 'error',
       'no-throw-literal': 'error',
       'no-unused-vars': 'off',
+      'prefer-const': ['error', { ignoreReadBeforeAssign: true }],
       'react-hooks/exhaustive-deps': 'error',
       'react-hooks/rules-of-hooks': 'error',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],

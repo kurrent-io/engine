@@ -1,22 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+
 import {
-  InMemStorage,
   AdminFramework,
-  UserFramework,
   adminMigrate,
   adminReducer,
+  InMemStorage,
+  userForecaster,
+  UserFramework,
   userMigrate,
   userReducer,
-  userForecaster,
 } from './model';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
 // function overload signature: without patronId, return AdminFramework
-export function useFramework(
-  relayUrl: string,
-  enabled: boolean,
-): [AdminFramework, ConnectionState];
+export function useFramework(relayUrl: string, enabled: boolean): [AdminFramework, ConnectionState];
 
 // function overload signature: with patronId, return UserFramework
 export function useFramework(
@@ -39,7 +37,7 @@ export function useFramework(
     const storage = new InMemStorage();
     const onCommands = (commands: any[]) => {
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (ws?.readyState !== WebSocket.OPEN) return;
       for (const cmd of commands) {
         ws.send(JSON.stringify(cmd));
       }
@@ -58,7 +56,7 @@ export function useFramework(
         onCommands,
       });
     }
-  }, []);
+  }, [patronId]);
 
   useEffect(() => {
     if (!enabled) {
@@ -86,13 +84,18 @@ export function useFramework(
         wsRef.current = ws;
 
         ws.onopen = () => {
-          if (cancelled) { ws.close(); return; }
+          if (cancelled) {
+            ws.close();
+            return;
+          }
           backoff = 1000;
           // handshake: identify ourselves and where to resume
-          ws.send(JSON.stringify({
-            patron: patronId,
-            since: result.checkpoint ?? null,
-          }));
+          ws.send(
+            JSON.stringify({
+              patron: patronId,
+              since: result.checkpoint ?? null,
+            }),
+          );
           setConnState('connected');
           // resend any commands that were persisted but which haven't round-tripped
           for (const cmd of result.commands) {
@@ -101,8 +104,8 @@ export function useFramework(
         };
 
         ws.onmessage = (msg) => {
-          console.log("recv:", msg.data);
-          if (msg.data === "caughtup") {
+          console.log('recv:', msg.data);
+          if (msg.data === 'caughtup') {
             fw.caughtUp();
           } else {
             const event = JSON.parse(msg.data);

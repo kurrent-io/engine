@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
 import type { Query, QueryFunction } from '@todo-basic/model/ui';
+import { useEffect, useMemo, useState } from 'react';
 
 export function useQuery<QX, T>(
   // structurally match QX parameter from Framework
@@ -14,7 +14,12 @@ export function useQuery<QX, T>(
     return q;
   }, [fw, fn]);
 
-  useEffect(() => () => { query.close() }, [query]);
+  useEffect(
+    () => () => {
+      query.close();
+    },
+    [query],
+  );
 
   return state;
 }

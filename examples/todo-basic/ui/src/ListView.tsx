@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Button, Flex, Input, Typography } from 'antd';
 import { CloseOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { Button, Flex, Input, Typography } from 'antd';
+import { useState } from 'react';
 
 const { Text } = Typography;
 
@@ -43,11 +43,17 @@ function EditTextRow({
         value={text}
         onChange={(e) => setText(e.target.value)}
         onPressEnter={submit}
-        onKeyDown={(e) => { if (e.key === 'Escape') onCancel(); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onCancel();
+        }}
         autoFocus
       />
-      <Button size="small" type="primary" onClick={submit}>OK</Button>
-      <Button size="small" onClick={onCancel}>Cancel</Button>
+      <Button size="small" type="primary" onClick={submit}>
+        OK
+      </Button>
+      <Button size="small" onClick={onCancel}>
+        Cancel
+      </Button>
     </Flex>
   );
 }
@@ -66,13 +72,7 @@ function ItemRow({
   const [editing, setEditing] = useState(false);
 
   if (editing) {
-    return (
-      <EditTextRow
-        initial={item.text}
-        onSave={onEdit}
-        onCancel={() => setEditing(false)}
-      />
-    );
+    return <EditTextRow initial={item.text} onSave={onEdit} onCancel={() => setEditing(false)} />;
   }
 
   return (
@@ -83,14 +83,20 @@ function ItemRow({
         size="small"
         type="text"
         icon={<EditOutlined />}
-        onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setEditing(true);
+        }}
       />
       <Button
         className="hover-action"
         size="small"
         type="text"
         icon={<CloseOutlined />}
-        onClick={(e) => { e.stopPropagation(); onArchive(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onArchive();
+        }}
       />
     </Flex>
   );
@@ -156,7 +162,9 @@ export default function ListView({
           />
         ) : (
           <Flex className="row hoverable" align="center" gap="small">
-            <Text strong className="grow">{list.name}</Text>
+            <Text strong className="grow">
+              {list.name}
+            </Text>
             <Button
               className="hover-action"
               size="small"

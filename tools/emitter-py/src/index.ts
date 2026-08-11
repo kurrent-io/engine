@@ -1,11 +1,13 @@
-import { fileURLToPath } from "node:url";
-import { emitFile, resolvePath, type EmitContext } from "@typespec/compiler";
-import { lowerProgram } from "@kurrent/typespec-engine";
-import { generatePy } from "./emitter.js";
-import { $lib, type PyEmitterOptions } from "./lib.js";
+import { fileURLToPath } from 'node:url';
+
+import { lowerProgram } from '@kurrent/typespec-engine';
+import { type EmitContext, emitFile, resolvePath } from '@typespec/compiler';
+
+import { generatePy } from './emitter.js';
+import { $lib, type PyEmitterOptions } from './lib.js';
 
 export { $lib };
-export { generatePy } from "./emitter.js";
+export { generatePy } from './emitter.js';
 
 /**
  * The skeleton is the runtime support code (Framework base class, storage helpers, JSON type)
@@ -13,7 +15,7 @@ export { generatePy } from "./emitter.js";
  * included: the packaged default unless the `skeleton` option overrides it.  The default ships
  * as assets/skeleton.py so users can copy it as the basis for an override.
  */
-const DEFAULT_SKELETON = fileURLToPath(new URL("../../assets/skeleton.py", import.meta.url));
+const DEFAULT_SKELETON = fileURLToPath(new URL('../../assets/skeleton.py', import.meta.url));
 
 export async function $onEmit(context: EmitContext<PyEmitterOptions>) {
   const program = context.program;
@@ -21,7 +23,7 @@ export async function $onEmit(context: EmitContext<PyEmitterOptions>) {
   const lowered = lowerProgram(program);
   if (program.hasError()) return;
 
-  const skeletonOpt = context.options["skeleton"];
+  const skeletonOpt = context.options['skeleton'];
   const skeletonPath = skeletonOpt
     ? resolvePath(program.projectRoot, skeletonOpt)
     : DEFAULT_SKELETON;
@@ -31,7 +33,7 @@ export async function $onEmit(context: EmitContext<PyEmitterOptions>) {
 
   if (!program.compilerOptions.noEmit && !program.hasError()) {
     await emitFile(program, {
-      path: resolvePath(context.emitterOutputDir, context.options["out-file"] ?? "model.py"),
+      path: resolvePath(context.emitterOutputDir, context.options['out-file'] ?? 'model.py'),
       content,
     });
   }

@@ -12,14 +12,7 @@ all: model relay decider ui
 .PHONY: gen
 gen: model/library.gen.ts relay/relay.js relay/model.py decider/decider.js decider/model/model.go ui/src/model.js ui/src/model.d.ts
 
-# The TypeSpec tooling (engine + emitters); one tsp compile of the library model emits
-# all three generated files directly to their destinations (see model/tspconfig.yaml).
-TSP_SRCS := $(wildcard tools/engine/src/*.ts tools/engine/lib/*.tsp \
-	tools/emitter-ts/src/*.ts tools/emitter-ts/assets/* \
-	tools/emitter-py/src/*.ts tools/emitter-py/assets/* \
-	tools/emitter-go/src/*.ts tools/emitter-go/assets/*)
-
-model/library.gen.ts relay/model.py decider/model/model.go &: model/library.tsp model/tspconfig.yaml $(TSP_SRCS)
+model/library.gen.ts relay/model.py decider/model/model.go &: model/library.tsp model/tspconfig.yaml
 	cd model && pnpm exec tsp compile library.tsp
 
 .PHONY: model

@@ -8,7 +8,13 @@
  */
 
 import {
+  CheckJsonType,
+  CheckLength,
+  CheckLiteral,
   Denter,
+  GetField,
+  GetIndex,
+  HasField,
   KArray,
   KBool,
   KDate,
@@ -25,17 +31,11 @@ import {
   KType,
   KTypeRegistry,
   KUnion,
-  CheckJsonType,
-  CheckLength,
-  CheckLiteral,
-  GetField,
-  GetIndex,
-  HasField,
   LoweredProgram,
   Match,
   Solution,
   solveUnion,
-} from "@kurrent/typespec-engine";
+} from '@kurrent/typespec-engine';
 
 type Annos = Map<KType, string>;
 type Converter = (varExpr: string) => string;
@@ -58,11 +58,11 @@ function getAnon(anon: Anon): string {
  */
 function itemName(t: KType): string | null {
   if (t.name) return t.name;
-  if (t instanceof KString) return "String";
-  if (t instanceof KInt) return "Int";
-  if (t instanceof KBool) return "Bool";
-  if (t instanceof KDate) return "Date";
-  if (t instanceof KJson) return "Json";
+  if (t instanceof KString) return 'String';
+  if (t instanceof KInt) return 'Int';
+  if (t instanceof KBool) return 'Bool';
+  if (t instanceof KDate) return 'Date';
+  if (t instanceof KJson) return 'Json';
   return null;
 }
 
@@ -74,18 +74,16 @@ function camel(s: string): string {
 }
 
 const JSON_TYPE_TO_REFLECT_TYPE: Record<string, string> = {
-  null: "reflectTypeNil",
-  string: "reflectTypeString",
-  boolean: "reflectTypeBool",
-  int: "reflectTypeInt",
-  object: "reflectTypeMap",
-  array: "reflectTypeArray",
+  null: 'reflectTypeNil',
+  string: 'reflectTypeString',
+  boolean: 'reflectTypeBool',
+  int: 'reflectTypeInt',
+  object: 'reflectTypeMap',
+  array: 'reflectTypeArray',
 };
 
 /** sort a map's entries by key (numbers or strings; never mixed within one map) */
-function sortedEntries<K extends string | number | boolean, V>(
-  m: Map<K, V>,
-): [K, V][] {
+function sortedEntries<K extends string | number | boolean, V>(m: Map<K, V>): [K, V][] {
   return [...m.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
@@ -97,7 +95,7 @@ function convertUnion(
   converters: Converters,
 ): Converter {
   d.print(`\nfunc To${name}(vm *goja.Runtime, value goja.Value) ${name} {\n`);
-  d.indent("\t");
+  d.indent('\t');
   d.print(`x := value\n`);
 
   // first find out what declarations we need by walking the whole solution tree
@@ -105,7 +103,7 @@ function convertUnion(
   const declare = (code: string): void => {
     if (decls.has(code)) return;
     decls.add(code);
-    d.print(code + "\n");
+    d.print(code + '\n');
   };
 
   const visitDecls = (solution: Solution): void => {
@@ -116,10 +114,10 @@ function convertUnion(
     } else if (solution instanceof CheckLiteral) {
       for (const sln of solution.options.values()) visitDecls(sln);
     } else if (solution instanceof CheckLength) {
-      declare("var fn func(this goja.Value, args ...Value) (goja.Value, error)");
-      declare("var ok bool");
-      declare("var length goja.Value");
-      declare("var err error");
+      declare('var fn func(this goja.Value, args ...Value) (goja.Value, error)');
+      declare('var ok bool');
+      declare('var length goja.Value');
+      declare('var err error');
       for (const sln of solution.options.values()) visitDecls(sln);
       if (solution.default !== null) visitDecls(solution.default);
     } else if (solution instanceof GetIndex) {
@@ -127,7 +125,7 @@ function convertUnion(
     } else if (solution instanceof GetField) {
       visitDecls(solution.solution);
     } else if (solution instanceof HasField) {
-      declare("var obj *goja.Object");
+      declare('var obj *goja.Object');
       for (const [, sln] of solution.solutions) visitDecls(sln);
     } else {
       throw new Error(`unexpected solution of type: ${(solution as Solution).constructor.name}`);
@@ -141,56 +139,56 @@ function convertUnion(
         d.print(`return nil\n`);
         return;
       }
-      d.print(`out := ${converters.get(solution.typ)!("value")}\n`);
+      d.print(`out := ${converters.get(solution.typ)!('value')}\n`);
       d.print(`return out\n`);
     } else if (solution instanceof CheckJsonType) {
       d.print(`switch x.ExportType() {\n`);
       for (const [jtyp, sln] of sortedEntries(solution.options)) {
         d.print(`case ${JSON_TYPE_TO_REFLECT_TYPE[jtyp]}:\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(sln);
         d.dedent();
       }
       d.print(`default:\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`panic(fmt.Sprintf("unexpected export type: %v", x.ExportType()))\n`);
       d.dedent();
       d.print(`}\n`);
     } else if (solution instanceof CheckLiteral) {
       const typeset = new Set([...solution.options.keys()].map((v) => typeof v));
-      if (typeset.size === 1 && typeset.has("boolean")) {
+      if (typeset.size === 1 && typeset.has('boolean')) {
         d.print(`if x.Export().(bool) {\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(solution.options.get(true as any)!);
         d.dedent();
         d.print(`} else {\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(solution.options.get(false as any)!);
         d.dedent();
         d.print(`}\n`);
-      } else if (typeset.size === 1 && typeset.has("string")) {
+      } else if (typeset.size === 1 && typeset.has('string')) {
         d.print(`switch x.Export().(string) {\n`);
         for (const [value, sln] of sortedEntries(solution.options)) {
           d.print(`case "${value}":\n`);
-          d.indent("\t");
+          d.indent('\t');
           visit(sln);
           d.dedent();
         }
         d.print(`default:\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`panic(fmt.Sprintf("unexpected literal: %v", x))\n`);
         d.dedent();
         d.print(`}\n`);
-      } else if (typeset.size === 1 && typeset.has("number")) {
+      } else if (typeset.size === 1 && typeset.has('number')) {
         d.print(`switch x.Export().(int64) {\n`);
         for (const [value, sln] of sortedEntries(solution.options)) {
           d.print(`case ${value}:\n`);
-          d.indent("\t");
+          d.indent('\t');
           visit(sln);
           d.dedent();
         }
         d.print(`default:\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`panic(fmt.Sprintf("unexpected literal: %v", x))\n`);
         d.dedent();
         d.print(`}\n`);
@@ -199,16 +197,16 @@ function convertUnion(
         d.print(`switch true {\n`);
         for (const [value, sln] of sortedEntries(solution.options)) {
           let govalue: string;
-          if (typeof value === "string") govalue = `"${value}"`;
-          else if (typeof value === "boolean") govalue = String(value);
-          else govalue = `"int64(${value})"`;
+          if (typeof value === 'string') govalue = `"${value}"`;
+          else if (typeof value === 'boolean') govalue = String(value);
+          else govalue = `int64(${value})`;
           d.print(`case x.StrictEquals(vm.ToValue(${govalue})):\n`);
-          d.indent("\t");
+          d.indent('\t');
           visit(sln);
           d.dedent();
         }
         d.print(`default:\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`panic(fmt.Sprintf("unexpected literal: %v", x))\n`);
         d.dedent();
         d.print(`}\n`);
@@ -216,25 +214,25 @@ function convertUnion(
     } else if (solution instanceof CheckLength) {
       d.print(`fn, ok = goja.AssertFunction(x.(*goja.Object).Get("length"))\n`);
       d.print(`if !ok {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`panic(fmt.Sprintf(".length is not a function of value %v", x))\n`);
       d.dedent();
       d.print(`}\n`);
       d.print(`length, err = fn(x)\n`);
       d.print(`if err != nil {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`panic(fmt.Sprintf(".length() of %v failed: %v", x, err))\n`);
       d.dedent();
       d.print(`}\n`);
       d.print(`switch length.Export().(int64) {\n`);
       for (const [l, sln] of sortedEntries(solution.options)) {
         d.print(`case ${l}:\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(sln);
         d.dedent();
       }
       d.print(`default:\n`);
-      d.indent("\t");
+      d.indent('\t');
       if (solution.default !== null) visit(solution.default);
       else d.print(`panic(fmt.Sprintf("unexpected length: %v", length))\n`);
       d.dedent();
@@ -250,12 +248,12 @@ function convertUnion(
       d.print(`switch true {\n`);
       for (const [key, sln] of solution.solutions) {
         d.print(`case obj.Get("${key}") != nil:\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(sln);
         d.dedent();
       }
       d.print(`default:\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`panic(fmt.Sprintf("no matching fields: %v", x))\n`);
       d.dedent();
       d.print(`}\n`);
@@ -289,35 +287,38 @@ function generateTypes(
 
     // builtin scalars
     const goname =
-      t instanceof KString ? "string"
-      : t instanceof KInt ? "int64"
-      : t instanceof KBool ? "bool"
-      : t instanceof KJson ? "goja.Value"
-      : null;
+      t instanceof KString
+        ? 'string'
+        : t instanceof KInt
+          ? 'int64'
+          : t instanceof KBool
+            ? 'bool'
+            : t instanceof KJson
+              ? 'goja.Value'
+              : null;
     if (goname !== null) {
       const anno = goname;
-      const converter: Converter =
-        t instanceof KJson ? (v) => v : (v) => `${v}.Export().(${anno})`;
+      const converter: Converter = t instanceof KJson ? (v) => v : (v) => `${v}.Export().(${anno})`;
       annos.set(t, anno);
       converters.set(t, converter);
       return;
     }
 
     if (t instanceof KDate) {
-      imports.add("time");
-      annos.set(t, "time.Time");
-      d.print("\nfunc ToDate(value goja.Value) time.Time {\n");
-      d.indent("\t");
+      imports.add('time');
+      annos.set(t, 'time.Time');
+      d.print('\nfunc ToDate(value goja.Value) time.Time {\n');
+      d.indent('\t');
       d.print('strtime := value.Export().(string)\n');
       d.print('out, err := time.Parse("2006-01-02T15:04:05Z", strtime)\n');
       d.print('if err != nil {\n');
-      d.indent("\t");
+      d.indent('\t');
       d.print('panic(fmt.Sprintf("invalid timestamp (%v): %v", strtime, err))\n');
       d.dedent();
       d.print('}\n');
       d.print('return out\n');
       d.dedent();
-      d.print("}\n");
+      d.print('}\n');
       converters.set(t, (v) => `ToDate(${v})`);
       return;
     }
@@ -326,8 +327,8 @@ function generateTypes(
     let converter: Converter;
 
     if (t instanceof KLiteral) {
-      if (typeof t.value === "string") anno = `string/*${t.value}*/`;
-      else if (typeof t.value === "boolean") anno = `bool/*${t.value}*/`;
+      if (typeof t.value === 'string') anno = `string/*${t.value}*/`;
+      else if (typeof t.value === 'boolean') anno = `bool/*${t.value}*/`;
       else anno = `int64/*${t.value}*/`;
       converter = (v) => `${v}.Export().(${anno})`;
     } else if (t instanceof KArray) {
@@ -336,12 +337,12 @@ function generateTypes(
       const it = itemName(t.itemType);
       const name = pascal(t.name ?? (it ? `sliceOf${it}` : getAnon(anon)));
       d.print(`\nfunc to${name}(vm *goja.Runtime, value goja.Value) ${anno} {\n`);
-      d.indent("\t");
-      d.print("if value == nil || goja.IsUndefined(value) { return nil }\n");
+      d.indent('\t');
+      d.print('if value == nil || goja.IsUndefined(value) { return nil }\n');
       d.print(`var out ${anno}\n`);
       d.print(`vm.ForOf(value, func(i goja.Value) bool {\n`);
-      d.indent("\t");
-      d.print(`item := ${converters.get(t.itemType)!("i")}\n`);
+      d.indent('\t');
+      d.print(`item := ${converters.get(t.itemType)!('i')}\n`);
       d.print(`out = append(out, item)\n`);
       d.print(`return true\n`);
       d.dedent();
@@ -356,14 +357,14 @@ function generateTypes(
       const vt = itemName(t.valueType);
       const name = pascal(t.name ?? (vt ? `recordOf${vt}` : getAnon(anon)));
       d.print(`\nfunc to${name}(vm *goja.Runtime, value goja.Value) ${anno} {\n`);
-      d.indent("\t");
-      d.print("if value == nil || goja.IsUndefined(value) { return nil }\n");
+      d.indent('\t');
+      d.print('if value == nil || goja.IsUndefined(value) { return nil }\n');
       d.print(`obj := value.(*goja.Object)\n`);
       d.print(`out := ${anno}{}\n`);
       d.print(`for _, key := range obj.Keys() {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`vin := obj.Get(key)\n`);
-      d.print(`vout := ${converters.get(t.valueType)!("vin")}\n`);
+      d.print(`vout := ${converters.get(t.valueType)!('vin')}\n`);
       d.print(`out[key] = vout\n`);
       d.dedent();
       d.print(`}\n`);
@@ -377,23 +378,25 @@ function generateTypes(
       const nonNull = t.types.filter((ut) => !(ut instanceof KNull));
       const allStructs = nonNull.length > 0 && nonNull.every((ut) => ut instanceof KStruct);
       const literalBase = (lit: KLiteral): string =>
-        typeof lit.value === "string" ? "string" : typeof lit.value === "boolean" ? "bool" : "int64";
-      const bases = new Set(
-        t.types.map((ut) => (ut instanceof KLiteral ? literalBase(ut) : null)),
-      );
+        typeof lit.value === 'string'
+          ? 'string'
+          : typeof lit.value === 'boolean'
+            ? 'bool'
+            : 'int64';
+      const bases = new Set(t.types.map((ut) => (ut instanceof KLiteral ? literalBase(ut) : null)));
       const uniformLiteral = t.types.every((ut) => ut instanceof KLiteral) && bases.size === 1;
 
       if (allStructs) {
         // union of named struct types: an interface each member opts into
         d.print(`\ntype ${name} interface {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`json.Marshaler\n`);
         d.print(`json.Unmarshaler\n`);
         d.print(`Is${name}()\n`);
         d.dedent();
         d.print(`}\n`);
         converter = convertUnion(d, name, t, registry, converters);
-        d.print("\n");
+        d.print('\n');
         for (const ut of t.types) {
           if (ut instanceof KNull) continue;
           d.print(`func (x ${annos.get(ut)}) Is${name}() {}\n`);
@@ -405,7 +408,7 @@ function generateTypes(
         const base = [...bases][0]!;
         d.print(`\ntype ${name} ${base}\n`);
         d.print(`\nfunc To${name}(vm *goja.Runtime, value goja.Value) ${name} {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`return ${name}(value.Export().(${base}))\n`);
         d.dedent();
         d.print(`}\n`);
@@ -415,7 +418,7 @@ function generateTypes(
         // type, so fall back to any.  The checker enforces membership.
         d.print(`\ntype ${name} = any\n`);
         d.print(`\nfunc To${name}(vm *goja.Runtime, value goja.Value) ${name} {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`return value.Export()\n`);
         d.dedent();
         d.print(`}\n`);
@@ -427,17 +430,17 @@ function generateTypes(
       const name = pascal(t.name ?? path);
       d.print(`\ntype ${name} goja.Object\n`);
       d.print(`\nfunc (x *${name}) MarshalJSON() ([]byte, error) {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`return (*goja.Object)(x).MarshalJSON()`);
       d.dedent();
       d.print(`}\n`);
       d.print(`\nfunc (x *${name}) UnmarshalJSON(data []byte) error {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`return nil // this is as pointless as the goja unmarshaler is\n`);
       d.dedent();
       d.print(`}\n`);
       d.print(`\nfunc To${name}(vm *goja.Runtime, value goja.Value) *${name} {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`out := value.(*goja.Object)\n`);
       d.print(`return (*${name})(out)\n`);
       d.dedent();
@@ -445,9 +448,9 @@ function generateTypes(
       converter = (v) => `To${name}(vm, ${v})`;
       for (const [fn, ft] of t.fields) {
         d.print(`\nfunc (x *${name}) ${pascal(fn)}(vm *goja.Runtime) ${annos.get(ft)} {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`value := (*goja.Object)(x).Get("${fn}")\n`);
-        d.print(`out := ${converters.get(ft)!("value")}\n`);
+        d.print(`out := ${converters.get(ft)!('value')}\n`);
         d.print(`return out\n`);
         d.dedent();
         d.print(`}\n`);
@@ -458,7 +461,7 @@ function generateTypes(
       const name = pascal(t.name ?? path);
       d.print(`\ntype ${name} goja.Object\n`);
       d.print(`\nfunc To${name}(vm *goja.Runtime, value goja.Value) *${name} {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`out := value.(*goja.Object)\n`);
       d.print(`return (*${name})(out)\n`);
       d.dedent();
@@ -466,9 +469,9 @@ function generateTypes(
       converter = (v) => `To${name}(vm, ${v})`;
       t.itemTypes.forEach((it, i) => {
         d.print(`\nfunc (x *${name}) Item${i}(vm *goja.Runtime) ${annos.get(it)} {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`value := (*goja.Object)(x).Get("${i}")\n`);
-        d.print(`out := ${converters.get(it)!("value")}\n`);
+        d.print(`out := ${converters.get(it)!('value')}\n`);
         d.print(`return out\n`);
         d.dedent();
         d.print(`}\n`);
@@ -481,22 +484,22 @@ function generateTypes(
     annos.set(t, anno);
     converters.set(t, converter);
   };
-  visit(t, t.name ?? "");
+  visit(t, t.name ?? '');
 }
 
 // checkers
 
-const NOOP: Checker = () => "";
+const NOOP: Checker = () => '';
 
 function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void {
-  d.print("x0 := value\n");
-  d.print("xpath0 := path\n");
+  d.print('x0 := value\n');
+  d.print('xpath0 := path\n');
 
   const decls = new Set<string>();
   const declare = (code: string): void => {
     if (decls.has(code)) return;
     decls.add(code);
-    d.print(code + "\n");
+    d.print(code + '\n');
   };
 
   const visitDecls = (solution: Solution): void => {
@@ -506,21 +509,21 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       for (const sln of solution.options.values()) visitDecls(sln);
     } else if (solution instanceof CheckLiteral) {
       const typeset = new Set([...solution.options.keys()].map((v) => typeof v));
-      if (typeset.size === 1 && typeset.has("boolean")) {
-        declare("var ok bool");
-        declare("var b bool");
-      } else if (typeset.size === 1 && typeset.has("string")) {
-        declare("var ok bool");
-        declare("var s string");
-      } else if (typeset.size === 1 && typeset.has("number")) {
-        declare("var ok bool");
-        declare("var n int64");
+      if (typeset.size === 1 && typeset.has('boolean')) {
+        declare('var ok bool');
+        declare('var b bool');
+      } else if (typeset.size === 1 && typeset.has('string')) {
+        declare('var ok bool');
+        declare('var s string');
+      } else if (typeset.size === 1 && typeset.has('number')) {
+        declare('var ok bool');
+        declare('var n int64');
       }
       for (const sln of solution.options.values()) visitDecls(sln);
     } else if (solution instanceof CheckLength) {
-      declare("var obj *goja.Object");
-      declare("var ok bool");
-      declare("var fn func(this goja.Value, args ...Value) (goja.Value, error)");
+      declare('var obj *goja.Object');
+      declare('var ok bool');
+      declare('var fn func(this goja.Value, args ...Value) (goja.Value, error)');
       for (const sln of solution.options.values()) visitDecls(sln);
       if (solution.default !== null) visitDecls(solution.default);
     } else if (solution instanceof GetIndex) {
@@ -528,8 +531,8 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
     } else if (solution instanceof GetField) {
       visitDecls(solution.solution);
     } else if (solution instanceof HasField) {
-      declare("var obj *goja.Object");
-      declare("var ok bool");
+      declare('var obj *goja.Object');
+      declare('var ok bool');
       for (const [, sln] of solution.solutions) visitDecls(sln);
     } else {
       throw new Error(`unexpected solution of type: ${(solution as Solution).constructor.name}`);
@@ -550,18 +553,18 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
     const [objVar, objPath] = obj;
     const [subjVar, subjPath] = subj;
     if (solution instanceof Match) {
-      d.print(checkers.get(solution.typ)!("value", "path"));
-      d.print("return errs\n");
+      d.print(checkers.get(solution.typ)!('value', 'path'));
+      d.print('return errs\n');
     } else if (solution instanceof CheckJsonType) {
       d.print(`switch ${subjVar}.ExportType() {\n`);
       for (const [jtyp, sln] of sortedEntries(solution.options)) {
         d.print(`case ${JSON_TYPE_TO_REFLECT_TYPE[jtyp]}:\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(sln, obj, obj);
         d.dedent();
       }
       d.print(`default:\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`errs = append(errs, fmt.Errorf(\n`);
       d.print(`\t"%v: type %v not allowed here", ${subjPath}, ${subjVar}.ExportType(),\n`);
       d.print(`))\n`);
@@ -570,26 +573,26 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       d.print(`}\n`);
     } else if (solution instanceof CheckLiteral) {
       const typeset = new Set([...solution.options.keys()].map((v) => typeof v));
-      if (typeset.size === 1 && typeset.has("boolean")) {
+      if (typeset.size === 1 && typeset.has('boolean')) {
         d.print(`b, ok = ${subjVar}.Export().(bool)\n`);
         d.print(`if !ok {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`errs = append(errs, fmt.Errorf("%v: not a bool", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
         d.print(`} else if b {\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(solution.options.get(true as any)!, obj, obj);
         d.dedent();
         d.print(`} else {\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(solution.options.get(false as any)!, obj, obj);
         d.dedent();
         d.print(`}\n`);
-      } else if (typeset.size === 1 && typeset.has("string")) {
+      } else if (typeset.size === 1 && typeset.has('string')) {
         d.print(`s, ok = ${subjVar}.Export().(string)\n`);
         d.print(`if !ok {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`errs = append(errs, fmt.Errorf("%v: not a string", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
@@ -597,20 +600,20 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
         d.print(`switch s {\n`);
         for (const [value, sln] of sortedEntries(solution.options)) {
           d.print(`case "${value}":\n`);
-          d.indent("\t");
+          d.indent('\t');
           visit(sln, obj, obj);
           d.dedent();
         }
         d.print(`default:\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`errs = append(errs, fmt.Errorf("%v: unexpected literal", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
         d.print(`}\n`);
-      } else if (typeset.size === 1 && typeset.has("number")) {
+      } else if (typeset.size === 1 && typeset.has('number')) {
         d.print(`n, ok = ${subjVar}.Export().(int64)\n`);
         d.print(`if !ok {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`errs = append(errs, fmt.Errorf("%v: not an int", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
@@ -618,12 +621,12 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
         d.print(`switch n {\n`);
         for (const [value, sln] of sortedEntries(solution.options)) {
           d.print(`case ${value}:\n`);
-          d.indent("\t");
+          d.indent('\t');
           visit(sln, obj, obj);
           d.dedent();
         }
         d.print(`default:\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`errs = append(errs, fmt.Errorf("%v: unexpected literal", ${subjPath}))\n`);
         d.print(`return errs\n`);
         d.dedent();
@@ -632,38 +635,39 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
         d.print(`switch true {\n`);
         for (const [value, sln] of sortedEntries(solution.options)) {
           let govalue: string;
-          if (typeof value === "string") govalue = `"${value}"`;
-          else if (typeof value === "boolean") govalue = String(value);
-          else govalue = `"int64(${value})"`;
+          if (typeof value === 'string') govalue = `"${value}"`;
+          else if (typeof value === 'boolean') govalue = String(value);
+          else govalue = `int64(${value})`;
           d.print(`case ${subjVar}.StrictEquals(vm.ToValue(${govalue})):\n`);
-          d.indent("\t");
+          d.indent('\t');
           visit(sln, obj, obj);
           d.dedent();
         }
         d.print(`default:\n`);
-        d.indent("\t");
-        d.print(`panic(fmt.Sprintf("unexpected literal: %v", ${subjVar}))\n`);
+        d.indent('\t');
+        d.print(`errs = append(errs, fmt.Errorf("%v: unexpected literal", ${subjPath}))\n`);
+        d.print(`return errs\n`);
         d.dedent();
         d.print(`}\n`);
       }
     } else if (solution instanceof CheckLength) {
       d.print(`obj, ok := ${subjVar}.(*goja.Object)\n`);
       d.print(`if !ok {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`errs = append(errs, fmt.Errorf("%v: not an array", ${subjPath}))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
       d.print(`fn, ok = goja.AssertFunction(obj.Get("length"))\n`);
       d.print(`if !ok {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`errs = append(errs, fmt.Errorf("%v: no .length() method", ${subjPath}))\n`);
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
       d.print(`length, err = fn(${subjVar})\n`);
       d.print(`if err != nil {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`errs = append(errs, fmt.Errorf("%v: .length(): %w", ${subjPath}, err))\n`);
       d.print(`return errs\n`);
       d.dedent();
@@ -671,12 +675,12 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       d.print(`switch length.Export().(int64) {\n`);
       for (const [l, sln] of sortedEntries(solution.options)) {
         d.print(`case ${l}:\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(sln, obj, obj);
         d.dedent();
       }
       d.print(`default:\n`);
-      d.indent("\t");
+      d.indent('\t');
       if (solution.default !== null) {
         visit(solution.default, obj, obj);
       } else {
@@ -696,8 +700,10 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       d.print(`x${i} := ${objVar}.(*goja.Object).Get("${solution.key}")\n`);
       d.print(`xpath${i} := ${objPath} + ".${solution.key}"\n`);
       d.print(`if x${i} == nil {\n`);
-      d.indent("\t");
-      d.print(`errs = append(errs, fmt.Errorf("%v: missing discriminator \\"${solution.key}\\"", xpath${i}))\n`);
+      d.indent('\t');
+      d.print(
+        `errs = append(errs, fmt.Errorf("%v: missing discriminator \\"${solution.key}\\"", xpath${i}))\n`,
+      );
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
@@ -705,7 +711,7 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
     } else if (solution instanceof HasField) {
       d.print(`obj, ok = ${subjVar}.(*goja.Object)\n`);
       d.print(`if !ok {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`errs = append(errs, fmt.Errorf("%v: not an object", ${subjPath}))\n`);
       d.print(`return errs\n`);
       d.dedent();
@@ -713,12 +719,12 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
       d.print(`switch true {\n`);
       for (const [key, sln] of solution.solutions) {
         d.print(`case obj.Get("${key}") != nil:\n`);
-        d.indent("\t");
+        d.indent('\t');
         visit(sln, obj, obj);
         d.dedent();
       }
       d.print(`default:\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`errs = append(errs, fmt.Errorf("%v: no matching fields", ${subjPath}))\n`);
       d.print(`return errs\n`);
       d.dedent();
@@ -729,7 +735,7 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
   };
 
   visitDecls(solution);
-  visit(solution, ["x0", "xpath0"], ["x0", "xpath0"]);
+  visit(solution, ['x0', 'xpath0'], ['x0', 'xpath0']);
 }
 
 function generateCheckers(
@@ -747,59 +753,83 @@ function generateCheckers(
       throw new Error(`XXX: ${t}`);
     }
     if (t instanceof KString) {
-      checkers.set(t, (v, path) =>
-        `if typ := ${v}.ExportType(); typ != reflectTypeString {\n` +
-        `\terrs = append(errs, fmt.Errorf("%v: is of type %v, not string", ${path}, typ))\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (v, path) =>
+          `if typ := ${v}.ExportType(); typ != reflectTypeString {\n` +
+          `\terrs = append(errs, fmt.Errorf("%v: is of type %v, not string", ${path}, typ))\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KInt) {
-      checkers.set(t, (v, path) =>
-        `if typ := ${v}.ExportType(); typ != reflectTypeInt {\n` +
-        `\terrs = append(errs, fmt.Errorf("%v: is of type %v, not int", ${path}, typ))\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (v, path) =>
+          `if typ := ${v}.ExportType(); typ != reflectTypeInt {\n` +
+          `\terrs = append(errs, fmt.Errorf("%v: is of type %v, not int", ${path}, typ))\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KBool) {
-      checkers.set(t, (v, path) =>
-        `if typ := ${v}.ExportType(); typ != reflectTypeBool {\n` +
-        `\terrs = append(errs, fmt.Errorf("%v: is of type %v, not bool", ${path}, typ))\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (v, path) =>
+          `if typ := ${v}.ExportType(); typ != reflectTypeBool {\n` +
+          `\terrs = append(errs, fmt.Errorf("%v: is of type %v, not bool", ${path}, typ))\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KNull || (t instanceof KLiteral && t.value === null)) {
-      checkers.set(t, (v, path) =>
-        `if typ := ${v}.ExportType(); typ != reflectTypeNil {\n` +
-        `\terrs = append(errs, fmt.Errorf("%v: is of type %v, not bool", ${path}, typ))\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (v, path) =>
+          `if typ := ${v}.ExportType(); typ != reflectTypeNil {\n` +
+          `\terrs = append(errs, fmt.Errorf("%v: is of type %v, not bool", ${path}, typ))\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KDate) {
-      checkers.set(t, (v, path) =>
-        `if strtime, ok := ${v}.Export().(string); !ok {\n` +
-        `\terrs = append(errs, fmt.Errorf("%v: not a string", ${path}))\n` +
-        `} else if _, err := time.Parse("2006-01-02T15:04:05Z", strtime); err != nil {\n` +
-        `\terrs = append(errs, fmt.Errorf("%v: not a valid timestamp: %w", ${path}, err))\n` +
-        `}\n`);
+      checkers.set(
+        t,
+        (v, path) =>
+          `if strtime, ok := ${v}.Export().(string); !ok {\n` +
+          `\terrs = append(errs, fmt.Errorf("%v: not a string", ${path}))\n` +
+          `} else if _, err := time.Parse("2006-01-02T15:04:05Z", strtime); err != nil {\n` +
+          `\terrs = append(errs, fmt.Errorf("%v: not a valid timestamp: %w", ${path}, err))\n` +
+          `}\n`,
+      );
       return;
     }
     if (t instanceof KLiteral) {
-      if (typeof t.value === "string") {
-        checkers.set(t, (v, path) =>
-          `if lit, ok := ${v}.Export().(string); !ok || lit != "${t.value}" {\n` +
-          `\terrs = append(errs, fmt.Errorf("%v: is not \\"${t.value}\\"", ${path}))\n` +
-          `}\n`);
-      } else if (typeof t.value === "boolean") {
+      if (typeof t.value === 'string') {
+        checkers.set(
+          t,
+          (v, path) =>
+            `if lit, ok := ${v}.Export().(string); !ok || lit != "${t.value}" {\n` +
+            `\terrs = append(errs, fmt.Errorf("%v: is not \\"${t.value}\\"", ${path}))\n` +
+            `}\n`,
+        );
+      } else if (typeof t.value === 'boolean') {
         const goval = String(t.value);
-        checkers.set(t, (v, path) =>
-          `if lit, ok := ${v}.Export().(bool); !ok || lit != ${goval} {\n` +
-          `\terrs = append(errs, fmt.Errorf("%v: is not ${goval}", ${path}))\n` +
-          `}\n`);
+        checkers.set(
+          t,
+          (v, path) =>
+            `if lit, ok := ${v}.Export().(bool); !ok || lit != ${goval} {\n` +
+            `\terrs = append(errs, fmt.Errorf("%v: is not ${goval}", ${path}))\n` +
+            `}\n`,
+        );
       } else {
-        checkers.set(t, (v, path) =>
-          `if lit, ok := ${v}.Export().(int64); !ok || lit != ${t.value} {\n` +
-          `\terrs = append(errs, fmt.Errorf("%v: is not ${t.value}", ${path}))\n` +
-          `}\n`);
+        checkers.set(
+          t,
+          (v, path) =>
+            `if lit, ok := ${v}.Export().(int64); !ok || lit != ${t.value} {\n` +
+            `\terrs = append(errs, fmt.Errorf("%v: is not ${t.value}", ${path}))\n` +
+            `}\n`,
+        );
       }
       return;
     }
@@ -811,16 +841,17 @@ function generateCheckers(
         const dd = new Denter();
         dd.print(
           `if typ := ${v}.ExportType(); typ != reflectTypeArray {\n` +
-          `\terrs = append(errs, fmt.Errorf("%v: is a %v, not json array", ${path}, typ))\n`);
+            `\terrs = append(errs, fmt.Errorf("%v: is a %v, not json array", ${path}, typ))\n`,
+        );
         if (checkers.get(t.itemType) !== NOOP) {
           dd.print(`} else {\n`);
-          dd.indent("\t");
+          dd.indent('\t');
           dd.print(`i := 0\n`);
           dd.print(`err := vm.Try(func(){vm.ForOf(${v}, func(item goja.Value) bool {\n`);
-          dd.indent("\t");
+          dd.indent('\t');
           dd.print(`xpath := fmt.Sprintf("%s[%d]", ${path}, i)\n`);
           dd.print(`i++\n`);
-          dd.print(checkers.get(t.itemType)!("item", "xpath"));
+          dd.print(checkers.get(t.itemType)!('item', 'xpath'));
           dd.print(`return true\n`);
           dd.dedent();
           dd.print(`})})\n`);
@@ -839,26 +870,29 @@ function generateCheckers(
         const n = t.itemTypes.length;
         dd.print(
           `if typ := ${v}.ExportType(); typ != reflectTypeArray {\n` +
-          `\terrs = append(errs, fmt.Errorf("%v: is a %v, not json array", ${path}, typ))\n`);
+            `\terrs = append(errs, fmt.Errorf("%v: is a %v, not json array", ${path}, typ))\n`,
+        );
         dd.print(`} else {\n`);
-        dd.indent("\t");
+        dd.indent('\t');
         // a distinct name from the struct checker's `obj`, so an inlined tuple field does not
         // shadow it
         dd.print(`arr := ${v}.(*goja.Object)\n`);
         dd.print(`if length := arr.Get("length").ToInteger(); length != ${n} {\n`);
-        dd.print(`\terrs = append(errs, fmt.Errorf("%v: expected ${n} items, not %v", ${path}, length))\n`);
+        dd.print(
+          `\terrs = append(errs, fmt.Errorf("%v: expected ${n} items, not %v", ${path}, length))\n`,
+        );
         dd.print(`} else {\n`);
-        dd.indent("\t");
+        dd.indent('\t');
         // Go block scoping gives each element a fresh item/xpath, so nested tuples and arrays
         // can't shadow each other's variables
         t.itemTypes.forEach((it, i) => {
-          dd.print("{\n");
-          dd.indent("\t");
+          dd.print('{\n');
+          dd.indent('\t');
           dd.print(`item := arr.Get("${i}")\n`);
           dd.print(`xpath := ${path} + "[${i}]"\n`);
-          dd.print(checkers.get(it)!("item", "xpath"));
+          dd.print(checkers.get(it)!('item', 'xpath'));
           dd.dedent();
-          dd.print("}\n");
+          dd.print('}\n');
         });
         dd.dedent();
         dd.print(`}\n`);
@@ -872,16 +906,17 @@ function generateCheckers(
         const dd = new Denter();
         dd.print(
           `if typ := ${v}.ExportType(); typ != reflectTypeMap {\n` +
-          `\terrs = append(errs, fmt.Errorf("%v: is a %v, not json object", ${path}, typ))\n`);
+            `\terrs = append(errs, fmt.Errorf("%v: is a %v, not json object", ${path}, typ))\n`,
+        );
         if (checkers.get(t.valueType) !== NOOP) {
           dd.print(`} else {\n`);
-          dd.indent("\t");
+          dd.indent('\t');
           dd.print(`obj := ${v}.(*goja.Object)\n`);
           dd.print(`for _, key := range obj.Keys() {\n`);
-          dd.indent("\t");
+          dd.indent('\t');
           dd.print(`val := obj.Get(key)\n`);
           dd.print(`xpath := ${path} + "." + key\n`);
-          dd.print(checkers.get(t.valueType)!("val", "xpath"));
+          dd.print(checkers.get(t.valueType)!('val', 'xpath'));
           dd.dedent();
           dd.print(`}\n`);
           dd.dedent();
@@ -894,7 +929,7 @@ function generateCheckers(
       const solution = solveUnion(registry, t.types);
       const name = t.name ? `check${t.name}` : `check${getAnon(anon)}`;
       d.print(`\nfunc ${name}(vm *goja.Runtime, value goja.Value, path string) []error {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`var errs []error\n`);
       checkSolution(d, checkers, solution);
       d.dedent();
@@ -912,41 +947,42 @@ function generateCheckers(
         func = `check${a}`;
       }
       d.print(`\nvar ${keys} = map[string]bool{\n`);
-      d.indent("\t");
+      d.indent('\t');
       for (const fn of t.fields.keys()) d.print(`"${fn}": true,\n`);
       d.dedent();
       d.print(`}\n`);
       d.print(`\nfunc ${func}(vm *goja.Runtime, value goja.Value, path string) []error {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`var errs []error\n`);
       d.print(`obj, ok := value.(*goja.Object)\n`);
       d.print(`if !ok {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(
         `errs = append(errs,` +
-        ` fmt.Errorf("%v: is a %v, not a json object", path, value.ExportType())` +
-        `)\n`);
+          ` fmt.Errorf("%v: is a %v, not a json object", path, value.ExportType())` +
+          `)\n`,
+      );
       d.print(`return errs\n`);
       d.dedent();
       d.print(`}\n`);
       for (const [fn, ft] of t.fields) {
         d.print(`if field := obj.Get("${fn}"); field != nil {\n`);
-        d.indent("\t");
+        d.indent('\t');
         d.print(`xpath := path + ".${fn}"\n`);
-        d.print(checkers.get(ft)!("field", "xpath"));
+        d.print(checkers.get(ft)!('field', 'xpath'));
         d.dedent();
         if (t.maybes.has(fn)) {
           d.print(`}\n`);
         } else {
           d.print(`} else {\n`);
-          d.indent("\t");
+          d.indent('\t');
           d.print(`errs = append(errs, fmt.Errorf("%v: missing required field", path))\n`);
           d.dedent();
           d.print(`}\n`);
         }
       }
       d.print(`for _, key := range obj.Keys() {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`if ${keys}[key] { continue }\n`);
       d.print(`\n`);
       d.print(`errs = append(errs, fmt.Errorf("%v: contains extra keys", path))\n`);
@@ -963,9 +999,9 @@ function generateCheckers(
     // named types get a wrapper function that calls errors.Join() on the list of errors
     if (t.name) {
       d.print(`\nfunc Check${t.name}(vm *goja.Runtime, value goja.Value, path string) error {\n`);
-      d.indent("\t");
+      d.indent('\t');
       d.print(`var errs []error\n`);
-      d.print(checker("value", "path"));
+      d.print(checker('value', 'path'));
       d.print(`return errors.Join(errs...)\n`);
       d.dedent();
       d.print(`}\n`);
@@ -978,57 +1014,57 @@ function generateCheckers(
 // stores and frameworks
 
 function contextName(name: string): string {
-  return pascal(name.endsWith("Store") ? name.slice(0, -5) : name);
+  return pascal(name.endsWith('Store') ? name.slice(0, -5) : name);
 }
 
 function generateStore(d: Denter, annos: Annos, converters: Converters, store: KStore): void {
-  const iface = contextName(store.name!) + "QueryContext";
+  const iface = contextName(store.name!) + 'QueryContext';
   const impl = camel(iface);
   const byName = <T extends { name: string }>(a: T, b: T) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 
   d.print(`\ntype ${iface} interface {\n`);
-  d.indent("\t");
+  d.indent('\t');
   d.print(`QueryContext\n`);
   for (const dep of store.deps) d.print(`${contextName(dep.name!)}QueryContext\n`);
   const originalItems = [...store.originalItems].sort(byName);
   for (const si of originalItems) {
     d.print(`${pascal(si.name)}(`);
-    if (si.params.length) d.print(si.params.join(", ") + " string");
+    if (si.params.length) d.print(si.params.join(', ') + ' string');
     d.print(`) ${annos.get(si.type)}\n`);
   }
   d.dedent();
   d.print(`}\n`);
 
   d.print(`\ntype ${impl} struct {\n`);
-  d.indent("\t");
+  d.indent('\t');
   d.print(`vm  *goja.Runtime\n`);
   d.print(`ask Ask\n`);
   d.dedent();
   d.print(`}\n`);
 
   d.print(`\nfunc New${iface}(vm *goja.Runtime, ask Ask) ${iface} {\n`);
-  d.indent("\t");
+  d.indent('\t');
   d.print(`return &${impl}{vm, ask}\n`);
   d.dedent();
   d.print(`}\n`);
 
   d.print(`\nfunc (qx *${impl}) Ask(question goja.Value) goja.Value {\n`);
-  d.indent("\t");
+  d.indent('\t');
   d.print(`return qx.ask(question)\n`);
   d.dedent();
   d.print(`}\n`);
 
   for (const si of [...store.items].sort(byName)) {
     d.print(`\nfunc (qx *${impl}) ${pascal(si.name)}(`);
-    if (si.params.length) d.print(si.params.join(", ") + " string");
+    if (si.params.length) d.print(si.params.join(', ') + ' string');
     d.print(`) ${annos.get(si.type)} {\n`);
-    d.indent("\t");
+    d.indent('\t');
     d.print(`vm := qx.vm\n`);
-    d.print(`value := queryAsk(vm, qx.ask, "${si.chunks.join("%s")}"`);
+    d.print(`value := queryAsk(vm, qx.ask, "${si.chunks.join('%s')}"`);
     for (const param of si.params) d.print(`, ${param}`);
     d.print(`)\n`);
-    d.print(`out := ${converters.get(si.type)!("value")}\n`);
+    d.print(`out := ${converters.get(si.type)!('value')}\n`);
     d.print(`return out\n`);
     d.dedent();
     d.print(`}\n`);
@@ -1036,27 +1072,27 @@ function generateStore(d: Denter, annos: Annos, converters: Converters, store: K
 }
 
 function frameworkName(name: string): string {
-  return pascal(name.endsWith("Framework") ? name : name + "Framework");
+  return pascal(name.endsWith('Framework') ? name : name + 'Framework');
 }
 
 function generateFramework(d: Denter, annos: Annos, f: KFramework): void {
   const name = frameworkName(f.name!);
-  const QX = contextName(f.store.name!) + "QueryContext";
+  const QX = contextName(f.store.name!) + 'QueryContext';
   const E = annos.get(f.eventType);
   const C = annos.get(f.commandType);
 
   d.print(`\ntype ${name} = Framework[${QX}, ${E}, ${C}]\n`);
   d.print(`\nfunc New${name}(\n`);
-  d.indent("\t");
+  d.indent('\t');
   d.print(`script string,\n`);
   d.print(`storage Storage,\n`);
   d.print(`migrate string,\n`);
   d.print(`reducer string,\n`);
   d.dedent();
   d.print(`) (*${name}, error) {\n`);
-  d.indent("\t");
+  d.indent('\t');
   d.print(`return NewFramework[${QX}, ${E}, ${C}](\n`);
-  d.indent("\t");
+  d.indent('\t');
   d.print(`NewStringSource("bundle.js", script),\n`);
   d.print(`"${name}",\n`);
   d.print(`storage,\n`);
@@ -1072,22 +1108,22 @@ function generateFramework(d: Denter, annos: Annos, f: KFramework): void {
 /** entrypoint: assemble the complete generated module */
 export function generateGo(lowered: LoweredProgram, skeleton: string, pkg: string): string {
   const { registry, roots, stores, frameworks } = lowered;
-  if (!roots.length) throw new Error("no named types found to generate code for");
+  if (!roots.length) throw new Error('no named types found to generate code for');
 
   const imports = new Set<string>([
-    "crypto/rand",
-    "encoding/json",
-    "errors",
-    "fmt",
-    "iter",
-    "os",
-    "reflect",
-    "slices",
-    "strconv",
-    "strings",
-    "unsafe",
-    "github.com/dop251/goja",
-    "github.com/romshark/jscan",
+    'crypto/rand',
+    'encoding/json',
+    'errors',
+    'fmt',
+    'iter',
+    'os',
+    'reflect',
+    'slices',
+    'strconv',
+    'strings',
+    'unsafe',
+    'github.com/dop251/goja',
+    'github.com/romshark/jscan',
   ]);
   const sub = new Denter();
 
@@ -1112,16 +1148,16 @@ export function generateGo(lowered: LoweredProgram, skeleton: string, pkg: strin
   d.print(`// Code generated by @kurrent/typespec-engine-go. DO NOT EDIT.\n`);
   d.print(`\n`);
   d.print(`package ${pkg}\n`);
-  d.print("\nimport (\n");
-  d.indent("\t");
+  d.print('\nimport (\n');
+  d.indent('\t');
   const sorted = [...imports].sort();
-  for (const imprt of sorted) if (!imprt.includes(".")) d.print(`"${imprt}"\n`);
-  d.print("\n");
-  for (const imprt of sorted) if (imprt.includes(".")) d.print(`"${imprt}"\n`);
+  for (const imprt of sorted) if (!imprt.includes('.')) d.print(`"${imprt}"\n`);
+  d.print('\n');
+  for (const imprt of sorted) if (imprt.includes('.')) d.print(`"${imprt}"\n`);
   d.dedent();
-  d.print(")\n");
-  d.print("var (\n");
-  d.indent("\t");
+  d.print(')\n');
+  d.print('var (\n');
+  d.indent('\t');
   d.print('reflectTypeInt      = reflect.TypeOf(int64(0))\n');
   d.print('reflectTypeBool     = reflect.TypeOf(false)\n');
   d.print('reflectTypeMap      = reflect.TypeOf(map[string]interface{}{})\n');
@@ -1136,11 +1172,11 @@ export function generateGo(lowered: LoweredProgram, skeleton: string, pkg: strin
   d.print('// reflectTypeCtor     = reflect.TypeOf((func(ConstructorCall) *Object)(nil))\n');
   d.print('// reflectTypeError    = reflect.TypeOf((*error)(nil)).Elem()\n');
   d.dedent();
-  d.print(")\n");
-  d.print("\n");
+  d.print(')\n');
+  d.print('\n');
 
   d.print(skeleton);
   d.print(sub.getvalue());
 
-  return d.getvalue() + "\n";
+  return d.getvalue() + '\n';
 }

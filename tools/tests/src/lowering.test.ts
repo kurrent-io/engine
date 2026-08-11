@@ -4,30 +4,31 @@
  * store/framework discovery.
  */
 
-import { fileURLToPath } from "node:url";
-import { describe, it, expect } from "vitest";
-import { resolvePath, type Program } from "@typespec/compiler";
-import { createTester } from "@typespec/compiler/testing";
+import { fileURLToPath } from 'node:url';
+
 import {
-  lowerProgram,
-  LoweredProgram,
-  KType,
-  KStruct,
   KArray,
-  KObject,
-  KTuple,
-  KUnion,
-  KInt,
-  KString,
   KBool,
   KDate,
+  KInt,
   KLiteral,
-} from "@kurrent/typespec-engine";
+  KObject,
+  KString,
+  KStruct,
+  KTuple,
+  KType,
+  KUnion,
+  LoweredProgram,
+  lowerProgram,
+} from '@kurrent/typespec-engine';
+import { type Program, resolvePath } from '@typespec/compiler';
+import { createTester } from '@typespec/compiler/testing';
+import { describe, expect, it } from 'vitest';
 
-const base = fileURLToPath(new URL("..", import.meta.url));
-const Tester = createTester(resolvePath(base), { libraries: ["@kurrent/typespec-engine"] })
-  .import("@kurrent/typespec-engine")
-  .using("KurrentEngine");
+const base = fileURLToPath(new URL('..', import.meta.url));
+const Tester = createTester(resolvePath(base), { libraries: ['@kurrent/typespec-engine'] })
+  .import('@kurrent/typespec-engine')
+  .using('KurrentEngine');
 
 interface Lowered {
   program: Program;
@@ -43,12 +44,13 @@ async function lower(code: string): Promise<Lowered> {
 /** Find the named root that lowered from a declaration. */
 function root(l: LoweredProgram, name: string): KType {
   const found = l.roots.find((t) => t.name === name);
-  if (found === undefined) throw new Error(`no root named ${name} in [${l.roots.map((t) => t.name)}]`);
+  if (found === undefined)
+    throw new Error(`no root named ${name} in [${l.roots.map((t) => t.name)}]`);
   return found;
 }
 
-describe("lowerProgram — scalar and builtin mapping", () => {
-  it("maps builtin scalars to their IR primitives", async () => {
+describe('lowerProgram — scalar and builtin mapping', () => {
+  it('maps builtin scalars to their IR primitives', async () => {
     const { lowered } = await lower(`
       model Foo {
         a: int32;
@@ -57,24 +59,24 @@ describe("lowerProgram — scalar and builtin mapping", () => {
         d: utcDateTime;
       }
     `);
-    const foo = root(lowered, "Foo") as KStruct;
+    const foo = root(lowered, 'Foo') as KStruct;
     expect(foo).toBeInstanceOf(KStruct);
-    expect(foo.fields.get("a")).toBeInstanceOf(KInt);
-    expect(foo.fields.get("b")).toBeInstanceOf(KString);
-    expect(foo.fields.get("c")).toBeInstanceOf(KBool);
-    expect(foo.fields.get("d")).toBeInstanceOf(KDate);
+    expect(foo.fields.get('a')).toBeInstanceOf(KInt);
+    expect(foo.fields.get('b')).toBeInstanceOf(KString);
+    expect(foo.fields.get('c')).toBeInstanceOf(KBool);
+    expect(foo.fields.get('d')).toBeInstanceOf(KDate);
   });
 
-  it("records optional fields as maybes", async () => {
+  it('records optional fields as maybes', async () => {
     const { lowered } = await lower(`model Foo { a: int32; b?: string; }`);
-    const foo = root(lowered, "Foo") as KStruct;
-    expect(foo.always.has("a")).toBe(true);
-    expect(foo.maybes.has("b")).toBe(true);
+    const foo = root(lowered, 'Foo') as KStruct;
+    expect(foo.always.has('a')).toBe(true);
+    expect(foo.maybes.has('b')).toBe(true);
   });
 });
 
-describe("lowerProgram — collections", () => {
-  it("maps arrays, records, and tuples", async () => {
+describe('lowerProgram — collections', () => {
+  it('maps arrays, records, and tuples', async () => {
     const { lowered } = await lower(`
       model Foo {
         xs: string[];
@@ -82,59 +84,59 @@ describe("lowerProgram — collections", () => {
         pair: [string, int32];
       }
     `);
-    const foo = root(lowered, "Foo") as KStruct;
-    const xs = foo.fields.get("xs") as KArray;
+    const foo = root(lowered, 'Foo') as KStruct;
+    const xs = foo.fields.get('xs') as KArray;
     expect(xs).toBeInstanceOf(KArray);
     expect(xs.itemType).toBeInstanceOf(KString);
-    const m = foo.fields.get("m") as KObject;
+    const m = foo.fields.get('m') as KObject;
     expect(m).toBeInstanceOf(KObject);
     expect(m.valueType).toBeInstanceOf(KInt);
-    const pair = foo.fields.get("pair") as KTuple;
+    const pair = foo.fields.get('pair') as KTuple;
     expect(pair).toBeInstanceOf(KTuple);
-    expect(pair.itemTypes.map((t) => t.constructor.name)).toEqual(["KString", "KInt"]);
+    expect(pair.itemTypes.map((t) => t.constructor.name)).toEqual(['KString', 'KInt']);
   });
 });
 
-describe("lowerProgram — unions and enums", () => {
-  it("lowers a named union of literals", async () => {
+describe('lowerProgram — unions and enums', () => {
+  it('lowers a named union of literals', async () => {
     const { lowered } = await lower(`union Color { "red", "green", "blue" }`);
-    const color = root(lowered, "Color") as KUnion;
+    const color = root(lowered, 'Color') as KUnion;
     expect(color).toBeInstanceOf(KUnion);
     expect(color.types.every((t) => t instanceof KLiteral)).toBe(true);
-    expect(color.types.map((t) => (t as KLiteral).value).sort()).toEqual(["blue", "green", "red"]);
+    expect(color.types.map((t) => (t as KLiteral).value).sort()).toEqual(['blue', 'green', 'red']);
   });
 
-  it("lowers an enum to a union of its member-name literals", async () => {
+  it('lowers an enum to a union of its member-name literals', async () => {
     const { lowered } = await lower(`enum Suit { hearts, spades }`);
-    const suit = root(lowered, "Suit") as KUnion;
+    const suit = root(lowered, 'Suit') as KUnion;
     expect(suit).toBeInstanceOf(KUnion);
-    expect(suit.types.map((t) => (t as KLiteral).value).sort()).toEqual(["hearts", "spades"]);
+    expect(suit.types.map((t) => (t as KLiteral).value).sort()).toEqual(['hearts', 'spades']);
   });
 });
 
-describe("lowerProgram — interning across a program", () => {
-  it("gives repeated references to a model the same IR object", async () => {
+describe('lowerProgram — interning across a program', () => {
+  it('gives repeated references to a model the same IR object', async () => {
     const { lowered } = await lower(`
       model A { n: int32; }
       model Wrap { x: A; y: A; }
     `);
-    const a = root(lowered, "A");
-    const wrap = root(lowered, "Wrap") as KStruct;
-    expect(wrap.fields.get("x")).toBe(a);
-    expect(wrap.fields.get("y")).toBe(a);
+    const a = root(lowered, 'A');
+    const wrap = root(lowered, 'Wrap') as KStruct;
+    expect(wrap.fields.get('x')).toBe(a);
+    expect(wrap.fields.get('y')).toBe(a);
   });
 
-  it("reports two names that resolve to the same structural type", async () => {
+  it('reports two names that resolve to the same structural type', async () => {
     const { diagnostics } = await lower(`
       model A { n: int32; }
       model B { n: int32; }
     `);
-    expect(diagnostics.some((d) => d.code.endsWith("/duplicate-name"))).toBe(true);
+    expect(diagnostics.some((d) => d.code.endsWith('/duplicate-name'))).toBe(true);
   });
 });
 
-describe("lowerProgram — stores", () => {
-  it("discovers a store, its name, and its key templates", async () => {
+describe('lowerProgram — stores', () => {
+  it('discovers a store, its name, and its key templates', async () => {
     const { lowered } = await lower(`
       model Book { id: string; }
       model BookSpec { \`book.{id}\`: Book; }
@@ -142,12 +144,12 @@ describe("lowerProgram — stores", () => {
     `);
     expect(lowered.stores).toHaveLength(1);
     const store = lowered.stores[0];
-    expect(store.name).toBe("BookStore");
-    expect(store.items.map((i) => i.name)).toEqual(["book"]);
-    expect(store.items[0].tpl).toBe("book.{id}");
+    expect(store.name).toBe('BookStore');
+    expect(store.items.map((i) => i.name)).toEqual(['book']);
+    expect(store.items[0].tpl).toBe('book.{id}');
   });
 
-  it("inherits items from dependency stores", async () => {
+  it('inherits items from dependency stores', async () => {
     const { lowered } = await lower(`
       model Book { id: string; }
       model Patron { id: string; }
@@ -156,14 +158,14 @@ describe("lowerProgram — stores", () => {
       interface BookStore extends Store<BookSpec> {}
       interface BigStore extends Store<PatronSpec, [BookStore]> {}
     `);
-    const big = lowered.stores.find((s) => s.name === "BigStore")!;
-    expect(big.items.map((i) => i.name).sort()).toEqual(["book", "patron"]);
-    expect(big.originalItems.map((i) => i.name)).toEqual(["patron"]);
+    const big = lowered.stores.find((s) => s.name === 'BigStore')!;
+    expect(big.items.map((i) => i.name).sort()).toEqual(['book', 'patron']);
+    expect(big.originalItems.map((i) => i.name)).toEqual(['patron']);
   });
 });
 
-describe("lowerProgram — queries", () => {
-  it("discovers a queries interface with its ops, args, and result types", async () => {
+describe('lowerProgram — queries', () => {
+  it('discovers a queries interface with its ops, args, and result types', async () => {
     const { lowered } = await lower(`
       model PatronInfo { id: string; name: string; }
       interface AdminQueries extends Queries {
@@ -173,16 +175,16 @@ describe("lowerProgram — queries", () => {
     `);
     expect(lowered.queries).toHaveLength(1);
     const kq = lowered.queries[0];
-    expect(kq.name).toBe("AdminQueries");
-    expect(kq.queries.map((q) => q.name)).toEqual(["allPatrons", "patronsNamed"]);
+    expect(kq.name).toBe('AdminQueries');
+    expect(kq.queries.map((q) => q.name)).toEqual(['allPatrons', 'patronsNamed']);
 
     const [allPatrons, patronsNamed] = kq.queries;
     expect(allPatrons.args).toHaveLength(0);
     expect(allPatrons.result).toBeInstanceOf(KArray);
     // arg and result types intern with the rest of the program
-    expect((allPatrons.result as KArray).itemType).toBe(root(lowered, "PatronInfo"));
+    expect((allPatrons.result as KArray).itemType).toBe(root(lowered, 'PatronInfo'));
 
-    expect(patronsNamed.args.map(([name]) => name)).toEqual(["name", "limit"]);
+    expect(patronsNamed.args.map(([name]) => name)).toEqual(['name', 'limit']);
     const [[, nameType, nameOpt], [, limitType, limitOpt]] = patronsNamed.args;
     expect(nameType).toBeInstanceOf(KString);
     expect(nameOpt).toBe(false);
@@ -190,17 +192,17 @@ describe("lowerProgram — queries", () => {
     expect(limitOpt).toBe(true);
   });
 
-  it("collects multiple queries interfaces in declaration order", async () => {
+  it('collects multiple queries interfaces in declaration order', async () => {
     const { lowered } = await lower(`
       model Info { id: string; }
       interface AdminQueries extends Queries { allInfos(): Info[]; }
       interface UserQueries extends Queries { myInfo(id: string): Info; }
     `);
-    expect(lowered.queries.map((q) => q.name)).toEqual(["AdminQueries", "UserQueries"]);
-    expect(lowered.queries[1].queries[0].result).toBe(root(lowered, "Info"));
+    expect(lowered.queries.map((q) => q.name)).toEqual(['AdminQueries', 'UserQueries']);
+    expect(lowered.queries[1].queries[0].result).toBe(root(lowered, 'Info'));
   });
 
-  it("keeps queries interfaces out of stores and frameworks", async () => {
+  it('keeps queries interfaces out of stores and frameworks', async () => {
     const { lowered } = await lower(`
       model Info { id: string; }
       interface AdminQueries extends Queries { allInfos(): Info[]; }
@@ -210,8 +212,8 @@ describe("lowerProgram — queries", () => {
   });
 });
 
-describe("lowerProgram — frameworks", () => {
-  it("discovers a framework and its event, command, and store types", async () => {
+describe('lowerProgram — frameworks', () => {
+  it('discovers a framework and its event, command, and store types', async () => {
     const { lowered } = await lower(`
       model E1 { type: "e1"; }
       model E2 { type: "e2"; }
@@ -226,9 +228,9 @@ describe("lowerProgram — frameworks", () => {
     `);
     expect(lowered.frameworks).toHaveLength(1);
     const fw = lowered.frameworks[0];
-    expect(fw.name).toBe("MyFramework");
-    expect(fw.eventType.name).toBe("Events");
-    expect(fw.commandType.name).toBe("Commands");
-    expect(fw.store.name).toBe("BookStore");
+    expect(fw.name).toBe('MyFramework');
+    expect(fw.eventType.name).toBe('Events');
+    expect(fw.commandType.name).toBe('Commands');
+    expect(fw.store.name).toBe('BookStore');
   });
 });

@@ -1,9 +1,7 @@
-export {
-  RelayFramework,
-} from "./library.gen";
+export { RelayFramework } from './library.gen';
 export {
   relayMigrate,
   relayReducer,
   validateAdminCommands,
   validateUserCommands,
-} from "./reducers";
+} from './reducers';

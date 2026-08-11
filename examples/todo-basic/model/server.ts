@@ -1,1 +1,1 @@
-export { checkTodoEvents, } from "./model.gen";
+export { checkTodoEvents } from './model.gen';
