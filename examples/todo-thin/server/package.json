@@ -9,6 +9,7 @@
         "@todo-thin/model": "workspace:*",
         "@types/ws": "^8.18.1",
         "bufferutil": "^4.1.0",
+        "lmdb": "^3.5.6",
         "ws": "^8.21.2"
     }
 }

@@ -1213,7 +1213,7 @@ export class FutureContext {
 
 // Storage is the interface for creating read and write transasctions.  An implementation of Storage
 // is callback-based and should support multiple parallel gets and sets at the API level, even if
-// they must be serialized internally.  The runTxn function is used to convert the callback
+// they must be serialized internally.  The run{R,W}Txn functions are used to convert the callback
 // interface of WTxn and RTxn to the StorageGenerator protocol.
 export interface Storage {
   withWTxn<T>(fx: FutureContext, fn: (txn: WTxn) => Future<T>): Future<T>;
@@ -1231,8 +1231,6 @@ export interface WTxn {
 
 export interface RTxn {
   get(key: string, cb: (result: StorageValue) => void): void;
-  set(key: string, value: unknown, cb: (result: StorageDone) => void): void;
-  del(key: string, cb: (result: StorageDone) => void): void;
 };
 
 export type WStorageQuestion = {
@@ -1291,7 +1289,7 @@ export function *withWTxn<T>(
   fx: FutureContext, s: Storage, fn: () => WStorageGenerator<T>,
 ): Future<T> {
   return yield* s.withWTxn(fx, function*(txn){
-    return yield* runTxn(fx, txn, fn());
+    return yield* runWTxn(fx, txn, fn());
   });
 }
 
@@ -1300,13 +1298,13 @@ export function *withRTxn<T>(
   fx: FutureContext, s: Storage, fn: () => RStorageGenerator<T>,
 ): Future<T> {
   return yield* s.withRTxn(fx, function*(txn){
-    return yield* runTxn(fx, txn, fn());
+    return yield* runRTxn(fx, txn, fn());
   });
 }
 
 // run a StorageGenerator to completion, converting potentially many parallel callbacks into a
 // generator interface.
-function *runTxn<T>(
+function *runWTxn<T>(
   fx: FutureContext, txn: WTxn, g: WStorageGenerator<T>,
 ): Future<T> {
   // ignore late callbacks
@@ -1346,6 +1344,41 @@ function *runTxn<T>(
         txn.del(key, (result) => {
           if (!valid) return;  // ignore late callback
           ans.del[key] = result;
+          ready = true;
+          fx.wakeup();
+        });
+      }
+
+      // wait for a result
+      while (!ready) yield;
+    }
+  } finally {
+    valid = false;
+  }
+}
+
+// run a StorageGenerator to completion, converting potentially many parallel callbacks into a
+// generator interface.
+function *runRTxn<T>(
+  fx: FutureContext, txn: RTxn, g: RStorageGenerator<T>,
+): Future<T> {
+  // ignore late callbacks
+  let valid = true;
+  try {
+    let ans: StorageAnswer = {get: {}, set: {}, del: {}};
+    let ready = false;
+    while (true) {
+      const {value, done} = g.next(ans);
+      if (done) return value;
+
+      ans = {get: {}, set: {}, del: {}};
+      ready = false;
+
+      // start gets
+      for (const key of Object.keys(value.get ?? {})) {
+        txn.get(key, (result) => {
+          if (!valid) return;  // ignore late callback
+          ans.get[key] = result;
           ready = true;
           fx.wakeup();
         });
@@ -1592,91 +1625,93 @@ class OverlayTxn {
 
 //
 
-/* ExternalCallbackStorage implements storage entirely via callback functions. */
-export class ExternalCallbackStorage {
-  #txn: (writable: boolean, cb: (result: StorageValue) => void) => unknown;
-  #commit: (txn: unknown, cb: (result: StorageDone) => void) => void;
-  #abort: (txn: unknown, cb: () => void) => void;
-  #get: (txn: unknown, key: string, cb: (result: StorageValue) => void) => void;
-  #set: (txn: unknown, key: string, value: unknown, cb: (result: StorageDone) => void) => void;
-  #del: (txn: unknown, key: string, cb: (result: StorageDone) => void) => void;
+type MaybePromise<T> = T | Promise<T>;
 
-  constructor(
-    // txn returns an opaque value that gets passed to the other callbacks
-    txn: (writable: boolean, cb: (result: StorageValue) => void) => unknown,
-    // commit commits a transaction, or returns an error.
-    commit: (txn: unknown, cb: (result: StorageDone) => void) => void,
-    // abort aborts the transaction.  It is not allowed to return an error.
-    abort: (txn: unknown, cb: () => void) => void,
-    // get gets a value
-    get: (txn: unknown, key: string, cb: (result: StorageValue) => void) => void,
-    // set sets a value
-    set: (txn: unknown, key: string, value: unknown, cb: (result: StorageDone) => void) => void,
-    // del deletes a value
-    del: (txn: unknown, key: string, cb: (result: StorageDone) => void) => void,
-  ) {
-    this.#txn = txn;
-    this.#commit = commit;
-    this.#abort = abort;
-    this.#get = get;
-    this.#set = set;
-    this.#del = del;
+// ExternalStorageTxn is part of ExternalStorage.
+export interface ExternalStorageTxn {
+  // get gets a value
+  get(key: string): MaybePromise<unknown>;
+  // set sets a value
+  set(key: string, value: unknown): MaybePromise<void>;
+  // del deletes a value
+  del(key: string): MaybePromise<void>;
+  // commit the transaction
+  commit(): MaybePromise<void>;
+  // abort the transaction.  You do not need to call abort() directly; it will be called
+  // automatically after any of the other methods fail (including if commit() fails).
+  abort(): MaybePromise<void>;
+}
+
+
+/* ExternalStorage implements Storage with automatic conversions between native return values and
+   the generator-based reducers runtime */
+export class ExternalStorage {
+  #txnFn: (writable: boolean) => MaybePromise<ExternalStorageTxn>;
+
+  constructor(txnFn: (writable: boolean) => MaybePromise<ExternalStorageTxn>) {
+    this.#txnFn = txnFn
   }
 
   *#withTxn<T>(
     fx: FutureContext, writable: boolean, fn: (txn: WTxn) => Future<T>,
   ): Future<T> {
-    // create the transaction
-    let txnVal: unknown;
-    let txnReady = false;
-    this.#txn(writable, (result) => {
-      if ("err" in result) {
-        fx.throw(result.err);
-      } else {
-        txnVal = result.value;
-        txnReady = true;
-        fx.wakeup();
+    const toPromise = <P>(p: MaybePromise<P>) => {
+      if (p && typeof p === "object" && "then" in p && typeof p.then === "function") {
+        return p;
       }
-    });
-    while (!txnReady) yield;
+      return {
+        then(onFufilled: (result: P) => void) {
+          onFufilled(p as P);
+        }
+      };
+    }
 
+    const resolve = function*<P>(p: MaybePromise<P>): Future<P> {
+      let val: P;
+      let ready = false;
+      toPromise(p).then((t) => {
+        val = t;
+        ready = true;
+        fx.wakeup();
+      }, (e: unknown) => {
+        fx.throw(e as Error);
+      });
+      while (!ready) yield;
+      return val!;
+    }
+
+    const userTxn = yield* resolve(this.#txnFn(writable));
     const txn: WTxn = {
       get: (key: string, cb: (result: StorageValue) => void) => {
-        return this.#get(txnVal, key, cb);
+        toPromise(userTxn.get(key)).then(
+          (result) => cb({ value: result }),
+          (e: unknown) => cb({ err: e as Error }),
+        );
       },
       set: (key: string, value: unknown, cb: (result: StorageDone) => void) => {
-        return this.#set(txnVal, key, value, cb);
+        toPromise(userTxn.set(key, value)).then(
+          () => cb({ value: true }),
+          (e: unknown) => cb({ err: e as Error }),
+        );
       },
       del: (key: string, cb: (result: StorageDone) => void) => {
-        return this.#del(txnVal, key, cb);
+        toPromise(userTxn.del(key)).then(
+          () => cb({ value: true }),
+          (e: unknown) => cb({ err: e as Error }),
+        );
       }
     };
 
     let result: T;
     try {
       result = yield* fn(txn);
+      // try to commit
+      yield* resolve(userTxn.commit());
     } catch (e: unknown) {
       // abort and re-throw error
-      let abortReady = false;
-      this.#abort(txnVal, () => {
-        abortReady = true;
-        fx.wakeup();
-      })
-      while(!abortReady) yield;
+      yield* resolve(userTxn.abort());
       throw e;
     }
-
-    // try to commit
-    let commitReady = false;
-    this.#commit(txnVal, (result) => {
-      if ("err" in result) {
-        fx.throw(result.err);
-      } else {
-        commitReady = true;
-        fx.wakeup();
-      }
-    });
-    while (!commitReady) yield;
 
     return result;
   }
@@ -2245,6 +2280,70 @@ export class QueryGraph<QX> {
   }
 }
 
+class RemoteQuery<T> {
+  latest: T | undefined = undefined;
+  closed: boolean = false;
+  #subs: ((val: T) => void)[] = [];
+
+  #onClose: () => void;
+  #closed: boolean = false;
+
+  // RemoteQuery is passed a subcription factory.  The factory receives an onResults hook and
+  // returns a closer function.  This dance avoids hardcoding things like "every subscription gets
+  // a unique subId" since that is a wire protocol detail, not an API detail.
+  constructor(
+    subscriptionFactory: (onResult: (result: T) => void) => () => void,
+  ) {
+    this.#onClose = subscriptionFactory((result: T) => this.#onResult(result));
+  }
+
+  #onResult(result: T): void {
+    if (this.closed) return;
+    for (const sub of this.#subs) {
+      sub(result!);
+    }
+    this.latest = result;
+  }
+
+  // part of public api
+  subscribe(callback: (val: T) => void): () => void {
+    this.#subs.push(callback);
+    return () => {
+      this.#subs = this.#subs.filter((x) => x !== callback);
+    };
+  }
+
+  close(): void {
+    if(this.#closed) return;
+    this.#onClose();
+    this.closed = true;
+  }
+}
+
+// QueriesIO is implemented by the user and passed into the RemoteQueries subclass.  Only the user
+// knows the transport over which query data should flow.
+export interface QueriesIO {
+  // createQuery takes, query id, args, and an onResults hook, returning a closer function
+  createQuery(raw: any[], onResult: (result: any) => void): () => void;
+}
+
+// RemoteQueries is the base class behind the generated, strongly-typed remote query interfaces.
+export class RemoteQueries {
+  #io: QueriesIO;
+
+  constructor(io: QueriesIO) {
+    this.#io = io;
+  }
+
+  newQuery<T>(raw: any[], decoder: (result: any) => T): Query<T> {
+    return new RemoteQuery<T>(
+      (onResult: (result: T) => void) => {
+        return this.#io.createQuery(raw, (result: any) => onResult(decoder(result)));
+      },
+    );
+  }
+}
+
 // frameworks /////////////////////////////////////////////////////////////////
 
 // Event wraps a proto type T with a client id.  An Event may have originated from KurrentDB, or
@@ -2302,183 +2401,6 @@ function matchSent<C>(tpl: any, cmd: C): boolean {
 
   return Object.entries(tpl).every(([k, v]) => matchSent(v, (cmd as Record<string, any>)[k]));
 }
-
-////////////
-// generate:
-// - export class RemoteAdminQueries extends RemoteQueries
-// - function checkAdminQueries()
-// - function decodeAdminQueries()
-// - type AdminQuery = ["allPatrons", X, Y] | ...
-// - type RawAdminQuery = ["allQueries", any, any] | ...
-// - decoder for all possible return types I suppose?
-//    - how do I know which return type I'm dealing with at any point in time?
-// - query function bodies:
-//
-//     export interface AdminQueryDefs {
-//       allPatrons(qx: QX, x: X, y: Y): QueryGenerator<AdminPatronInfo[]>;
-//       allEditions(qx: QX): QueryGenerator<AdminEditionInfo[]>;
-//     }
-//
-// - query providers:
-//
-//     export interface AdminQueries {
-//       allPatrons(x: X, y: Y): Query<AdminPatronInfo[]>;
-//       allEditions(x: X, y: Y): Query<AdminPatronInfo[]>;
-//     }
-//
-// - use local Framework to host queries based on defs:
-//
-//     function LocalAdminQueries<QX>(
-//       // use structrual typing to match Framework<QX, *>
-//       fw: { newQuery<T>(fn: QueryFunction<QX, T>): Query<T> },
-//       defs: AdminQueryDefs<QX>,
-//     ): AdminQueries {
-//       return {
-//         allPatrons(x: X, y: Y): Query<AdminPatronInfo[]> {
-//           return fw.newQuery((qx: QX) => defs.allPatrons(qx, x, y));
-//         },
-//         allEditions(x: X, y: Y): Query<AdminEditionInfo[]> {
-//           return fw.newQuery((qx: QX) => defs.allPatrons(qx, x, y));
-//         },
-//       };
-//     }
-//
-// - use remote query server for queries:
-//
-//     export class RemoteAdminQueries extends RemoteQueries {
-//       allPatrons(x: X, y: Y): Query<AdminPatronInfo[]> {
-//         return this.#newQuery(
-//           [allPatronsQueryId, encodePatron(x), encodePatron(y)],
-//           decodeAdminPatronInfoList,
-//         );
-//       }
-//
-//       allEditions(): Query<AdminEditionInfo[]> {
-//         return this.#newQuery(allEditionsQueryId, [], decodeAdminPatronInfoList);
-//       }
-//     }
-
-//////////////////////////////////////////////////////////////
-// skeleton code to keep:
-
-class RemoteQuery<T> {
-  latest: T | undefined = undefined;
-  subscribe: (callback: (val: T) => void): () => void;
-
-  #onClose: () => void;
-  #closed: boolean = false;
-
-  // RemoteQuery is passed a subcription factory.  The factory receives an onResults hook and
-  // returns a closer function.  This dance avoids hardcoding things like "every subscription gets
-  // a unique subId" since that is a wire protocol detail, not an API detail.
-  constructor(
-    subscriptionFactory: (onResult: (result: T) => void) => () => void,
-  ) {
-    this.#onClose = subscriptionFactory((result: T) => this.#onResult(result)));
-  }
-
-  #onResult(result: T): void {
-    ...
-  }
-
-  close(): void {
-    if(this.#closed) return;
-    this.#onClose();
-    this.#closed = true;
-  }
-}
-
-// QueriesIO is implemented by the user and passed into the RemoteQueries subclass.  Only the user
-// knows the transport over which query data should flow.
-interface QueriesIO {
-  // createQuery takes, query id, args, and an onResults hook, returning a closer function
-  createQuery(raw: any[], onResult: (result: any) => void): () => void;
-}
-
-// RemoteQueries is the base class behind the generated, strongly-typed remote query interfaces.
-export class RemoteQueries {
-  #io: QueriesIO;
-
-  constructor(io: QueriesIO) {
-    this.#io = io;
-  }
-
-  #newQuery<T>(raw: any[], decoder: (result: any) => T): Query<T> {
-    return new RemoteQuery<T>(
-      (onResult: (result: T) => void) => {
-        return this.#io.createQuery(raw, (result: any) => onResults(decoder(result)));
-      },
-    );
-  }
-}
-
-//////////////////////////////////////////////////////////////
-
-//////////////
-// How do we write a sanitizing query relay (in the cloudflare connection worker)?
-// - It needs to receive just the query args, as sent over the wire
-// - It doesn't need a query body
-// - It does need strong typing
-
-// your code receives data off the wire
-// your code can checkAdminQuery() (no type change)
-// your code can decodeAdminQuery() (returns a union of all query types)
-// your code can forward that or encode it.
-// we need to generate an admin query id union too, if people want to skip the encoding step but
-//   still want the strongly-typed switch case.
-
-export class ConnectionWorkerQueryServer {
-  #user: Uuid;
-  #remote: RemoteAdminQueries;
-  #root: string | null = null;
-  #rootAvailable: string | null = null;
-  #queries: [(root: string) => void] = [];
-
-  constructor(user, remote) {
-    this.#user = user;
-    this.#remote = remote;
-  }
-
-  // rerun all queries
-  setRoot(root: string) {
-    self.#rootAvailable = root;
-    if(!self.#isRunning) {
-      setTimeout(() => this.#run());
-    }
-  }
-
-  async #run() {
-    if (this.#rootAvailable != this.#root) {
-    }
-  }
-
-  newQuery(raw: any) => void {
-    const errors = checkAdminQuery(raw);
-    if (errors.length > 0) {
-      // XXX fail
-    }
-    const decoded = decodeAdminQuery(raw);
-    switch (decoded[0]) {
-    case adminQueryAllPatronsQid:
-      const [, x, y] = decoded;
-      ...
-      break;
-    case adminQueryAllEditionsQid:
-      break;
-    }
-  }
-
-  async onAllPatrons(x: X, y: Y): void {
-    const result = this.#remote.allPatrons(user, x, y);
-    const result = await fetch(this.#remote + "/query?" + new URLSearchParams({
-      r: this.#root,
-      u: this.#user,
-      q: JSON.stringify(encodeProto([x, y])),
-    }));
-  }
-}
-
-//////////////////////
 
 // "R"educerConte"x"t
 // "Q"ueryConte"x"t
@@ -2557,11 +2479,6 @@ export class Framework<QX, RX, E, C> {
   }
 
   //// public api ////
-
-  // register a remote client with this Framework, returns a close function
-  addRemoteClient(client: RemoteClient): () => void {
-
-  }
 
   // request info needed to resume a connection: last committed checkpoint and unsent commands
   reconnect(

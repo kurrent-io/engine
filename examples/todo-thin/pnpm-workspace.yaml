@@ -6,4 +6,6 @@ packages:
 onlyBuiltDependencies:
   - bufferutil
   - esbuild
+  - lmdb
+  - msgpackr-extract
   - protobufjs

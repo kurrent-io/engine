@@ -6,12 +6,34 @@ import {
 } from "@kurrent/kurrentdb-client";
 import type {
   AllStreamResolvedEvent,
-  AllStreamSubscription,
 } from "@kurrent/kurrentdb-client";
 import { WebSocket, WebSocketServer } from "ws";
 import type { MessageEvent } from "ws";
 
-import { checkTodoEvents } from "@todo-thin/model/server";
+import { open } from "lmdb";
+import type { Transaction } from "lmdb";
+
+import {
+  checkTodoEvents,
+  LocalTodoQueries,
+  TodoFramework,
+  dispatchTodoQuery,
+  checkTodoQuery,
+  DecodeTodoQuery,
+  ExternalStorage,
+  migrateTodos,
+  reduceTodos,
+} from "@todo-thin/model/server";
+import type {
+  TodoQueryDefs,
+  TodoQX,
+  QueryGenerator,
+  ListViewData,
+  TodoQuery,
+  Query,
+  ServerMessage,
+  ClientMessage,
+} from "@todo-thin/model/server";
 
 // assume all events go into one stream
 const TODO_STREAM = "todo";
@@ -21,8 +43,36 @@ const EVENT_TYPE = "TodoEvents";
 const LISTEN_PORT = 3001;
 const KURRENT_CONNECTION_STRING = "kurrentdb://admin:changeit@localhost:2113?tls=false";
 
-function handleWebsocketConnection(client: KurrentDBClient, socket: WebSocket) {
-  let subscription: AllStreamSubscription;
+class ServerQueryDefs implements TodoQueryDefs<TodoQX> {
+  *allLists(qx: TodoQX): QueryGenerator<ListViewData[]> {
+    const ids = (yield* qx.get.all_lists()) ?? [];
+    const out: ListViewData[] = [];
+    for (const id of ids) {
+      const list = yield* qx.get.list(id);
+      if (list.archived) continue;
+      const items = [];
+      for (const itemId of list.items) {
+        const item = yield* qx.get.item(itemId);
+        if (item.archived) continue;
+        items.push({ id: item.id, text: item.text, done: item.done });
+      }
+      out.push({ id: list.id, name: list.name, items });
+    }
+    return out;
+  }
+}
+
+function handleWebsocketConnection(
+  client: KurrentDBClient,
+  fw: TodoFramework,
+  socket: WebSocket,
+) {
+  const openQueries: Record<string, { decoded: TodoQuery, query: undefined | Query<any> }> = {};
+
+  /* normally you'd probably instantiate a ServerQueryDefs with connection info, like
+     userid or what groups they're in, but this demo doesn't have users */
+  const defs = new ServerQueryDefs(/* userid or other connection-specific info */);
+  const queries = LocalTodoQueries(fw, defs);
 
   // one close function to close everything and log the reason
   let dead = false;
@@ -31,7 +81,9 @@ function handleWebsocketConnection(client: KurrentDBClient, socket: WebSocket) {
     dead = true;
     console.log(`on ${event}:`, ...args);
     socket.close();
-    subscription?.unsubscribe();
+    for (const {query} of Object.values(openQueries)) {
+      query?.close();
+    }
   };
 
   // a helper to wrap non-error event handlers with try/catch
@@ -46,104 +98,263 @@ function handleWebsocketConnection(client: KurrentDBClient, socket: WebSocket) {
 
   socket.on("error", (e) => closeConnection("error", `websocket died: ${e}`));
 
-  // if client can't keep up with kurrent, pause subscriptions to not fill up memory
+  // if client can't keep up with query results, pause subscriptions to not fill up memory
   let nQueued = 0;
   const queueLimit = 64;
   let paused = false;
-  const socketSend = (data: string, options?: any) => catchErrors("socketSend", () => {
+  let pausedAcks = 0;
+  const socketSend = (data: ServerMessage, options?: any) => catchErrors("socketSend", () => {
     if (++nQueued > queueLimit) {
       if (!paused) {
-        subscription.pause();
+        // shut down queries until the client catches up
+        for (const [qid, { query }] of Object.entries(openQueries)) {
+          query?.close();
+          openQueries[qid].query = undefined;
+        }
         paused = true;
       }
     }
-    socket.send(data, options, () => {
+    socket.send(JSON.stringify(data), options, () => {
       if (--nQueued < queueLimit / 2) {
         if (paused) {
-          subscription.resume();
+          if (pausedAcks > 0) {
+            socketSend({acks: pausedAcks});
+            pausedAcks = 0;
+          }
+          // restart queries now that the client caught up
+          for (const [qid, { decoded }] of Object.entries(openQueries)) {
+            const query = dispatchTodoQuery(queries, decoded);
+            query.subscribe((result) => {
+              socketSend({ queryResults: { [qid]: result } });
+            });
+            openQueries[qid].query = query;
+          }
           paused = false;
         }
       }
     });
   });
 
-  // the first received message is a handshake which sets everything up
-  socket.once("message", (ev: MessageEvent) => catchErrors("message", () => {
-    const msg = JSON.parse(ev as any);
-    if (typeof msg !== "object") {
-      closeConnection("message", "bad handshake");
+  // there isn't really a handshake message in this protocol, since this demo has no user system
+  socket.on("message", (ev: MessageEvent) => catchErrors("message", () => {
+    const msg: ClientMessage = JSON.parse(ev as any);
+    if (!msg || typeof msg !== "object") {
+      closeConnection("message", "bad message");
       return;
     }
+    for (const header of Object.keys(msg)) {
+      switch (header) {
+        case "commands": {
+          const value = msg.commands!;
+          for (const cmd of value) {
+            // validate command wrapper
+            if (!cmd || typeof cmd !== "object" || typeof cmd.id != "string") {
+              closeConnection("message", "bad command wrapper");
+              return;
+            }
 
-    // handshake is complete, install the command handler
-    socket.on("message", (ev: MessageEvent) => catchErrors("message", () => {
-      const msg = JSON.parse(ev as any);
+            // validate command body
+            const errs = checkTodoEvents(cmd.data)
+            if (errs.length > 0) {
+              closeConnection("message", `invalid command: ${errs.join(", ")}`);
+              return;
+            }
 
-      // validate command wrapper
-      if (typeof msg !== "object" || typeof msg.id != "string") {
-        closeConnection("message", "bad command");
-        return;
+            // append to event stream
+            const event = jsonEvent({
+              type: EVENT_TYPE,
+              id: cmd.id,
+              data: cmd.data,
+            });
+            client.appendToStream(TODO_STREAM, [event]).then(() => {
+              if (!paused) {
+                // send ack now
+                socketSend({ acks: 1 });
+              } else {
+                // send ack later
+                pausedAcks++;
+              }
+            }).catch((e: unknown) => {
+              closeConnection("appendingToStream", e);
+            });
+          }
+        } break;
+
+        case "subscribeQueries": {
+          const value = msg.subscribeQueries!;
+          for (const [qid, raw] of Object.entries(value)) {
+            // validate query
+            const errs = checkTodoQuery(raw);
+            if (errs.length > 0) {
+              closeConnection("message", `invalid query: ${errs.join(", ")}`);
+              return;
+            }
+            const decoded = DecodeTodoQuery(raw);
+            let query: Query<any> | undefined = undefined;
+            if (!paused) {
+              query = dispatchTodoQuery(queries, decoded);
+              // make sure not to leak queries
+              openQueries[qid]?.query?.close();
+              query.subscribe((result) => {
+                socketSend({ queryResults: { [qid]: result } });
+              });
+            }
+            openQueries[qid] = { decoded, query };
+          }
+        } break;
+
+        case "closeQueries": {
+          const value = msg.closeQueries!;
+          for (const [qid] of value) {
+            openQueries[qid]?.query?.close();
+            delete openQueries[qid];
+          }
+        } break;
+
+        default:
+          closeConnection("message", "bad message");
+          return;
       }
-
-      // validate command body
-      const errs = checkTodoEvents(msg.data)
-      if (errs.length > 0) {
-        closeConnection("message", `invalid command: ${errs.join(", ")}`);
-        return;
-      }
-
-      // append to event stream
-      const event = jsonEvent({
-        type: EVENT_TYPE,
-        id: msg.id,
-        data: msg.data,
-      });
-      client.appendToStream(TODO_STREAM, [event]);
-    }));
-
-    // configure our subscription
-    const since = msg.since;
-    subscription = client.subscribeToAll({
-      fromPosition: since ? { commit: since, prepare: since } : START,
-      resolveLinkTos: true,
-      filter: {
-        filterOn: STREAM_NAME,
-        prefixes: ["todo"],
-        checkpointInterval: 1000,
-      },
-    });
-
-    subscription.on("error", (e) => closeConnection("sub error", "subscription died:", e))
-
-    subscription.on("end", () => closeConnection("sub end", "unexpected subscription EOF"));
-
-    subscription.once("caughtUp", () => catchErrors("sub caughtUp", () => {
-      socketSend("caughtup");
-    }));
-
-    subscription.on("data", (ev: AllStreamResolvedEvent) => catchErrors("sub data", () => {
-      // de-dupe: KurrentDB redelivers the event at `since`
-      const position = Number(ev.commitPosition);
-      if (position === since) return;
-      socketSend(JSON.stringify({
-        position: position,
-        id: ev.event!.id,
-        data: ev.event!.data,
-      }));
-    }));
+    }
   }));
+}
+
+
+function lmdbStorage(): ExternalStorage {
+  let db = open({path: ".db"});
+
+  return new ExternalStorage((writable) => {
+    // node lmdb library has assymetric read/write API, presumably because lmdb only allows
+    // one write txn at a time.
+    let commit: () => void;
+    let abort: () => void;
+    let getOpts: {} | { transaction: Transaction} = {};
+    if (writable) {
+      // open the write txn by returning a promise that we resolve or reject at a later time
+      let resolve: () => void;
+      let reject: () => void;
+      const promise = new Promise<void>((rs, rj) => {
+        resolve = rs;
+        reject = rj;
+      });
+      const lmdbTxn = db.transaction(() => promise);
+      commit = () => {
+        resolve();
+        return lmdbTxn;
+      };
+      abort = () => {
+        reject();
+        return lmdbTxn;
+      };
+    } else {
+      // open an explicit read transaction
+      const transaction = db.useReadTransaction();
+      getOpts = { transaction };
+      commit = () => {
+        transaction.done()
+      };
+      abort = () => {
+        transaction.done();
+      };
+    }
+
+    // combine read/write-specific commit and abort with generic get/set/del to form a full txn
+    return {
+      commit,
+      abort,
+      get(key: string) {
+        return db.get(key, getOpts);
+      },
+      set(key: string, value: any) {
+        db.put(key, value);
+      },
+      del(key: string) {
+        db.remove(key);
+      },
+    };
+  });
+}
+
+// returns a Promise that is fulfilled after the first catchup
+function configureSubscription(client: KurrentDBClient, fw: TodoFramework): Promise<void> {
+  let resolve: () => void;
+  const promise = new Promise<void>((rs) => resolve = rs);
+  let caughtUp = false;
+
+  const connect = () => {
+    // ask fw to load our subscription starting position (based on lmdb)
+    fw.reconnect(({checkpoint: ckpt}) => {
+      const start = ckpt ? { commit: BigInt(ckpt), prepare: BigInt(ckpt) } : START;
+      const subscription = client.subscribeToAll({
+        fromPosition: start,
+        resolveLinkTos: true,
+        filter: {
+          filterOn: STREAM_NAME,
+          prefixes: ["todo"],
+          checkpointInterval: 1000,
+        },
+      })
+      subscription.on("error", (e) => {
+        // try again after error
+        console.error("failure in subscription (trying again in 1s):", e);
+        setTimeout(connect, 1000);
+      });
+      subscription.on("end", () => {
+        // this should never happen; don't bother recovering
+        process.stderr.write("unexpected end-of-stream", process.exit(1));
+      });
+
+      if (!caughtUp) {
+        subscription.once("caughtUp", () => {
+          caughtUp = true;
+          fw.caughtUp();
+          resolve();
+        });
+      }
+
+      subscription.on("data", (ev: AllStreamResolvedEvent) => {
+        // de-dupe: KurrentDB redelivers the event at `since`
+        const position = Number(ev.commitPosition);
+        if (position === ckpt) return;
+        fw.recvEvents([{
+          position: position,
+          id: ev.event!.id,
+          data: ev.event!.data,
+        }]);
+      });
+    });
+  };
+
+  connect();
+
+  return promise;
 }
 
 function main() {
   // assume non-tls, connecting to localhost, with default creds
   const client = KurrentDBClient.connectionString`${KURRENT_CONNECTION_STRING}`;
 
-  // start a websocket server
-  const server = new WebSocketServer({ port: LISTEN_PORT });
+  // create a single TodoFramework, with LMDB-based storage.
+  const fw = new TodoFramework(lmdbStorage(), {
+    migrate: migrateTodos,
+    reducer: reduceTodos,
+  });
 
-  server.on('connection', (socket) => handleWebsocketConnection(client, socket));
+  // subscribe once to $all stream, feeding all events to fw
+  const catchup = configureSubscription(client, fw);
 
-  console.log(`todo-thin relay is listening on ${LISTEN_PORT}`);
+  // wait for first catchup before serving to clients
+  console.log("catching up...");
+  catchup.then(() => {
+    console.log("done catching up");
+
+    // start a websocket server
+    const server = new WebSocketServer({ port: LISTEN_PORT });
+
+    server.on('connection', (socket) => handleWebsocketConnection(client, fw, socket));
+
+    console.log(`todo-thin server is listening on ${LISTEN_PORT}`);
+  });
 }
 
 main();

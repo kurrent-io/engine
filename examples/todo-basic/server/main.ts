@@ -70,7 +70,7 @@ function handleWebsocketConnection(client: KurrentDBClient, socket: WebSocket) {
   // the first received message is a handshake which sets everything up
   socket.once("message", (ev: MessageEvent) => catchErrors("message", () => {
     const msg = JSON.parse(ev as any);
-    if (typeof msg !== "object") {
+    if (!msg || typeof msg !== "object") {
       closeConnection("message", "bad handshake");
       return;
     }
@@ -80,7 +80,7 @@ function handleWebsocketConnection(client: KurrentDBClient, socket: WebSocket) {
       const msg = JSON.parse(ev as any);
 
       // validate command wrapper
-      if (typeof msg !== "object" || typeof msg.id != "string") {
+      if (!msg || typeof msg !== "object" || typeof msg.id != "string") {
         closeConnection("message", "bad command");
         return;
       }

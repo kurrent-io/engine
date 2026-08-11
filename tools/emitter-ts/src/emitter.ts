@@ -973,9 +973,10 @@ function queryWireType(registry: KTypeRegistry, kq: KQueries): KType {
 
 /**
  * Generate the typed query layer for one Queries interface: the wire id constants, the defs
- * interface an author implements, the provider interface call sites consume, and the local and
+ * interface an author implements, the provider interface call sites consume, the local and
  * remote provider constructions (both of which produce the provider interface, so a call site
- * chooses execution venue by choosing a provider instance).
+ * chooses execution venue by choosing a provider instance), and the dispatcher a serving side
+ * uses to route a decoded wire message into a provider.
  */
 function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueries): void {
   const name = kq.name!;
@@ -1053,6 +1054,23 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
     d.print(`  return this.newQuery([${raw.join(", ")}], ${decodeFn});\n`);
     d.print("}\n");
   }
+  d.dedent();
+  d.print("}\n");
+
+  // dispatcher: decoded wire message → provider call.  Query<any> because the wire message is a
+  // union over queries with different result types; the caller is transport code.
+  d.print(`\nexport function dispatch${stem}Query(queries: ${name}, query: ${stem}Query): Query<any> {\n`);
+  d.indent("  ");
+  d.print("switch (query[0]) {\n");
+  for (const q of kq.queries) {
+    // optional args are nullable on the wire; the provider takes them as absent
+    const args = q.args.map(([, , opt], i) => `query[${i + 1}]${opt ? " ?? undefined" : ""}`);
+    d.print(`case ${idsName}.${q.name}:\n`);
+    d.print(`  return queries.${q.name}(${args.join(", ")});\n`);
+  }
+  d.print("default:\n");
+  d.print("  throw new Error(`unexpected query ID: ${query[0]}`);\n");
+  d.print("}\n");
   d.dedent();
   d.print("}\n");
 }

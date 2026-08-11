@@ -86,3 +86,23 @@ union TodoEvents {
 }
 
 interface TodoFramework extends Framework<TodoEvents, TodoEvents, TodoStore> {}
+
+/////////////////
+// Query Layer //
+/////////////////
+
+model ItemViewData {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+model ListViewData {
+  id: string;
+  name: string;
+  items: ItemViewData[];
+}
+
+interface TodoQueries extends Queries {
+  allLists(): ListViewData[];
+}

@@ -1,37 +1,75 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  TodoFramework,
-  migrateTodos,
-  reduceTodos,
-  InMemStorage,
+  TodoEvents,
+  EncodeProto,
+  RemoteTodoQueries,
+  TodoQueries,
+  ClientMessage,
+  ServerMessage,
 } from '@todo-thin/model/ui';
+
+import { generateUuid } from './util';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
+// Our server supports commands and queries.
+interface Server {
+  sendCommand(command: TodoEvents): void;
+  queries: TodoQueries;
+}
+
+// ok, so the Framework instance is on the server, and this name doesn't make perfect sense, but
+// we'll still call this "useFramework" for consistency with the thin-basic example.
 export function useFramework(
   serverUrl: string,
-): [TodoFramework, ConnectionState] {
+): [Server, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
-  const wsRef = useRef<WebSocket | null>(null);
 
-  // create a framework instance once, for the lifetime of this hook
-  const fw = useMemo<TodoFramework>(() => {
-    const onCommands = (commands: any[]) => {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      for (const cmd of commands) {
-        ws.send(JSON.stringify(cmd));
+  const mem = useRef<{
+    ws: WebSocket | null,
+    outbox: any[],
+    activeQueries: Record<string, {raw: any, onResult: (result: any) => void}>,
+  }>({
+      ws: null,
+      outbox: [],
+      activeQueries: {},
+  });
+
+  const server = useMemo(() => {
+    const wsMaybeSend = (msg: ClientMessage) => {
+      if (mem.current.ws) {
+        mem.current.ws.send(JSON.stringify(msg));
       }
-    };
-    return new TodoFramework(
-      new InMemStorage(),
-      {
-        migrate: migrateTodos,
-        reducer: reduceTodos,
-        onCommands,
+    }
+
+    // Track active queries.  Active queries get re-opened for each connection.
+    let queryId: number = 1;
+    const queriesIO = {
+      createQuery(raw: any[], onResult: (result: any) => void): () => void {
+        const qid = `${queryId++}`;
+        mem.current.activeQueries[qid] = {raw, onResult};
+        wsMaybeSend({"subscribeQueries": {[qid]: raw}});
+        const onClose = () => {
+          delete mem.current.activeQueries[qid];
+          wsMaybeSend({"closeQueries": [qid]});
+        }
+        return onClose;
       },
-    );
-  }, []);
+    };
+
+    const sendCommand = (command: TodoEvents) => {
+      const raw = {
+        id: generateUuid(),
+        data: EncodeProto(command),
+      };
+      mem.current.outbox.push(raw);
+      wsMaybeSend({commands: [raw]});
+    };
+
+    const queries = new RemoteTodoQueries(queriesIO)
+
+    return { sendCommand, queries };
+  }, [mem]);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,49 +80,64 @@ export function useFramework(
       if (cancelled) return;
       setConnState('connecting');
 
-      // ask the framework where we left off
-      fw.reconnect((result) => {
+      const ws = new WebSocket(serverUrl);
+      ws.onopen = () => {
+        if (cancelled) {
+          ws.close();
+          return;
+        }
+        backoff = 1000;
+        mem.current.ws = ws;
+        setConnState('connected');
+
+        const msg: ClientMessage = {};
+
+        // re-submit our active queries
+        if (Object.keys(mem.current.activeQueries).length > 0) {
+          const queries: Record<string, any> = {};
+          for (const [qid, {raw}] of Object.entries(mem.current.activeQueries)) {
+            queries[qid] = raw;
+          }
+          msg.subscribeQueries = queries;
+        }
+
+        // re-submit our unack'd commands
+        if (mem.current.outbox.length > 0) {
+          msg.commands = mem.current.outbox;
+        }
+
+        if (msg.subscribeQueries || msg.commands) {
+          ws.send(JSON.stringify(msg));
+        }
+      };
+
+      ws.onmessage = (ev: MessageEvent<any>) => {
+        const msg: ServerMessage = JSON.parse(ev.data);
+        // handle query results
+        if (msg.queryResults) {
+          for (const [qid, result] of Object.entries(msg.queryResults)) {
+            mem.current.activeQueries[qid]?.onResult(result);
+          }
+        }
+
+        // handle command acks
+        if (msg.acks) {
+          // acks are ordered; just shift N times
+          new Array(msg.acks).map(() => mem.current.outbox.shift());
+        }
+      };
+
+      ws.onclose = () => {
         if (cancelled) return;
+        setConnState('disconnected');
+        mem.current.ws = null;
+        reconnectTimer = setTimeout(connect, backoff);
+        backoff = Math.min(backoff * 2, 60000);
+      };
 
-        const ws = new WebSocket(serverUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-          if (cancelled) { ws.close(); return; }
-          backoff = 1000;
-          // handshake: identify where to resume
-          ws.send(JSON.stringify({
-            since: result.checkpoint ?? null,
-          }));
-          setConnState('connected');
-          // resend any commands that were persisted but which haven't round-tripped
-          for (const cmd of result.commands) {
-            ws.send(JSON.stringify(cmd));
-          }
-        };
-
-        ws.onmessage = (msg) => {
-          console.log("recv:", msg.data);
-          if (msg.data === "caughtup") {
-            fw.caughtUp();
-          } else {
-            const event = JSON.parse(msg.data);
-            fw.recvEvents([event]);
-          }
-        };
-
-        ws.onclose = () => {
-          if (cancelled) return;
-          setConnState('disconnected');
-          wsRef.current = null;
-          reconnectTimer = setTimeout(connect, backoff);
-          backoff = Math.min(backoff * 2, 60000);
-        };
-
-        ws.onerror = () => {
-          // onclose will fire after onerror
-        };
-      });
+      ws.onerror = () => {
+        // onclose will fire after onerror
+      };
     }
 
     connect();
@@ -92,12 +145,12 @@ export function useFramework(
     return () => {
       cancelled = true;
       clearTimeout(reconnectTimer);
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+      if (mem.current.ws) {
+        mem.current.ws.close();
+        mem.current.ws = null;
       }
     };
-  }, [fw, serverUrl]);
+  }, [serverUrl, mem]);
 
-  return [fw, connState];
+  return [server, connState];
 }

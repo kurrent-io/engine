@@ -1,11 +1,9 @@
-import { useCallback } from 'react';
 import { Card, Flex, Spin, Tag, Typography } from 'antd';
 
-import { TodoQX, QueryGenerator } from '@todo-thin/model/ui';
 import { useQuery } from './useQuery';
 import { useFramework } from './useFramework';
 import { generateUuid } from './util';
-import ListView, { InlineAdd, ListData } from './ListView';
+import ListView, { InlineAdd } from './ListView';
 
 const { Text } = Typography;
 
@@ -16,25 +14,8 @@ export default function Window({
   name: string;
   serverUrl: string;
 }) {
-  const [fw, connState] = useFramework(serverUrl);
-
-  const listsLookup = useCallback(function* (qx: TodoQX): QueryGenerator<ListData[]> {
-    const ids = (yield* qx.get.all_lists()) ?? [];
-    const out: ListData[] = [];
-    for (const id of ids) {
-      const list = yield* qx.get.list(id);
-      if (list.archived) continue;
-      const items = [];
-      for (const itemId of list.items) {
-        const item = yield* qx.get.item(itemId);
-        if (item.archived) continue;
-        items.push({ id: item.id, text: item.text, done: item.done });
-      }
-      out.push({ id: list.id, name: list.name, items });
-    }
-    return out;
-  }, []);
-  const lists = useQuery(fw, listsLookup);
+  const [server, connState] = useFramework(serverUrl);
+  const lists = useQuery(server.queries, "allLists");
 
   const stateColor = {
     connecting: 'orange',
@@ -43,35 +24,35 @@ export default function Window({
   }[connState];
 
   function addList(listName: string) {
-    fw.sendCommands([
+    server.sendCommand(
       { type: 'new-list', id: generateUuid(), name: listName },
-    ]);
+    );
   }
 
   function renameList(id: string, listName: string) {
-    fw.sendCommands([{ type: 'rename-list', id, name: listName }]);
+    server.sendCommand({ type: 'rename-list', id, name: listName });
   }
 
   function archiveList(id: string) {
-    fw.sendCommands([{ type: 'archive-list', id }]);
+    server.sendCommand({ type: 'archive-list', id });
   }
 
   function addItem(listId: string, itemText: string) {
-    fw.sendCommands([
+    server.sendCommand(
       { type: 'new-item', id: generateUuid(), list: listId, text: itemText },
-    ]);
+    );
   }
 
   function toggleItem(id: string, done: boolean) {
-    fw.sendCommands([{ type: 'mark-item', id, done }]);
+    server.sendCommand({ type: 'mark-item', id, done });
   }
 
   function editItem(id: string, text: string) {
-    fw.sendCommands([{ type: 'edit-item', id, text }]);
+    server.sendCommand({ type: 'edit-item', id, text });
   }
 
   function archiveItem(id: string) {
-    fw.sendCommands([{ type: 'archive-item', id }]);
+    server.sendCommand({ type: 'archive-item', id });
   }
 
   return (

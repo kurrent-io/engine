@@ -237,6 +237,48 @@ describe("local provider", () => {
   });
 });
 
+describe("dispatcher", () => {
+  function fakeQueries() {
+    const calls: any[][] = [];
+    return {
+      calls,
+      allPatrons: (...args: any[]) => { calls.push(["allPatrons", ...args]); return "q-all"; },
+      patronsNamed: (...args: any[]) => { calls.push(["patronsNamed", ...args]); return "q-named"; },
+      patronsSince: (...args: any[]) => { calls.push(["patronsSince", ...args]); return "q-since"; },
+    };
+  }
+
+  it("routes a decoded message to the matching provider method", () => {
+    const queries = fakeQueries();
+    const q1 = M.dispatchAdminQuery(queries, M.DecodeAdminQuery(["AdminQueries.allPatrons"]));
+    const q2 = M.dispatchAdminQuery(
+      queries,
+      M.DecodeAdminQuery(["AdminQueries.patronsNamed", "bob", 3]),
+    );
+    expect(q1).toBe("q-all");
+    expect(q2).toBe("q-named");
+    expect(queries.calls).toEqual([["allPatrons"], ["patronsNamed", "bob", 3]]);
+  });
+
+  it("passes nullable wire args as absent", () => {
+    const queries = fakeQueries();
+    M.dispatchAdminQuery(queries, M.DecodeAdminQuery(["AdminQueries.patronsNamed", "bob", null]));
+    expect(queries.calls).toEqual([["patronsNamed", "bob", undefined]]);
+  });
+
+  it("revived args arrive as their decoded types", () => {
+    const queries = fakeQueries();
+    M.dispatchAdminQuery(queries, M.DecodeAdminQuery(["AdminQueries.patronsSince", ISO]));
+    expect(queries.calls[0][1]).toBeInstanceOf(Date);
+  });
+
+  it("throws on an unknown id", () => {
+    expect(() => M.dispatchAdminQuery(fakeQueries(), ["AdminQueries.nope"])).toThrow(
+      "unexpected query ID: AdminQueries.nope",
+    );
+  });
+});
+
 describe("generated type surface", () => {
   it("declares the defs and provider interfaces", () => {
     expect(text).toContain("export interface AdminQueryDefs<QX> {");
@@ -252,5 +294,11 @@ describe("generated type surface", () => {
       "export class RemoteAdminQueries extends RemoteQueries implements AdminQueries {",
     );
     expect(text).toContain("export function LocalAdminQueries<QX>(");
+    expect(text).toContain(
+      "export function dispatchAdminQuery(queries: AdminQueries, query: AdminQuery): Query<any> {",
+    );
+    expect(text).toContain(
+      "export function dispatchUserQuery(queries: UserQueries, query: UserQuery): Query<any> {",
+    );
   });
 });

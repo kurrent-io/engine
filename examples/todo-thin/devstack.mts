@@ -29,7 +29,11 @@ main({
         "--run-projections=System",
         "--enable-atom-pub-over-http",
       ],
-      post: httpCheck("http://localhost:2113/health/live?liveCode=200"),
+      post: [
+        httpCheck("http://localhost:2113/health/live?liveCode=200"),
+        // server's lmdb read model is no longer valid
+        exec("rm", "-rf", ".db/"),
+      ],
     },
     // then run the server with tsx, for hot reloading
     server: {
