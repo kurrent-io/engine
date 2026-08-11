@@ -9,3 +9,4 @@ onlyBuiltDependencies:
   - lmdb
   - msgpackr-extract
   - protobufjs
+  - unrs-resolver

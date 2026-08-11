@@ -72,8 +72,22 @@ ui/src/model.d.ts: model/library.gen.ts model/ui.ts
 ui/check: ui
 	cd ui && pnpm tsc
 
+# eslint needs the generated sources present (typed linting + import resolution)
+.PHONY: lint
+lint: model ui
+	pnpm exec eslint .
+
+.PHONY: fmt/check
+fmt/check:
+	pnpm exec prettier --check "**/*.{ts,tsx}"
+
+.PHONY: fmt
+fmt:
+	pnpm exec prettier --write "**/*.{ts,tsx}"
+	pnpm exec eslint --fix .
+
 .PHONY: check
-check: decider/decider model/check relay/_quickjs.so relay/check ui/check
+check: decider/decider model/check relay/_quickjs.so relay/check ui/check lint fmt/check
 
 .PHONY: serve
 serve: ui

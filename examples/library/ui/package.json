@@ -1,4 +1,5 @@
 {
+    "name": "@library/ui",
     "type": "module",
     "scripts": {
         "dev": "vite",

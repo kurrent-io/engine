@@ -1,4 +1,5 @@
 {
+    "name": "@library/model",
     "type": "module",
     "devDependencies": {
         "@kurrent/typespec-engine": "link:../../../tools/engine",

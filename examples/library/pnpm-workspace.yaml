@@ -1,4 +1,9 @@
+packages:
+  - model
+  - ui
+
 onlyBuiltDependencies:
+  - esbuild
   - grpc-tools
   - protobufjs
   - unrs-resolver

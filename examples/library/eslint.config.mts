@@ -1,0 +1,108 @@
+import type { Linter } from 'eslint';
+
+import pluginJs from '@eslint/js';
+import parserTs from '@typescript-eslint/parser';
+import pluginTs from '@typescript-eslint/eslint-plugin';
+import configPrettier from 'eslint-config-prettier/flat';
+import pluginImport from 'eslint-plugin-import';
+import pluginReact from 'eslint-plugin-react';
+import pluginReactHooks from 'eslint-plugin-react-hooks';
+import pluginReactRefresh from 'eslint-plugin-react-refresh';
+import globals from 'globals';
+
+export default [
+  pluginJs.configs.recommended,
+  pluginImport.flatConfigs.recommended,
+  pluginReactRefresh.configs.recommended,
+  {
+    ignores: [
+      '**/dist/',
+      'model/library.gen.ts',
+      'ui/src/model.js',
+      'ui/src/model.d.ts',
+      'relay/relay.js',
+      'relay/quickjs/',
+      'decider/decider.js',
+      '**/*.mts',
+    ],
+  },
+  {
+    ...pluginReact.configs.flat.recommended,
+    files: ['**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+      parser: parserTs,
+      parserOptions: {
+        ecmaFeatures: { jsx: true },
+        projectService: {
+          allowDefaultProject: ['ui/vite.config.ts'],
+        },
+      },
+      sourceType: 'module',
+    },
+    plugins: {
+      '@typescript-eslint': pluginTs,
+      'react': pluginReact,
+      'react-hooks': pluginReactHooks,
+    },
+    rules: {
+      '@typescript-eslint/ban-ts-comment': ['error', { 'ts-nocheck': 'allow-with-description' }],
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          args: 'after-used',
+          argsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+          ignoreRestSiblings: true,
+          varsIgnorePattern: '^_',
+        },
+      ],
+      '@typescript-eslint/prefer-optional-chain': 'error',
+      '@typescript-eslint/switch-exhaustiveness-check': 'error',
+      'eqeqeq': ['error', 'smart'],
+      'import/extensions': ['warn', { ts: 'never', tsx: 'never' }],
+      'import/order': [
+        'error',
+        {
+          'alphabetize': { caseInsensitive: true, order: 'asc' },
+          'groups': ['builtin', 'external', 'internal', 'parent', 'sibling', 'index'],
+          'newlines-between': 'always',
+          'pathGroups': [{ group: 'external', pattern: '@/**', position: 'after' }],
+        },
+      ],
+      'no-constant-condition': 'off',
+      'no-duplicate-imports': 'error',
+      'no-throw-literal': 'error',
+      'no-unused-vars': 'off',
+      'react-hooks/exhaustive-deps': 'error',
+      'react-hooks/rules-of-hooks': 'error',
+      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      'react/display-name': 'off',
+      'react/prop-types': 'off',
+      'react/react-in-jsx-scope': 'off',
+      'react/self-closing-comp': 'error',
+      'require-await': 'error',
+      'sort-imports': [
+        'error',
+        {
+          ignoreCase: true,
+          ignoreDeclarationSort: true,
+          ignoreMemberSort: false,
+        },
+      ],
+    },
+    settings: {
+      'import/resolver': { typescript: { project: '**/tsconfig.json' } },
+      'react': { version: 'detect' },
+    },
+  },
+  {
+    files: ['**/*.test.ts'],
+    languageOptions: { globals: { ...globals.jest } },
+  },
+  configPrettier,
+] satisfies Linter.Config[];

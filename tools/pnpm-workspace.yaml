@@ -4,3 +4,6 @@ packages:
   - emitter-py
   - emitter-go
   - tests
+
+onlyBuiltDependencies:
+  - unrs-resolver
