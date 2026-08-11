@@ -764,7 +764,7 @@ export function sh(command: string): Step {
 }
 
 // run an argv directly (no shell) as a step; it must exit 0
-export function exec(argv: string[]): Step {
+export function exec(...argv: string[]): Step {
   return commandStep(argv, argv.join(" "));
 }
 
@@ -2176,6 +2176,12 @@ function installProcessHandlers(): void {
   process.on("SIGINT", onQuitSignal);
   // the terminal went away; tear the cluster down rather than orphan it
   process.on("SIGHUP", onQuitSignal);
+
+  // redraw when terminal changes
+  process.on("SIGWINCH", () => {
+    view.hardClear = true;
+    schedule();
+  });
 
   // a throw from an event adapter runs outside schedule()'s try/catch, but
   // must still restore the terminal and kill the children

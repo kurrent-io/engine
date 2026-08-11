@@ -2186,6 +2186,12 @@ function installProcessHandlers(): void {
   // the terminal went away; tear the cluster down rather than orphan it
   process.on("SIGHUP", onQuitSignal);
 
+  // redraw when terminal changes
+  process.on("SIGWINCH", () => {
+    view.hardClear = true;
+    schedule();
+  });
+
   // a throw from an event adapter runs outside schedule()'s try/catch, but
   // must still restore the terminal and kill the children
   process.on("uncaughtException", (err) => panic(err));
