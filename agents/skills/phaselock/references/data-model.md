@@ -298,3 +298,10 @@ What each emitter produces:
 | `-ts` | `model.gen.ts` | types, `Decode*`, `check*`, typed RX/QX contexts, `<Name>Engine` classes, `<Name>ReducerTester`, query APIs |
 | `-py` | `model.py` | typed dicts, `check*`, query contexts, `<Name>Engine` wrapper over QuickJS |
 | `-go` | `model.go` | Go types, converters, `Check*`, typed query contexts, `New<Name>Engine` over goja |
+
+Serde is one-directional: only *decoders* are generated per type (plain
+JSON → runtime values, e.g. TypeScript's `Decode*`). There are no
+`Encode<Name>` functions — the encode direction is schema-free. Use
+`EncodeProto` to turn any runtime value (`Date`, `Map`, `Set` included)
+back into plain JSON, or `protoStringify` to serialize it to a string
+directly.

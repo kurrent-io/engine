@@ -3,7 +3,7 @@
 PhaseLock is an event-sourcing sync engine: events live in KurrentDB,
 TypeScript reducers derive state everywhere (browser, Node, Python, Go),
 and live queries serve it. Positioning and concepts: README.md. Status
-and planned work: ROADMAP.md. Remaining chores: FOLLOWUPS.md.
+and planned work: ROADMAP.md.
 
 Two kinds of work happen here; orient first:
 
