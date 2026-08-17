@@ -18,8 +18,6 @@ interface Server {
   queries: TodoQueries;
 }
 
-// The Engine instance lives on the server; this hook only wires up the websocket and the remote
-// queries, but it keeps the "usePhaseLock" name for consistency with the todo-basic example.
 export function usePhaseLock(serverUrl: string): [Server, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
 

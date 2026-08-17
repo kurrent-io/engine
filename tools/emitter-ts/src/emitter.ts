@@ -1191,7 +1191,7 @@ export function generateTs(lowered: LoweredProgram, skeleton: string): string {
   for (const s of stores) generateStore(d, annos, s);
 
   // Generate engines
-  for (const f of engines) generateEngine(d, annos, f);
+  for (const e of engines) generateEngine(d, annos, e);
 
   // Generate query layers
   for (const kq of queries) generateQueries(d, annos, decoders, kq);

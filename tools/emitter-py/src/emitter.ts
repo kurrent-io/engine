@@ -522,7 +522,7 @@ export function generatePy(lowered: LoweredProgram, skeleton: string): string {
   for (const t of typesToVisit) generateCheckers(d, registry, annos, checkers, t, anon, loop);
 
   for (const s of stores) generateStore(d, annos, s);
-  for (const f of engines) generateEngine(d, annos, f);
+  for (const e of engines) generateEngine(d, annos, e);
 
   return d.getvalue() + '\n';
 }
