@@ -3,9 +3,9 @@ export {
   checkTodoQuery,
   DecodeTodoQuery,
   LocalTodoQueries,
-  TodoFramework,
+  TodoEngine,
   dispatchTodoQuery,
-  ExternalStorage,
+  ExternalStore,
 } from './model.gen';
 export type {
   Query,

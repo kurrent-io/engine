@@ -1,4 +1,4 @@
-export { RelayFramework } from './model.gen';
+export { RelayEngine } from './model.gen';
 export {
   relayMigrate,
   relayReducer,

@@ -11,16 +11,16 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { lowerProgram } from '@kurrent/typespec-engine';
-import { generateTs } from '@kurrent/typespec-engine-ts';
+import { lowerProgram } from '@kurrent/phaselock-typespec';
+import { generateTs } from '@kurrent/phaselock-typespec-ts';
 import { resolvePath } from '@typespec/compiler';
 import { createTester } from '@typespec/compiler/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 const base = fileURLToPath(new URL('../..', import.meta.url));
-const Tester = createTester(resolvePath(base), { libraries: ['@kurrent/typespec-engine'] })
-  .import('@kurrent/typespec-engine')
-  .using('KurrentEngine');
+const Tester = createTester(resolvePath(base), { libraries: ['@kurrent/phaselock-typespec'] })
+  .import('@kurrent/phaselock-typespec')
+  .using('PhaseLock');
 
 const SOURCE = `
   model PatronInfo { id: string; name: string; since: utcDateTime; }
@@ -66,7 +66,7 @@ export function EncodeProto(base: any): any {
 }
 
 export type QueryGenerator<T> = Generator<any, T, any>;
-export type QueryFunction<QX, T> = (qx: QX, prev: T | undefined, prevIsValid: boolean) => QueryGenerator<T>;
+export type QueryFunction<QX, T> = (qx: QX) => QueryGenerator<T>;
 export interface Query<T> {
   latest: T | undefined;
   subscribe(callback: (val: T) => void): () => void;
@@ -74,7 +74,6 @@ export interface Query<T> {
 }
 export interface LocalQuery<T> extends Query<T> {
   awaitResult(): QueryGenerator<T>;
-  start(): void;
 }
 
 export class RemoteQueries {
@@ -216,7 +215,7 @@ describe('remote provider', () => {
 describe('local provider', () => {
   it('curries call args into the defs body along with the query context', () => {
     const seen: any[] = [];
-    /* eslint-disable require-yield -- stubs satisfy the generator-typed defs contract without touching storage */
+    /* eslint-disable require-yield -- stubs satisfy the generator-typed defs contract without touching store */
     const defs = {
       *allPatrons(qx: any) {
         seen.push(['allPatrons', qx]);
@@ -233,14 +232,14 @@ describe('local provider', () => {
     };
     /* eslint-enable require-yield */
     const captured: any[] = [];
-    const fw = {
+    const eng = {
       newQuery(fn: (qx: any) => Generator<any, any, any>) {
         captured.push(fn);
         return { latest: undefined, subscribe: () => () => {}, close: () => {} };
       },
     };
 
-    const local = M.LocalAdminQueries(fw, defs);
+    const local = M.LocalAdminQueries(eng, defs);
     local.patronsNamed('bob', 5);
     local.allPatrons();
     expect(captured).toHaveLength(2);

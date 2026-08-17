@@ -5,7 +5,7 @@
  * 1:1 with type equality.  The union solver and the decoder generators both rely on that.
  *
  * The 'K' in 'KType' is for Kurrent, and distinguishes e.g. KUnion from @typescript/compiler's
- * Union type, as well as distinguishing KFramework from our own user-facing Framework.
+ * Union type, as well as distinguishing KEngine from our own user-facing Engine.
  */
 
 export type JsonType = 'null' | 'int' | 'string' | 'boolean' | 'object' | 'array' | '*';
@@ -259,7 +259,7 @@ export class KTypeRegistry {
   }
 }
 
-// Store, Framework, and Queries IR
+// Store, Engine, and Queries IR
 
 const TPL_PATTERN = /\{([^}]*)\}/g;
 
@@ -335,7 +335,7 @@ export class KStore {
   }
 }
 
-export class KFramework {
+export class KEngine {
   name: string | null = null;
   constructor(
     readonly eventType: KType,

@@ -3,7 +3,7 @@
  * object identity is 1:1 with type equality.  The solver and emitters rely on this.
  */
 
-import { KType, KTypeRegistry, KUnion } from '@kurrent/typespec-engine';
+import { KType, KTypeRegistry, KUnion } from '@kurrent/phaselock-typespec';
 import { describe, expect, it } from 'vitest';
 
 describe('KTypeRegistry — primitive singletons', () => {

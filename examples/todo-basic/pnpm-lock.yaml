@@ -50,13 +50,13 @@ importers:
 
   model:
     devDependencies:
-      '@kurrent/typespec-engine':
+      '@kurrent/phaselock-typespec':
         specifier: link:../../../tools/engine
         version: link:../../../tools/engine
-      '@kurrent/typespec-engine-go':
+      '@kurrent/phaselock-typespec-go':
         specifier: link:../../../tools/emitter-go
         version: link:../../../tools/emitter-go
-      '@kurrent/typespec-engine-ts':
+      '@kurrent/phaselock-typespec-ts':
         specifier: link:../../../tools/emitter-ts
         version: link:../../../tools/emitter-ts
       '@typespec/compiler':

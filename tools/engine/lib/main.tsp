@@ -1,6 +1,6 @@
 import "../dist/src/index.js";
 
-namespace KurrentEngine;
+namespace PhaseLock;
 
 /**
  * A Store defines the layout of key-value storage.  Keys are defined as template strings and values
@@ -13,8 +13,8 @@ namespace KurrentEngine;
  * }> {}
  * ```
  *
- * `Spec` is a model whose property names are storage key templates.  Each `{param}` in a
- * template becomes a typed accessor parameter in the generated storage contexts, and the part
+ * `Spec` is a model whose property names are store key templates.  Each `{param}` in a
+ * template becomes a typed accessor parameter in the generated store contexts, and the part
  * of the template before the first '.' names the item.
  *
  * `Deps` is a tuple of other Store interfaces whose items are all included in this store.  The
@@ -30,18 +30,18 @@ namespace KurrentEngine;
 interface Store<Spec extends {} = {}, Deps extends unknown[] = []> {}
 
 /**
- * A concrete Framework definition, binding the three pieces a system component needs: the
+ * A concrete Engine definition, binding the three pieces a system component needs: the
  * events it consumes, the commands it may send, and the store its reducers read and write.
- * Code generation produces a Framework class (with typed reducer/query contexts, decoders, and
+ * Code generation produces an Engine class (with typed reducer/query contexts, decoders, and
  * test helpers) for each declaration:
  *
  * ```typespec
- * interface RelayFramework extends Framework<LibraryEvents, RelayCommands, RelayStore> {}
+ * interface RelayEngine extends Engine<LibraryEvents, RelayCommands, RelayStore> {}
  * ```
  *
  * `Events` and `Commands` are named unions; `S` is a Store interface.
  */
-interface Framework<Events, Commands, S> {}
+interface Engine<Events, Commands, S> {}
 
 /**
  * A Queries interface declares a typed query contract: each operation names a query, with its

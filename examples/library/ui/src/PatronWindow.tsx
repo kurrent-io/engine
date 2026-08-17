@@ -3,9 +3,9 @@ import { Alert, Button, Card, Flex, Input, List, Space, Spin, Switch, Tag, Typog
 import { useCallback, useRef, useState } from 'react';
 
 import { colorHash } from './colorhash';
-import { QueryGenerator, UserFramework, UserQX, VHold } from './model';
-import { useFramework } from './useFramework';
-import { useQuery } from './useQuery';
+import { QueryGenerator, UserEngine, UserQX, VHold } from './model';
+import { useLocalQuery } from './useLocalQuery';
+import { usePhaseLock } from './usePhaseLock';
 import { generateUuid } from './util';
 
 const { Text } = Typography;
@@ -139,14 +139,14 @@ function BookItem({
 }
 
 function Books({
-  fw,
+  eng,
   patronId,
   researcher,
   onHold,
   onHoldRestricted,
   onCancelHold,
 }: {
-  fw: UserFramework;
+  eng: UserEngine;
   patronId: string;
   researcher: boolean;
   onHold: (isbn: string) => void;
@@ -202,7 +202,7 @@ function Books({
     [patronId],
   );
 
-  const books = useQuery(fw, booksLookup);
+  const books = useLocalQuery(eng, booksLookup);
   if (!books) return <Spin />;
 
   return (
@@ -229,7 +229,7 @@ export default function PatronWindow({
   relayUrl: string;
 }) {
   const [enabled, setEnabled] = useState(true);
-  const [fw, connState] = useFramework(relayUrl, enabled, patronId);
+  const [eng, connState] = usePhaseLock(relayUrl, enabled, patronId);
 
   const patronLookup = useCallback(
     function* (qx: UserQX): QueryGenerator<PatronInfo> {
@@ -238,7 +238,7 @@ export default function PatronWindow({
     },
     [patronId],
   );
-  const patron = useQuery(fw, patronLookup);
+  const patron = useLocalQuery(eng, patronLookup);
 
   const messagesLookup = useCallback(function* (qx: UserQX): QueryGenerator<string[]> {
     return yield* qx.get.messages();
@@ -246,7 +246,7 @@ export default function PatronWindow({
 
   // start out dismissing any messages from an older session
   const staleMessages = useRef<number | undefined>(undefined);
-  let messages = useQuery(fw, messagesLookup);
+  let messages = useLocalQuery(eng, messagesLookup);
   if (messages === undefined) {
     messages = [];
   } else {
@@ -279,7 +279,7 @@ export default function PatronWindow({
               <PatronName
                 name={patron.name}
                 onRename={(newName) =>
-                  fw.sendCommands([
+                  eng.sendCommands([
                     { type: 'rename-patron', id: patronId, name: newName, timestamp: new Date() },
                   ])
                 }
@@ -302,11 +302,11 @@ export default function PatronWindow({
       }
       style={{ width: '32em' }}>
       <Books
-        fw={fw}
+        eng={eng}
         patronId={patronId}
         researcher={patron?.researcher ?? false}
         onHold={(isbn) =>
-          fw.sendCommands([
+          eng.sendCommands([
             {
               type: 'try-hold',
               id: generateUuid(),
@@ -318,7 +318,7 @@ export default function PatronWindow({
           ])
         }
         onHoldRestricted={(bookId) =>
-          fw.sendCommands([
+          eng.sendCommands([
             {
               type: 'try-hold',
               id: generateUuid(),
@@ -330,7 +330,7 @@ export default function PatronWindow({
           ])
         }
         onCancelHold={(holdId) => {
-          fw.sendCommands([{ type: 'cancel-hold', id: holdId }]);
+          eng.sendCommands([{ type: 'cancel-hold', id: holdId }]);
         }}
       />
       {visibleMessages.length > 0 && (

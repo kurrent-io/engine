@@ -102,4 +102,4 @@ q.eval("""
 #     def delete(key: str):
 #         self.txn.delete(key)
 #
-# storage = _quickjs.make_storage(q, lambda write: LmdbTxn(env.begin(write=True, buffer=True)))
+# store = _quickjs.make_store(q, lambda write: LmdbTxn(env.begin(write=True, buffer=True)))

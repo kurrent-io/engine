@@ -8,7 +8,7 @@ valid value yields [], a malformed one yields one or more problems.
 
 No third-party dependencies: tests register themselves with @register_test and `python3
 test_checkers.py` runs them all.  The generated module imports the compiled `_quickjs` extension
-at load time (only used by the Framework runtime, never by the checkers), so we install a stub
+at load time (only used by the Engine runtime, never by the checkers), so we install a stub
 for it before importing.
 """
 
@@ -39,7 +39,7 @@ def _install_quickjs_stub() -> None:
 _install_quickjs_stub()
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_GEN = os.path.join(_HERE, "..", "tsp-output", "@kurrent", "typespec-engine-py")
+_GEN = os.path.join(_HERE, "..", "tsp-output", "@kurrent", "phaselock-typespec-py")
 sys.path.insert(0, _GEN)
 
 import model  # noqa: E402
@@ -228,11 +228,11 @@ def test_bool_literals_are_exact():
     fails(model.checkToggled, {"on": False}, needle="is not True")
 
 
-# --- framework event / command unions --------------------------------------------------------
+# --- engine event / command unions --------------------------------------------------------
 
 
 @register_test
-def test_framework_unions():
+def test_engine_unions():
     ok(model.checkEvents, {"type": "beta", "at": ISO})
     ok(model.checkEvents, {"type": "other"})
     fails(model.checkEvents, {"type": "nope"}, needle="unexpected value")

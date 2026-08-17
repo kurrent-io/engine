@@ -1202,40 +1202,40 @@ export class FutureContext {
   }
 }
 
-// storage ////////////////////////////////////////////////////////////////////
+// store //////////////////////////////////////////////////////////////////////
 
 // an indexeddb-compatible, transactional key-value store built around generators.
 //
-// A note about typing: the Storage interface must receive a value with .set() and return the same
-// type value with .get().  It must not matter which implementation of Storage is in use.  However,
-// most of the access to storage is untyped.  So storage cannot get() and set() the real proto
-// values.  Instead, a Storage implementation which stores anywhere other than in-memory must do
-// the type-to-storage conversion internally.  Then any generated typed getters built around the
-// Storage interface shall be merely typecasting wrappers.
+// A note about typing: the Store interface must receive a value with .set() and return the same
+// type value with .get().  It must not matter which implementation of Store is in use.  However,
+// most of the access to the store is untyped.  So the store cannot get() and set() the real proto
+// values.  Instead, a Store implementation which stores anywhere other than in-memory must do
+// the type-to-store conversion internally.  Then any generated typed getters built around the
+// Store interface shall be merely typecasting wrappers.
 
-// Storage is the interface for creating read and write transasctions.  An implementation of Storage
+// Store is the interface for creating read and write transasctions.  An implementation of Store
 // is callback-based and should support multiple parallel gets and sets at the API level, even if
 // they must be serialized internally.  The run{R,W}Txn functions are used to convert the callback
-// interface of WTxn and RTxn to the StorageGenerator protocol.
-export interface Storage {
+// interface of WTxn and RTxn to the StoreGenerator protocol.
+export interface Store {
   withWTxn<T>(fx: FutureContext, fn: (txn: WTxn) => Future<T>): Future<T>;
   withRTxn<T>(fx: FutureContext, fn: (txn: RTxn) => Future<T>): Future<T>;
 }
 
-export type StorageValue = { value: unknown } | { err: Error };
-export type StorageDone = { value: true } | { err: Error };
+export type StoreValue = { value: unknown } | { err: Error };
+export type StoreDone = { value: true } | { err: Error };
 
 export interface WTxn {
-  get(key: string, cb: (result: StorageValue) => void): void;
-  set(key: string, value: unknown, cb: (result: StorageDone) => void): void;
-  del(key: string, cb: (result: StorageDone) => void): void;
+  get(key: string, cb: (result: StoreValue) => void): void;
+  set(key: string, value: unknown, cb: (result: StoreDone) => void): void;
+  del(key: string, cb: (result: StoreDone) => void): void;
 }
 
 export interface RTxn {
-  get(key: string, cb: (result: StorageValue) => void): void;
+  get(key: string, cb: (result: StoreValue) => void): void;
 }
 
-export type WStorageQuestion = {
+export type WStoreQuestion = {
   // keys to look up
   get?: Record<string, true>;
   // key-values to set
@@ -1244,25 +1244,25 @@ export type WStorageQuestion = {
   del?: Record<string, true>;
 };
 
-export type RStorageQuestion = {
+export type RStoreQuestion = {
   // keys to look up
   get?: Record<string, true>;
 };
 
-export type StorageAnswer = {
+export type StoreAnswer = {
   // key-value lookup results
-  get: Record<string, StorageValue>;
+  get: Record<string, StoreValue>;
   // keys done setting
-  set: Record<string, StorageDone>;
+  set: Record<string, StoreDone>;
   // keys done deleting
-  del: Record<string, StorageDone>;
+  del: Record<string, StoreDone>;
 };
 
-export type WStorageGenerator<T> = Generator<WStorageQuestion, T, StorageAnswer>;
-export type RStorageGenerator<T> = Generator<RStorageQuestion, T, StorageAnswer>;
+export type WStoreGenerator<T> = Generator<WStoreQuestion, T, StoreAnswer>;
+export type RStoreGenerator<T> = Generator<RStoreQuestion, T, StoreAnswer>;
 
-// function to interact with the StorageGenerator
-export function* txnGet(key: string): RStorageGenerator<unknown> {
+// function to interact with the StoreGenerator
+export function* txnGet(key: string): RStoreGenerator<unknown> {
   const ans = (yield { get: { [key]: true } }).get[key];
   if ('err' in ans) {
     throw ans.err;
@@ -1270,16 +1270,16 @@ export function* txnGet(key: string): RStorageGenerator<unknown> {
   return ans.value;
 }
 
-// a function to interact with the StorageGenerator
-export function* txnSet(key: string, value: unknown): WStorageGenerator<void> {
+// a function to interact with the StoreGenerator
+export function* txnSet(key: string, value: unknown): WStoreGenerator<void> {
   const ans = (yield { set: { [key]: value } }).set[key];
   if ('err' in ans) {
     throw ans.err;
   }
 }
 
-// a function to interact with the StorageGenerator
-export function* txnDel(key: string): WStorageGenerator<void> {
+// a function to interact with the StoreGenerator
+export function* txnDel(key: string): WStoreGenerator<void> {
   const ans = (yield { del: { [key]: true } }).del[key];
   if ('err' in ans) {
     throw ans.err;
@@ -1287,34 +1287,26 @@ export function* txnDel(key: string): WStorageGenerator<void> {
 }
 
 // a function to hide some of the boilerplate of opening a WTxn
-export function* withWTxn<T>(
-  fx: FutureContext,
-  s: Storage,
-  fn: () => WStorageGenerator<T>,
-): Future<T> {
+export function* withWTxn<T>(fx: FutureContext, s: Store, fn: () => WStoreGenerator<T>): Future<T> {
   return yield* s.withWTxn(fx, function* (txn) {
     return yield* runWTxn(fx, txn, fn());
   });
 }
 
 // a function to hide some of the boilerplate of opening a RTxn
-export function* withRTxn<T>(
-  fx: FutureContext,
-  s: Storage,
-  fn: () => RStorageGenerator<T>,
-): Future<T> {
+export function* withRTxn<T>(fx: FutureContext, s: Store, fn: () => RStoreGenerator<T>): Future<T> {
   return yield* s.withRTxn(fx, function* (txn) {
     return yield* runRTxn(fx, txn, fn());
   });
 }
 
-// run a StorageGenerator to completion, converting potentially many parallel callbacks into a
+// run a StoreGenerator to completion, converting potentially many parallel callbacks into a
 // generator interface.
-function* runWTxn<T>(fx: FutureContext, txn: WTxn, g: WStorageGenerator<T>): Future<T> {
+function* runWTxn<T>(fx: FutureContext, txn: WTxn, g: WStoreGenerator<T>): Future<T> {
   // ignore late callbacks
   let valid = true;
   try {
-    let ans: StorageAnswer = { get: {}, set: {}, del: {} };
+    let ans: StoreAnswer = { get: {}, set: {}, del: {} };
     let ready = false;
     while (true) {
       const { value, done } = g.next(ans);
@@ -1361,13 +1353,13 @@ function* runWTxn<T>(fx: FutureContext, txn: WTxn, g: WStorageGenerator<T>): Fut
   }
 }
 
-// run a StorageGenerator to completion, converting potentially many parallel callbacks into a
+// run a StoreGenerator to completion, converting potentially many parallel callbacks into a
 // generator interface.
-function* runRTxn<T>(fx: FutureContext, txn: RTxn, g: RStorageGenerator<T>): Future<T> {
+function* runRTxn<T>(fx: FutureContext, txn: RTxn, g: RStoreGenerator<T>): Future<T> {
   // ignore late callbacks
   let valid = true;
   try {
-    let ans: StorageAnswer = { get: {}, set: {}, del: {} };
+    let ans: StoreAnswer = { get: {}, set: {}, del: {} };
     let ready = false;
     while (true) {
       const { value, done } = g.next(ans);
@@ -1394,17 +1386,17 @@ function* runRTxn<T>(fx: FutureContext, txn: RTxn, g: RStorageGenerator<T>): Fut
   }
 }
 
-type StorageCoders = {
+type StoreCoders = {
   encoder: (key: string, val: unknown) => unknown;
   decoder: (key: string, val: unknown) => unknown;
 };
 
-export class IndexedDBStorage {
+export class IndexedDBStore {
   #db: IDBDatabase;
   #store: string;
-  #coders: StorageCoders;
+  #coders: StoreCoders;
 
-  constructor(db: IDBDatabase, store: string, coders: StorageCoders) {
+  constructor(db: IDBDatabase, store: string, coders: StoreCoders) {
     this.#db = db;
     this.#store = store;
     this.#coders = coders;
@@ -1458,14 +1450,14 @@ export class IndexedDBStorage {
 
 class IndexedDBTxn {
   #store: IDBObjectStore;
-  #coders: StorageCoders;
+  #coders: StoreCoders;
 
-  constructor(store: IDBObjectStore, coders: StorageCoders) {
+  constructor(store: IDBObjectStore, coders: StoreCoders) {
     this.#store = store;
     this.#coders = coders;
   }
 
-  get(key: string, cb: (result: StorageValue) => void): void {
+  get(key: string, cb: (result: StoreValue) => void): void {
     const req = this.#store.get(key);
     req.onsuccess = () => {
       cb({ value: this.#coders.decoder(key, req.result) });
@@ -1475,7 +1467,7 @@ class IndexedDBTxn {
     };
   }
 
-  set(key: string, value: unknown, cb: (result: StorageDone) => void): void {
+  set(key: string, value: unknown, cb: (result: StoreDone) => void): void {
     const req = this.#store.put(this.#coders.encoder(key, value), key);
     req.onsuccess = () => {
       cb({ value: true });
@@ -1485,7 +1477,7 @@ class IndexedDBTxn {
     };
   }
 
-  del(key: string, cb: (result: StorageDone) => void): void {
+  del(key: string, cb: (result: StoreDone) => void): void {
     const req = this.#store.delete(key);
     req.onsuccess = () => {
       cb({ value: true });
@@ -1496,8 +1488,8 @@ class IndexedDBTxn {
   }
 }
 
-// InMemoryStorage does not require any StorageCoders because it never encodes or decodes.
-export class InMemStorage {
+// InMemStore does not require any StoreCoders because it never encodes or decodes.
+export class InMemStore {
   #data: Record<string, unknown>;
 
   constructor(data?: Record<string, unknown>) {
@@ -1538,7 +1530,7 @@ class InMemTxn {
     this.#updates = updates;
   }
 
-  get(key: string, cb: (result: StorageValue) => void): void {
+  get(key: string, cb: (result: StoreValue) => void): void {
     if (key in this.#updates) {
       cb({ value: this.#updates[key] });
     } else {
@@ -1546,22 +1538,22 @@ class InMemTxn {
     }
   }
 
-  set(key: string, value: unknown, cb: (result: StorageDone) => void): void {
+  set(key: string, value: unknown, cb: (result: StoreDone) => void): void {
     this.#updates[key] = value;
     cb({ value: true });
   }
 
-  del(key: string, cb: (result: StorageDone) => void): void {
+  del(key: string, cb: (result: StoreDone) => void): void {
     this.#updates[key] = undefined;
     cb({ value: true });
   }
 }
 
-export class OverlayStorage {
-  #base: Storage;
+export class OverlayStore {
+  #base: Store;
   #data: Record<string, unknown> = {};
 
-  constructor(base: Storage) {
+  constructor(base: Store) {
     this.#base = base;
   }
 
@@ -1606,7 +1598,7 @@ class OverlayTxn {
     this.#updates = updates;
   }
 
-  get(key: string, cb: (result: StorageValue) => void): void {
+  get(key: string, cb: (result: StoreValue) => void): void {
     if (key in this.#updates) {
       cb({ value: this.#updates[key] });
     } else if (key in this.#data) {
@@ -1616,12 +1608,12 @@ class OverlayTxn {
     }
   }
 
-  set(key: string, value: unknown, cb: (result: StorageDone) => void): void {
+  set(key: string, value: unknown, cb: (result: StoreDone) => void): void {
     this.#updates[key] = value;
     cb({ value: true });
   }
 
-  del(key: string, cb: (result: StorageDone) => void): void {
+  del(key: string, cb: (result: StoreDone) => void): void {
     this.#updates[key] = undefined;
     cb({ value: true });
   }
@@ -1631,8 +1623,8 @@ class OverlayTxn {
 
 type MaybePromise<T> = T | Promise<T>;
 
-// ExternalStorageTxn is part of ExternalStorage.
-export interface ExternalStorageTxn {
+// ExternalStoreTxn is part of ExternalStore.
+export interface ExternalStoreTxn {
   // get gets a value
   get(key: string): MaybePromise<unknown>;
   // set sets a value
@@ -1646,12 +1638,12 @@ export interface ExternalStorageTxn {
   abort(): MaybePromise<void>;
 }
 
-/* ExternalStorage implements Storage with automatic conversions between native return values and
+/* ExternalStore implements Store with automatic conversions between native return values and
    the generator-based reducers runtime */
-export class ExternalStorage {
-  #txnFn: (writable: boolean) => MaybePromise<ExternalStorageTxn>;
+export class ExternalStore {
+  #txnFn: (writable: boolean) => MaybePromise<ExternalStoreTxn>;
 
-  constructor(txnFn: (writable: boolean) => MaybePromise<ExternalStorageTxn>) {
+  constructor(txnFn: (writable: boolean) => MaybePromise<ExternalStoreTxn>) {
     this.#txnFn = txnFn;
   }
 
@@ -1686,19 +1678,19 @@ export class ExternalStorage {
 
     const userTxn = yield* resolve(this.#txnFn(writable));
     const txn: WTxn = {
-      get: (key: string, cb: (result: StorageValue) => void) => {
+      get: (key: string, cb: (result: StoreValue) => void) => {
         toPromise(userTxn.get(key)).then(
           (result) => cb({ value: result }),
           (e: unknown) => cb({ err: e as Error }),
         );
       },
-      set: (key: string, value: unknown, cb: (result: StorageDone) => void) => {
+      set: (key: string, value: unknown, cb: (result: StoreDone) => void) => {
         toPromise(userTxn.set(key, value)).then(
           () => cb({ value: true }),
           (e: unknown) => cb({ err: e as Error }),
         );
       },
-      del: (key: string, cb: (result: StorageDone) => void) => {
+      del: (key: string, cb: (result: StoreDone) => void) => {
         toPromise(userTxn.del(key)).then(
           () => cb({ value: true }),
           (e: unknown) => cb({ err: e as Error }),
@@ -1743,13 +1735,13 @@ export type ReducerQuestion = {
 };
 
 export type ReducerAnswer = {
-  old: Record<string, StorageValue>;
+  old: Record<string, StoreValue>;
   // key-value lookup results
-  get: Record<string, StorageValue>;
+  get: Record<string, StoreValue>;
   // keys done setting
-  set: Record<string, StorageDone>;
+  set: Record<string, StoreDone>;
   // keys done deleting
-  del: Record<string, StorageDone>;
+  del: Record<string, StoreDone>;
 };
 
 export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
@@ -1758,19 +1750,19 @@ export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
 // yield* rx.get.project(key): get the current value for key, possibly setting it from old
 // yield* rx.old.project(key): explicitly get the old value for key
 
-// wrap a Reducer so it acts like a WStorageGenerator, returning a set of updated keys
+// wrap a Reducer so it acts like a WStoreGenerator, returning a set of updated keys
 export function* runReducer(
   g: Reducer<any[] | void>,
   simulate?: boolean,
-): WStorageGenerator<[string[], any[]]> {
+): WStoreGenerator<[string[], any[]]> {
   // our cache of get's we've already completed
   const old: Record<string, unknown> = Object.create(null);
   // our planned sets and dels that we submit at the end
   const cur: Record<string, unknown> = Object.create(null);
 
-  function* finish(retVal: any[]): WStorageGenerator<[string[], any[]]> {
+  function* finish(retVal: any[]): WStoreGenerator<[string[], any[]]> {
     const updates = [];
-    const question: WStorageQuestion = { get: {}, set: {}, del: {} };
+    const question: WStoreQuestion = { get: {}, set: {}, del: {} };
     for (const [k, v] of Object.entries(cur)) {
       if (v === DELETED) {
         question.del![k] = true;
@@ -1782,16 +1774,16 @@ export function* runReducer(
         const o = old[k];
         // detect noop
         if (r === o) continue;
-        // otherwise write the value to storage
+        // otherwise write the value to the store
         updates.push(k);
         question.set![k] = r;
       }
     }
-    // is there any storage updates to make?
+    // are there any store updates to make?
     if (updates.length === 0 || simulate) return [updates, retVal];
     let nupdated = 0;
     while (nupdated < updates.length) {
-      // actually yield the write request to storage
+      // actually yield the write request to the store
       const ans = yield question;
       // check every result
       for (const [k, v] of Object.entries(ans.set ?? {})) {
@@ -1814,7 +1806,7 @@ export function* runReducer(
   // pending is for answers we're trying to deliver
   // {key: pending_ops}
   const pending: Record<string, { old?: true; get?: true }> = {};
-  let storageQuestion: WStorageQuestion = { get: {}, set: {}, del: {} };
+  let storeQuestion: WStoreQuestion = { get: {}, set: {}, del: {} };
 
   // run the reducer to completion
   while (true) {
@@ -1834,7 +1826,7 @@ export function* runReducer(
           ready = true;
         } else if (!inflight[key]) {
           inflight[key] = true;
-          storageQuestion.get![key] = true;
+          storeQuestion.get![key] = true;
           setdefault(pending, key, {}).old = true;
         }
       }
@@ -1854,7 +1846,7 @@ export function* runReducer(
           ready = true;
         } else if (!inflight[key]) {
           inflight[key] = true;
-          storageQuestion.get![key] = true;
+          storeQuestion.get![key] = true;
           setdefault(pending, key, {}).get = true;
         }
       }
@@ -1874,12 +1866,12 @@ export function* runReducer(
       }
     }
 
-    // interact with storage until we have an answer to return to the reducers
+    // interact with the store until we have an answer to return to the reducers
     while (!ready) {
-      const storageAnswer = yield storageQuestion;
-      storageQuestion = { get: {}, set: {}, del: {} };
+      const storeAnswer = yield storeQuestion;
+      storeQuestion = { get: {}, set: {}, del: {} };
 
-      for (const [key, val] of Object.entries(storageAnswer.get)) {
+      for (const [key, val] of Object.entries(storeAnswer.get)) {
         // cache successful results
         if ('value' in val) old[key] = val.value;
         // done with this query
@@ -1907,7 +1899,7 @@ export function* runReducer(
 /* Example query for loading all comments in a topic:
 
       let myTopic = ...;
-      const q = framework.newQuery(function*(qx: QX) => {
+      const q = engine.newQuery(function*(qx: QX) => {
         const uuids = yield* qx.get.topicComments(myTopic);
         const comments = {};
         const toplevels = [];
@@ -1940,15 +1932,15 @@ export interface LocalQuery<T> extends Query<T> {
 }
 
 export type QueryQuestion = {
-  // which keys to look up in storage
+  // which keys to look up in the store
   store?: Record<string, true>;
   // which query ids to await their result
   query?: Record<string, true>;
 };
 
 export type QueryAnswer = {
-  // the value for each storage lookup
-  store: Record<string, StorageValue>;
+  // the value for each store lookup
+  store: Record<string, StoreValue>;
   // the [result, dirty] for each asked query
   query: Record<string, [unknown, boolean]>;
 };
@@ -2059,7 +2051,7 @@ class _Query<QX, T> {
         return [this.#result, dirty];
       }
       // capture dependencies before yielding up to the graph for answers
-      // {store: {storage_key: true}, query: {query_id: true}}
+      // {store: {store_key: true}, query: {query_id: true}}
       for (const key of Object.keys(value.store ?? {})) {
         this.#keyDeps[key] = true;
       }
@@ -2103,7 +2095,7 @@ class GraphRun<QX> {
   // run() may be called once after construction against all existing queries, then may be called
   // additional times as new queries are added to the QueryGraph.
   // yields: list of keys, returns callback for users, receives: map of keys to values
-  *run(queries: QueryWrapper<QX>[]): RStorageGenerator<() => void> {
+  *run(queries: QueryWrapper<QX>[]): RStoreGenerator<() => void> {
     // freeze current query list, in case our caller ever gives us something they intend to mutate
     queries = [...queries];
 
@@ -2171,7 +2163,7 @@ class GraphRun<QX> {
       // are we all done?
       if (Object.keys(active).length === 0) break;
 
-      // send all pending questions to storage
+      // send all pending questions to the store
       const gets: Record<string, true> = {};
       for (const key of Object.keys(wantAnswers)) {
         gets[key] = true;
@@ -2204,7 +2196,7 @@ class GraphRun<QX> {
 /* QueryGraph is responsible for tracking queries generated by the UI and rerunning them when new
    data is present.  It tracks dependencies of a query function by injecting a query context, which
    provides the actual key-value lookup capability to the function.  It is informed of changes to
-   storage by the Midend, such as some keys being updated by the UI, keys of an old overlay being
+   the store by the Midend, such as some keys being updated by the UI, keys of an old overlay being
    discarded, or new forecast data from the UI itself. */
 export class QueryGraph<QX> {
   #qx: QX;
@@ -2223,7 +2215,7 @@ export class QueryGraph<QX> {
 
   newQuery<T>(fn: QueryFunction<QX, T>): LocalQuery<T> {
     const id = `${this.#id++}`;
-    const q = new _Query(id, fn)
+    const q = new _Query(id, fn);
     this.#queries[id] = q;
     this.#newQueries.push(q);
     return q;
@@ -2235,7 +2227,7 @@ export class QueryGraph<QX> {
     }
   }
 
-  *run(): RStorageGenerator<() => void> {
+  *run(): RStoreGenerator<() => void> {
     // start a new graph run
     const commitKeys = this.#dirty;
     this.#dirty = {};
@@ -2256,15 +2248,15 @@ export class QueryGraph<QX> {
     return yield* this.#execute(queries);
   }
 
-  *extend(): RStorageGenerator<() => void> {
+  *extend(): RStoreGenerator<() => void> {
     // extend an existing graph run with only new queries
     const queries = this.#newQueries;
     this.#newQueries = [];
     return yield* this.#execute(queries);
   }
 
-  *#execute(queries: QueryWrapper<QX>[]): RStorageGenerator<() => void> {
-    /* TODO: put a graph-wide storage cache here.  We can keep a new cache and an old cache.  When
+  *#execute(queries: QueryWrapper<QX>[]): RStoreGenerator<() => void> {
+    /* TODO: put a graph-wide store cache here.  We can keep a new cache and an old cache.  When
        the new cache is hit we return it immediately.  When the old cache is hit, we pop from old,
        place in new, then return.  When we start a new graph run we discard the old old, make the
        old new into the new old, and create a new, empty new.   We'll need something like the
@@ -2341,22 +2333,23 @@ export class RemoteQueries {
   }
 }
 
-// frameworks /////////////////////////////////////////////////////////////////
+// engines ////////////////////////////////////////////////////////////////////
 
-// Event wraps a proto type T with a client id.  An Event may have originated from KurrentDB, or
-// it may have been emitted by a forecaster, or it may be a command we are about to send.
-export type Event<T> = {
+// Identified wraps a proto type T with a client id.  An Identified event may have originated from
+// KurrentDB, or it may have been emitted by a forecaster, or it may be a command we are about to
+// send.
+export type Identified<T> = {
   id: string;
   data: T;
 };
 
-// RealEvent extends Event with stream position data that originates from KurrentDB.
-export type RealEvent<T> = Event<T> & {
+// Committed extends Identified with stream position data that originates from KurrentDB.
+export type Committed<T> = Identified<T> & {
   position: number;
 };
 
-export function DecodeRealEvent<T>(val: any, subdecoder: (val: any) => T): RealEvent<T> {
-  return { ...val, data: subdecoder(val.data) } as RealEvent<T>;
+export function DecodeCommitted<T>(val: any, subdecoder: (val: any) => T): Committed<T> {
+  return { ...val, data: subdecoder(val.data) } as Committed<T>;
 }
 
 function matchSent<C>(tpl: any, cmd: C): boolean {
@@ -2400,16 +2393,16 @@ function matchSent<C>(tpl: any, cmd: C): boolean {
 }
 
 /*
-  Framework diagram: internals, and how it fits into a fully offline-capable client application.
+  Engine diagram: internals, and how it fits into a fully offline-capable client application.
 
     (* = owned by user)
      ______________________________________________________
     |  PWA                                                 |
     |    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
-    |   | framework                                     |  |
+    |   | engine                                        |  |
     |       ___________           ____________________     |
     |   |  |           |       C |                    | |  |
-    |      | *reducers |<------->| *storage + overlay |    |
+    |      | *reducers |<------->| *store + overlay   |    |
     |   |  |___________|         |____________________| |  |
     |         ^ B    ^              ^         |            |
     |   |     |      |              |         | D       |  |
@@ -2453,21 +2446,21 @@ function matchSent<C>(tpl: any, cmd: C): boolean {
     - checkpoint data is passed along with events
     - user can customize batch boundaries if they have specific "packet" boundaries to honor
     - reducers process incoming batches
-    - write result to storage, along with provided checkpoint
-    - txn will be based on storage
+    - write result to the store, along with provided checkpoint
+    - txn will be based on the store
     - overlay is invalidated (and reconstructed if necessary)
 
-  C: reducers to storage+overlay
+  C: reducers to store+overlay
     - when reducers run, they are provided a r+w txn
-    - for real events, txn is based on storage
-        - storage is provided by the user
+    - for real events, txn is based on the store
+        - store is provided by the user
         - any transactional key-value store works
     - for forecast events, txn is based on overlay
         - overlay is in-memory
-        - reads prefer overlay but fall back to storage
+        - reads prefer overlay but fall back to the store
         - writes only go to overlay
 
-  D: storage+overlay to query graph
+  D: store+overlay to query graph
     - query graph woken after every write txn
     - query graph always based on overaly
     - modified keys trigger reruns of queries
@@ -2481,36 +2474,36 @@ function matchSent<C>(tpl: any, cmd: C): boolean {
     - queries that return different results on rerun wake up the ui
     - we should offer generic callback api, as well as popular UI integrations
 
-  F: ui passes new commands into framework
+  F: ui passes new commands into engine
     - triggers G, H, and I per command
 
   G: new commands to forecasters
     - forecaster creates 0 or more forecast events per new event
     - forecast events go to reducers to update overlay
 
-  H: new commands saved to storage (outbox)
+  H: new commands saved to the store (outbox)
 
   I: new commands get sent over websocket
 
-  Type variables to Framework:
+  Type variables to Engine:
   - RX = ReducerContext
   - QX = QueryContext
   - E = Events
   - C = Commands
 */
-export class Framework<QX, RX, E, C> {
+export class Engine<QX, RX, E, C> {
   #rx: RX;
-  #storage: Storage;
+  #store: Store;
   #decodeEvent: (raw: any) => E;
   #migrate: null | ((rx: RX) => Reducer<void>);
   #reducer: (rx: RX, events: E[]) => Reducer<any[] | void>;
   #forecaster: null | ((commands: C) => E[]);
   #decodeCommand: null | ((raw: any) => C);
-  #onCommands: null | ((commands: Event<any>[]) => void);
+  #onCommands: null | ((commands: Identified<any>[]) => void);
 
   #live: boolean = false;
   #setLive: boolean = false;
-  #overlay: OverlayStorage;
+  #overlay: OverlayStore;
   #graph: QueryGraph<QX>;
   #coro: Generator<void, void, void>;
   #fx: FutureContext;
@@ -2518,8 +2511,11 @@ export class Framework<QX, RX, E, C> {
   #scheduled: boolean = false;
 
   // #reconnects is a list of promise resolve functions
-  #reconnects: ((value: { checkpoint: number | undefined; commands: Event<any>[] }) => void)[] = [];
-  #recvdEvents: RealEvent<E>[] = [];
+  #reconnects: ((value: {
+    checkpoint: number | undefined;
+    commands: Identified<any>[];
+  }) => void)[] = [];
+  #recvdEvents: Committed<E>[] = [];
   // commands that came to us from the client
   #sendCommands: C[] = [];
   // command ids the user explicitly marks as completed
@@ -2533,14 +2529,14 @@ export class Framework<QX, RX, E, C> {
   constructor(
     qx: QX,
     rx: RX,
-    // if storage is null, InMemStorage is used
-    storage: Storage | null,
+    // if store is null, InMemStore is used
+    store: Store | null,
     callbacks: {
       // required: convert from json format to full type
       decodeEvent: (raw: any) => E;
-      // required if using sendCommands: convert from storage/wire format
+      // required if using sendCommands: convert from store/wire format
       decodeCommand: (raw: any) => C;
-      // optional: configure storage before any events arrive
+      // optional: configure store before any events arrive
       migrate?: (rx: RX) => Reducer<void>;
       // required: reduce a batch of events into the read model
       reducer: (rx: RX, events: E[]) => Reducer<void | any[]>;
@@ -2551,7 +2547,7 @@ export class Framework<QX, RX, E, C> {
     },
   ) {
     this.#rx = rx;
-    this.#storage = storage ?? new InMemStorage();
+    this.#store = store ?? new InMemStore();
     this.#decodeEvent = callbacks.decodeEvent;
     this.#decodeCommand = callbacks.decodeCommand ?? null;
     this.#migrate = callbacks.migrate ?? null;
@@ -2559,7 +2555,7 @@ export class Framework<QX, RX, E, C> {
     this.#forecaster = callbacks.forecaster ?? null;
     this.#onCommands = callbacks.onCommands ?? null;
 
-    this.#overlay = new OverlayStorage(this.#storage);
+    this.#overlay = new OverlayStore(this.#store);
     this.#graph = new QueryGraph(qx);
 
     this.#coro = this.#advancer();
@@ -2572,16 +2568,16 @@ export class Framework<QX, RX, E, C> {
 
   // request info needed to resume a connection: last committed checkpoint and unsent commands
   reconnect(
-    cb: (result: { checkpoint: number | undefined; commands: Event<any>[] }) => void,
+    cb: (result: { checkpoint: number | undefined; commands: Identified<any>[] }) => void,
   ): void {
     this.#reconnects.push(cb);
     this.#schedule();
   }
 
   // new events from the wire come here
-  recvEvents(raw: RealEvent<any>[]): void {
+  recvEvents(raw: Committed<any>[]): void {
     for (const r of raw) {
-      const event = DecodeRealEvent(r, this.#decodeEvent);
+      const event = DecodeCommitted(r, this.#decodeEvent);
       this.#recvdEvents.push(event);
     }
     this.#schedule();
@@ -2597,7 +2593,7 @@ export class Framework<QX, RX, E, C> {
     this.#schedule();
   }
 
-  // after forecasting and saving to storage, these will appear in an onCommands() callback
+  // after forecasting and saving to the store, these will appear in an onCommands() callback
   sendCommands(commands: C[]): void {
     if (!this.#onCommands || !this.#decodeCommand) {
       throw new Error(
@@ -2627,7 +2623,7 @@ export class Framework<QX, RX, E, C> {
   simulate<T>(
     fn: (rx: RX, decodedEvents: E[]) => Reducer<T>,
     cb: (result: T) => void,
-    undecodedEvents?: Event<any>[],
+    undecodedEvents?: Identified<any>[],
   ): void {
     const self = this;
     this.#simulates.push(function* () {
@@ -2657,18 +2653,18 @@ export class Framework<QX, RX, E, C> {
 
     // run migration logic on the data store
     if (self.#migrate) {
-      yield* withWTxn(this.#fx, this.#storage, function* () {
+      yield* withWTxn(this.#fx, this.#store, function* () {
         yield* runReducer(self.#migrate!(self.#rx));
         // ignore updated keys and don't trigger a run of the graph
       });
     }
 
-    // load unsent commands from storage
-    const commands: Event<any>[] = [];
-    yield* withRTxn(this.#fx, this.#storage, function* () {
+    // load unsent commands from the store
+    const commands: Identified<any>[] = [];
+    yield* withRTxn(this.#fx, this.#store, function* () {
       const index = ((yield* txnGet('.commands')) as string[]) ?? [];
       for (const id of index) {
-        const command = (yield* txnGet(`.command-${id}`)) as Event<any>;
+        const command = (yield* txnGet(`.command-${id}`)) as Identified<any>;
         commands.push(command);
       }
     });
@@ -2686,7 +2682,7 @@ export class Framework<QX, RX, E, C> {
 
     const forecasts: E[] = [];
     for (const command of commands) {
-      // note that since storage may be in-memory, we must take care to preserve command.data
+      // note that since the store may be in-memory, we must take care to preserve command.data
       const c = copyOnWrite(this.#decodeCommand!(command.data));
       const fs = recover(this.#forecaster(c));
       this.#unsent.set(command.id, fs);
@@ -2711,9 +2707,9 @@ export class Framework<QX, RX, E, C> {
     //     - then pass shaped events into reducers,
     //     - then commit that result along with the checkpoint,
     //     - then take the commit and pass it to the query graph
-    // - recieve sentCommands and update commands in storage
+    // - recieve sentCommands and update commands in the store
     // - receive sendCommands
-    //     - then commit them to storage,
+    //     - then commit them to the store,
     //         - then send those to onCommand hook
     //     - then forecast events,
     //     - then pass them to reducers,
@@ -2722,7 +2718,7 @@ export class Framework<QX, RX, E, C> {
     // - recieve a new query
     //     - extend the graph
     // - recieve a reconnect request
-    //     - then return the checkpoint in storage
+    //     - then return the checkpoint in the store
     while (true) {
       if (this.#live && !this.#setLive) {
         // we fell behind; freeze graph and overlay, and when caughtUp() is called, we'll process
@@ -2779,8 +2775,8 @@ export class Framework<QX, RX, E, C> {
     const checkpoint = events.at(-1)!.position;
     this.#recvdEvents = [];
 
-    // open a write txn to real storage
-    const updates = yield* withWTxn(this.#fx, this.#storage, function* () {
+    // open a write txn to the real store
+    const updates = yield* withWTxn(this.#fx, this.#store, function* () {
       // update our checkpoint when this txn finishes
       yield* txnSet('.checkpoint', checkpoint);
 
@@ -2804,7 +2800,7 @@ export class Framework<QX, RX, E, C> {
           );
           for (const id of self.#unsent.keys()) {
             if (id in toIgnore) continue;
-            const event = (yield* txnGet(`.command-${id}`)) as Event<any>;
+            const event = (yield* txnGet(`.command-${id}`)) as Identified<any>;
             const cmd = self.#decodeCommand!(event.data);
             for (const m of markedSent) {
               if (!matchSent(m, cmd)) continue;
@@ -2814,7 +2810,7 @@ export class Framework<QX, RX, E, C> {
           }
         }
       }
-      // discard commands based on calls to Framework.markSent()
+      // discard commands based on calls to Engine.markSent()
       yield* self.#discardRoundTripped();
 
       return updates;
@@ -2833,7 +2829,7 @@ export class Framework<QX, RX, E, C> {
 
     // discard old overlay, start a new one
     this.#graph.dirty(this.#overlay.keys());
-    this.#overlay = new OverlayStorage(this.#storage);
+    this.#overlay = new OverlayStore(this.#store);
 
     // rebuild overlay with current forecasts
     const forecasts = [...this.#unsent.values()].flat();
@@ -2855,16 +2851,22 @@ export class Framework<QX, RX, E, C> {
   *#onSendCommands(): Generator<void, void, void> {
     const self = this;
     // generate a uuid now for each event
-    const commands: Event<C>[] = this.#sendCommands.map((c) => ({ id: generateUuid(), data: c }));
+    const commands: Identified<C>[] = this.#sendCommands.map((c) => ({
+      id: generateUuid(),
+      data: c,
+    }));
     this.#sendCommands = [];
 
-    // encode once for both storage and sending over the wire
-    const encoded: Event<any>[] = commands.map((c) => ({ id: c.id, data: EncodeProto(c.data) }));
+    // encode once for both the store and sending over the wire
+    const encoded: Identified<any>[] = commands.map((c) => ({
+      id: c.id,
+      data: EncodeProto(c.data),
+    }));
 
-    // open a write txn to real storage
-    yield* withWTxn(this.#fx, this.#storage, function* () {
+    // open a write txn to the real store
+    yield* withWTxn(this.#fx, this.#store, function* () {
       const added = [];
-      // write each command to storage
+      // write each command to the store
       for (const ec of encoded) {
         yield* txnSet(`.command-${ec.id}`, ec);
         added.push(ec.id);
@@ -2914,7 +2916,7 @@ export class Framework<QX, RX, E, C> {
   // discard this.#roundTripped within some externally-provided WTxn
   // (you'll have to erase this.#roundTripped after the txn commits)
   // return true if something was deleted (but it always processes this.#roundTripped)
-  *#discardRoundTripped(): WStorageGenerator<boolean> {
+  *#discardRoundTripped(): WStoreGenerator<boolean> {
     if (this.#roundTripped.length === 0) return false;
     const roundTripped: Record<string, true> = {};
     for (const id of this.#roundTripped) {
@@ -2936,7 +2938,7 @@ export class Framework<QX, RX, E, C> {
 
   *#onRoundTripped(): Generator<void, void, void> {
     const self = this;
-    const changed = yield* withWTxn(this.#fx, this.#storage, function* () {
+    const changed = yield* withWTxn(this.#fx, this.#store, function* () {
       return yield* self.#discardRoundTripped();
     });
     this.#roundTripped.map((id) => this.#unsent.delete(id));
@@ -2956,12 +2958,12 @@ export class Framework<QX, RX, E, C> {
   }
 
   *#onReconnects(): Generator<void, void, void> {
-    const { checkpoint, commands } = yield* withRTxn(this.#fx, this.#storage, function* () {
+    const { checkpoint, commands } = yield* withRTxn(this.#fx, this.#store, function* () {
       const checkpoint = (yield* txnGet('.checkpoint')) as number | undefined;
-      const commands: Event<any>[] = [];
+      const commands: Identified<any>[] = [];
       const index = ((yield* txnGet('.commands')) as string[]) ?? [];
       for (const id of index) {
-        const command = (yield* txnGet(`.command-${id}`)) as Event<any>;
+        const command = (yield* txnGet(`.command-${id}`)) as Identified<any>;
         commands.push(command);
       }
       return { checkpoint, commands };
@@ -2976,7 +2978,7 @@ export class Framework<QX, RX, E, C> {
     const simulates = this.#simulates;
     this.#simulates = [];
     // use a single read txn for all simulations, since runReducer() with simulate=true doesn't write
-    yield* withRTxn(this.#fx, this.#storage, function* () {
+    yield* withRTxn(this.#fx, this.#store, function* () {
       for (const fn of simulates) {
         yield* runReducer(fn(), true);
       }
@@ -2987,19 +2989,19 @@ export class Framework<QX, RX, E, C> {
 export class ReducerTester<RX, E, S> {
   #rx: RX;
   #reducer: (rx: RX, events: E[]) => Reducer<void | any[]>;
-  #storage: InMemStorage;
+  #store: InMemStore;
   data: S;
 
   constructor(
     rx: RX,
     migrate: null | ((rx: RX) => Reducer<void>),
     reducer: (rx: RX, events: E[]) => Reducer<void | any[]>,
-    storage: InMemStorage,
+    store: InMemStore,
     testData: S,
   ) {
     this.#rx = rx;
     this.#reducer = reducer;
-    this.#storage = storage;
+    this.#store = store;
     this.data = testData;
 
     if (migrate) {
@@ -3013,13 +3015,13 @@ export class ReducerTester<RX, E, S> {
     let result: [string[], any[]] | undefined = undefined;
     const self = this;
     const coro = (function* () {
-      result = yield* withWTxn(fx!, self.#storage, function* () {
+      result = yield* withWTxn(fx!, self.#store, function* () {
         return yield* runReducer(g, false);
       });
     })();
     fx = new FutureContext(coro);
 
-    // with InMemStorage, this should always be completed in a single shot
+    // with InMemStore, this should always be completed in a single shot
     fx.wakeup();
     if (!result) {
       throw new Error('expected test coroutine to complete in one shot');

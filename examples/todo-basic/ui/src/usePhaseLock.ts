@@ -1,40 +1,14 @@
+import { InMemStore, migrateTodos, reduceTodos, TodoEngine } from '@todo-basic/model/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
-
-import {
-  AdminFramework,
-  adminMigrate,
-  adminReducer,
-  InMemStorage,
-  userForecaster,
-  UserFramework,
-  userMigrate,
-  userReducer,
-} from './model';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
-// function overload signature: without patronId, return AdminFramework
-export function useFramework(relayUrl: string, enabled: boolean): [AdminFramework, ConnectionState];
-
-// function overload signature: with patronId, return UserFramework
-export function useFramework(
-  relayUrl: string,
-  enabled: boolean,
-  patronId: string,
-): [UserFramework, ConnectionState];
-
-// implementation signature: returns either AdminFramework or UserFramework
-export function useFramework(
-  relayUrl: string,
-  enabled: boolean,
-  patronId?: string,
-): [UserFramework | AdminFramework, ConnectionState] {
+export function usePhaseLock(serverUrl: string): [TodoEngine, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
 
-  // create a framework instance once, for the lifetime of this hook
-  const fw = useMemo(() => {
-    const storage = new InMemStorage();
+  // create an engine instance once, for the lifetime of this hook
+  const eng = useMemo<TodoEngine>(() => {
     const onCommands = (commands: any[]) => {
       const ws = wsRef.current;
       if (ws?.readyState !== WebSocket.OPEN) return;
@@ -42,32 +16,14 @@ export function useFramework(
         ws.send(JSON.stringify(cmd));
       }
     };
-    if (patronId !== undefined) {
-      return new UserFramework(storage, {
-        migrate: userMigrate,
-        reducer: userReducer,
-        forecaster: userForecaster,
-        onCommands,
-      });
-    } else {
-      return new AdminFramework(storage, {
-        migrate: adminMigrate,
-        reducer: adminReducer,
-        onCommands,
-      });
-    }
-  }, [patronId]);
+    return new TodoEngine(new InMemStore(), {
+      migrate: migrateTodos,
+      reducer: reduceTodos,
+      onCommands,
+    });
+  }, []);
 
   useEffect(() => {
-    if (!enabled) {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      setConnState('disconnected');
-      return;
-    }
-
     let cancelled = false;
     let reconnectTimer: ReturnType<typeof setTimeout>;
     let backoff = 1000;
@@ -76,11 +32,11 @@ export function useFramework(
       if (cancelled) return;
       setConnState('connecting');
 
-      // ask the framework where we left off
-      fw.reconnect((result) => {
+      // ask the engine where we left off
+      eng.reconnect((result) => {
         if (cancelled) return;
 
-        const ws = new WebSocket(relayUrl);
+        const ws = new WebSocket(serverUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -89,10 +45,9 @@ export function useFramework(
             return;
           }
           backoff = 1000;
-          // handshake: identify ourselves and where to resume
+          // handshake: identify where to resume
           ws.send(
             JSON.stringify({
-              patron: patronId,
               since: result.checkpoint ?? null,
             }),
           );
@@ -106,10 +61,10 @@ export function useFramework(
         ws.onmessage = (msg) => {
           console.log('recv:', msg.data);
           if (msg.data === 'caughtup') {
-            fw.caughtUp();
+            eng.caughtUp();
           } else {
             const event = JSON.parse(msg.data);
-            fw.recvEvents([event]);
+            eng.recvEvents([event]);
           }
         };
 
@@ -137,7 +92,7 @@ export function useFramework(
         wsRef.current = null;
       }
     };
-  }, [enabled, fw, patronId, relayUrl]);
+  }, [eng, serverUrl]);
 
-  return [fw, connState];
+  return [eng, connState];
 }

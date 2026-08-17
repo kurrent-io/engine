@@ -1,2 +1,2 @@
-export { DeciderFramework, InMemStorage } from './model.gen';
+export { DeciderEngine, InMemStore } from './model.gen';
 export { deciderMigrate, deciderReducer } from './reducers';

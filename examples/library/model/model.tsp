@@ -32,13 +32,13 @@
 // circulated and restricted at the same time (for instance, there is a book
 // signed by the author that we want to keep as Restricted)
 
-import "@kurrent/typespec-engine";
+import "@kurrent/phaselock-typespec";
 
-using KurrentEngine;
+using PhaseLock;
 
-///////////////////
-// Storage Layer //
-///////////////////
+/////////////////
+// Store Layer //
+/////////////////
 
 alias Uuid = string;
 alias Isbn = string;
@@ -393,7 +393,7 @@ union LibraryEvents {
   DeciderEvents,
 }
 
-interface DeciderFramework extends Framework<LibraryEvents, LibraryEvents, DeciderStore> {}
+interface DeciderEngine extends Engine<LibraryEvents, LibraryEvents, DeciderStore> {}
 
 //////////////////
 
@@ -405,7 +405,7 @@ union UserCommands {
   CancelHold,
 }
 
-interface UserFramework extends Framework<LibraryEvents, UserCommands, UserStore> {}
+interface UserEngine extends Engine<LibraryEvents, UserCommands, UserStore> {}
 
 // An admin (the librarian at the front desk) has most of the write capabilities in the system,
 // except they cannot create decider-specific events.
@@ -423,7 +423,7 @@ union AdminCommands {
   EndCheckout,
 }
 
-interface AdminFramework extends Framework<LibraryEvents, AdminCommands, AdminStore> {}
+interface AdminEngine extends Engine<LibraryEvents, AdminCommands, AdminStore> {}
 
 // ok, technically UserCommands is a subset of AdminCommands, but this expresses that the relay is
 // going to relay commands from both types of clients.  (It flattens to the same interned type as
@@ -435,7 +435,7 @@ model RelayHold {
 }
 
 // The relay is mostly concerned with checking that all uuid references are valid, so it doesn't
-// have a lot of overlap with the storage layout of the decider or the ui
+// have a lot of overlap with the store layout of the decider or the ui
 interface RelayStore extends Store<{
   "edition.{isbn}": true;
   "book.{book_uuid}": true;
@@ -445,7 +445,7 @@ interface RelayStore extends Store<{
 }> {}
 
 
-interface RelayFramework extends Framework<LibraryEvents, RelayCommands, RelayStore> {}
+interface RelayEngine extends Engine<LibraryEvents, RelayCommands, RelayStore> {}
 
 /////////////////
 // Query Layer //

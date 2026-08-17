@@ -56,7 +56,7 @@ The logical flow of information is circular:
 [1] model/model.tsp define event types and store layout using TypeSpec
 [2] model/reducers.ts defines reducer functions that build state from events
 [3] ui/src/Window.tsx defines queries in-line with the UI components.
-[4] ui/src/useQuery.ts defines the react hook for queries.
+[4] ui/src/useLocalQuery.ts defines the react hook for queries.
 [5] ui/src/usePhaseLock.ts connects a websocket to a PhaseLock Engine.
 [6] server/main.ts relays events and commands between KurrentDB and the clietnt.
 

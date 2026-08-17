@@ -5,11 +5,11 @@ import {
   checkTodoQuery,
   DecodeTodoQuery,
   dispatchTodoQuery,
-  ExternalStorage,
+  ExternalStore,
   LocalTodoQueries,
   migrateTodos,
   reduceTodos,
-  TodoFramework,
+  TodoEngine,
 } from '@todo-thin/model/server';
 import type {
   ClientMessage,
@@ -53,13 +53,13 @@ class ServerQueryDefs implements TodoQueryDefs<TodoQX> {
   }
 }
 
-function handleWebsocketConnection(client: KurrentDBClient, fw: TodoFramework, socket: WebSocket) {
+function handleWebsocketConnection(client: KurrentDBClient, eng: TodoEngine, socket: WebSocket) {
   const openQueries: Record<string, { decoded: TodoQuery; query: undefined | Query<any> }> = {};
 
   /* normally you'd probably instantiate a ServerQueryDefs with connection info, like
      userid or what groups they're in, but this demo doesn't have users */
   const defs = new ServerQueryDefs(/* userid or other connection-specific info */);
-  const queries = LocalTodoQueries(fw, defs);
+  const queries = LocalTodoQueries(eng, defs);
 
   // one close function to close everything and log the reason
   let dead = false;
@@ -218,10 +218,10 @@ function handleWebsocketConnection(client: KurrentDBClient, fw: TodoFramework, s
   );
 }
 
-function lmdbStorage(): ExternalStorage {
+function lmdbStore(): ExternalStore {
   const db = open({ path: '.db' });
 
-  return new ExternalStorage((writable) => {
+  return new ExternalStore((writable) => {
     // node lmdb library has assymetric read/write API, presumably because lmdb only allows
     // one write txn at a time.
     let commit: () => void;
@@ -274,14 +274,14 @@ function lmdbStorage(): ExternalStorage {
 }
 
 // returns a Promise that is fulfilled after the first catchup
-function configureSubscription(client: KurrentDBClient, fw: TodoFramework): Promise<void> {
+function configureSubscription(client: KurrentDBClient, eng: TodoEngine): Promise<void> {
   let resolve: () => void;
   const promise = new Promise<void>((rs) => (resolve = rs));
   let caughtUp = false;
 
   const connect = () => {
-    // ask fw to load our subscription starting position (based on lmdb)
-    fw.reconnect(({ checkpoint: ckpt }) => {
+    // ask eng to load our subscription starting position (based on lmdb)
+    eng.reconnect(({ checkpoint: ckpt }) => {
       const start = ckpt ? { commit: BigInt(ckpt), prepare: BigInt(ckpt) } : START;
       const subscription = client.subscribeToAll({
         fromPosition: start,
@@ -305,7 +305,7 @@ function configureSubscription(client: KurrentDBClient, fw: TodoFramework): Prom
       if (!caughtUp) {
         subscription.once('caughtUp', () => {
           caughtUp = true;
-          fw.caughtUp();
+          eng.caughtUp();
           resolve();
         });
       }
@@ -314,7 +314,7 @@ function configureSubscription(client: KurrentDBClient, fw: TodoFramework): Prom
         // de-dupe: KurrentDB redelivers the event at `since`
         const position = Number(ev.commitPosition);
         if (position === ckpt) return;
-        fw.recvEvents([
+        eng.recvEvents([
           {
             position: position,
             id: ev.event!.id,
@@ -334,14 +334,14 @@ function main() {
   // assume non-tls, connecting to localhost, with default creds
   const client = KurrentDBClient.connectionString`${KURRENT_CONNECTION_STRING}`;
 
-  // create a single TodoFramework, with LMDB-based storage.
-  const fw = new TodoFramework(lmdbStorage(), {
+  // create a single TodoEngine, with LMDB-based store.
+  const eng = new TodoEngine(lmdbStore(), {
     migrate: migrateTodos,
     reducer: reduceTodos,
   });
 
-  // subscribe once to $all stream, feeding all events to fw
-  const catchup = configureSubscription(client, fw);
+  // subscribe once to $all stream, feeding all events to eng
+  const catchup = configureSubscription(client, eng);
 
   // wait for first catchup before serving to clients
   console.log('catching up...');
@@ -351,7 +351,7 @@ function main() {
     // start a websocket server
     const server = new WebSocketServer({ port: LISTEN_PORT });
 
-    server.on('connection', (socket) => handleWebsocketConnection(client, fw, socket));
+    server.on('connection', (socket) => handleWebsocketConnection(client, eng, socket));
 
     console.log(`todo-thin server is listening on ${LISTEN_PORT}`);
   });

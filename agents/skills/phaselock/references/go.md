@@ -64,7 +64,7 @@ q := model.NewQuery(engine, func(vm *goja.Runtime, qx model.DeciderQueryContext)
 unsubscribe := q.Subscribe(func(out []model.DeciderEvents) { ... })
 ```
 
-## Storage
+## Stores
 
 Implement the `Txn` interface and wrap with `model.NewGoStore(txnFactory)`;
 `model.NewInMemStore()` is the in-memory default.

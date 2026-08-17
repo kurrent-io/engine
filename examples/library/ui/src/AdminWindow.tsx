@@ -16,8 +16,8 @@ import { useCallback, useState } from 'react';
 
 import { colorHash } from './colorhash';
 import { AdminQX, QueryGenerator } from './model';
-import { useFramework } from './useFramework';
-import { useQuery } from './useQuery';
+import { useLocalQuery } from './useLocalQuery';
+import { usePhaseLock } from './usePhaseLock';
 import { generateUuid } from './util';
 
 const { Text } = Typography;
@@ -106,7 +106,7 @@ function InlineEdit({
 
 export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
   const [enabled, setEnabled] = useState(true);
-  const [fw, connState] = useFramework(relayUrl, enabled);
+  const [eng, connState] = usePhaseLock(relayUrl, enabled);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [addingEdition, setAddingEdition] = useState(false);
   const [newEditionTitle, setNewEditionTitle] = useState('');
@@ -188,8 +188,8 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
     return out;
   }, []);
 
-  const patrons = useQuery(fw, patronsLookup);
-  const editions = useQuery(fw, editionsLookup);
+  const patrons = useLocalQuery(eng, patronsLookup);
+  const editions = useLocalQuery(eng, editionsLookup);
 
   // --- handlers ---
 
@@ -209,7 +209,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
         });
         break;
       case 'out':
-        fw.sendCommands([
+        eng.sendCommands([
           {
             type: 'end-checkout',
             checkout: book.checkoutId!,
@@ -222,7 +222,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
 
   function handleCheckout(patronId: string) {
     if (pendingAction?.type !== 'book') return;
-    fw.sendCommands([
+    eng.sendCommands([
       {
         type: 'try-checkout',
         id: generateUuid(),
@@ -236,7 +236,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
 
   function handleToggleRestricted() {
     if (!pendingAction) return;
-    fw.sendCommands([
+    eng.sendCommands([
       {
         type: 'update-book-restricted',
         id: pendingAction.bookId,
@@ -249,13 +249,13 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
 
   function handleCancelHold() {
     if (pendingAction?.type !== 'held') return;
-    fw.sendCommands([{ type: 'cancel-hold', id: pendingAction.holdId }]);
+    eng.sendCommands([{ type: 'cancel-hold', id: pendingAction.holdId }]);
     setPendingAction(null);
   }
 
   function handlePromoteHold() {
     if (pendingAction?.type !== 'held') return;
-    fw.sendCommands([
+    eng.sendCommands([
       {
         type: 'try-checkout',
         id: generateUuid(),
@@ -310,7 +310,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
                   <InlineEdit
                     value={patron.name}
                     onConfirm={(name) =>
-                      fw.sendCommands([
+                      eng.sendCommands([
                         {
                           type: 'rename-patron',
                           id: patron.id,
@@ -326,7 +326,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
                   size="small"
                   checked={patron.researcher}
                   onChange={(checked) =>
-                    fw.sendCommands([
+                    eng.sendCommands([
                       {
                         type: 'assign-patron',
                         id: patron.id,
@@ -367,7 +367,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
                 <InlineEdit
                   value={edition.title}
                   onConfirm={(title) =>
-                    fw.sendCommands([
+                    eng.sendCommands([
                       {
                         type: 'update-edition-title',
                         isbn: edition.isbn,
@@ -395,7 +395,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
                     type="text"
                     icon={<PlusOutlined />}
                     onClick={() =>
-                      fw.sendCommands([
+                      eng.sendCommands([
                         {
                           type: 'add-book',
                           id: generateUuid(),
@@ -474,7 +474,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
         onCancel={() => setAddingEdition(false)}
         onOk={() => {
           if (newEditionTitle.trim()) {
-            fw.sendCommands([
+            eng.sendCommands([
               {
                 type: 'add-edition',
                 isbn: generateUuid(),
@@ -491,7 +491,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
           onChange={(e) => setNewEditionTitle(e.target.value)}
           onPressEnter={() => {
             if (newEditionTitle.trim()) {
-              fw.sendCommands([
+              eng.sendCommands([
                 {
                   type: 'add-edition',
                   isbn: generateUuid(),

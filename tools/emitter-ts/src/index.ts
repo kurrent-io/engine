@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { lowerProgram } from '@kurrent/typespec-engine';
+import { lowerProgram } from '@kurrent/phaselock-typespec';
 import { type EmitContext, emitFile, resolvePath } from '@typespec/compiler';
 
 import { generateTs } from './emitter.js';
@@ -10,7 +10,7 @@ export { $lib };
 export { generateTs } from './emitter.js';
 
 /**
- * The skeleton is the runtime support code (Framework base class, storage helpers, decoders'
+ * The skeleton is the runtime support code (Engine base class, store helpers, decoders'
  * shared plumbing) prepended to every generated module.  Generated code depends on it, so a
  * skeleton is always included: the packaged default unless the `skeleton` option overrides it.
  * The default ships as assets/skeleton.ts so users can copy it as the basis for an override.

@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { lowerProgram } from '@kurrent/typespec-engine';
+import { lowerProgram } from '@kurrent/phaselock-typespec';
 import { type EmitContext, emitFile, resolvePath } from '@typespec/compiler';
 
 import { generatePy } from './emitter.js';
@@ -10,7 +10,7 @@ export { $lib };
 export { generatePy } from './emitter.js';
 
 /**
- * The skeleton is the runtime support code (Framework base class, storage helpers, JSON type)
+ * The skeleton is the runtime support code (Engine base class, store helpers, JSON type)
  * prepended to every generated module.  Generated code depends on it, so a skeleton is always
  * included: the packaged default unless the `skeleton` option overrides it.  The default ships
  * as assets/skeleton.py so users can copy it as the basis for an override.

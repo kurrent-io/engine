@@ -122,7 +122,7 @@ func TestLiteralUnions(t *testing.T) {
 	fails(t, CheckLevel, `"2"`, "not allowed here")
 }
 
-func TestFrameworkUnions(t *testing.T) {
+func TestEngineUnions(t *testing.T) {
 	ok(t, CheckEvents, `{"type":"beta","at":"`+iso+`"}`)
 	ok(t, CheckEvents, `{"type":"other"}`)
 	fails(t, CheckEvents, `{"type":"nope"}`, "unexpected literal")

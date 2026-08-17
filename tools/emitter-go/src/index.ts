@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
-import { lowerProgram } from '@kurrent/typespec-engine';
+import { lowerProgram } from '@kurrent/phaselock-typespec';
 import { type EmitContext, emitFile, resolvePath } from '@typespec/compiler';
 
 import { generateGo } from './emitter.js';
@@ -10,7 +10,7 @@ export { $lib };
 export { generateGo } from './emitter.js';
 
 /**
- * The skeleton is the runtime support code (Framework, goja glue, query plumbing) prepended to
+ * The skeleton is the runtime support code (Engine, goja glue, query plumbing) prepended to
  * every generated file.  Generated code depends on it, so a skeleton is always included: the
  * packaged default unless the `skeleton` option overrides it.  The default ships as
  * assets/skeleton.go so users can copy it as the basis for an override.

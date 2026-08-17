@@ -107,7 +107,7 @@ class Appender:
         self.sync = sync
         self.client = client
 
-    async def append(self, new_uuids: List[str], batch: List[model.Event[Any]]) -> None:
+    async def append(self, new_uuids: List[str], batch: List[model.Identified[Any]]) -> None:
         log.debug(f"appending: {batch}")
         # the plural of NewEvents is "new_eventses", which you have to say with a Gollum voice.
         new_eventses = []
@@ -162,13 +162,13 @@ class Appender:
 
         position = await self.client.multi_append_to_stream(new_eventses)
 
-        # wait for the round trip to complete, so the Reader's next call to fw.simulate can rely
+        # wait for the round trip to complete, so the Reader's next call to eng.simulate can rely
         # on these events we've just written.
         await self.sync.wait_for(position)
 
 
 def wrap(event: kdbc.RecordedEvent, alt_data: str | None = None) -> str:
-    """Wrap an event in an envelope of metadata, to match typescript's RealEvent type."""
+    """Wrap an event in an envelope of metadata, to match typescript's Committed type."""
     return '{"position": %d, "id": "%s", "data": %s}'%(
         event.commit_position,
         str(event.id),
@@ -179,17 +179,17 @@ def wrap(event: kdbc.RecordedEvent, alt_data: str | None = None) -> str:
 class Subscriber:
     """Subscriber subscribes to the database."""
     def __init__(
-        self, sync: Sync, fw: model.RelayFramework, client: kdbc.AsyncKurrentDBClient,
+        self, sync: Sync, eng: model.RelayEngine, client: kdbc.AsyncKurrentDBClient,
     ) -> None:
         self.sync = sync
-        self.fw = fw
+        self.eng = eng
         self.client = client
         self.watches: Dict[PatronID, List[Callable[[str], None]]] = {}
         self.q: asyncio.Queue[kdbc.RecordedEvent] = asyncio.Queue(100)
 
     async def start(self) -> None:
         # catch up to current state once before turning on the webserver
-        since = self.fw.reconnect()
+        since = self.eng.reconnect()
         async with await self.client.read_all(
             commit_position=since,
             resolve_links=True,
@@ -212,7 +212,7 @@ class Subscriber:
         if batch:
             await self.update_read_model(batch)
 
-        self.fw.caught_up()
+        self.eng.caught_up()
 
     async def run(self) -> None:
         await waitgroup(self.collect(), self.process())
@@ -226,7 +226,7 @@ class Subscriber:
 
         This needs testing.
         """
-        since = self.fw.reconnect()
+        since = self.eng.reconnect()
         async with await self.client.subscribe_to_all(
             commit_position=since,
             resolve_links=True,
@@ -265,7 +265,7 @@ class Subscriber:
             })
 
         # apply updates to the read model
-        self.fw.recv_events(events)
+        self.eng.recv_events(events)
 
         # notify anybody who was waiting for a round-trip
         await self.sync.update(batch[-1].commit_position)
@@ -490,22 +490,22 @@ class Reader:
     """
     def __init__(
         self,
-        fw: model.RelayFramework,
+        eng: model.RelayEngine,
         appender: Appender,
         patron_id: PatronID,
         ws: web.WebSocketResponse,
     ) -> None:
-        self.fw = fw
+        self.eng = eng
         self.appender = appender
         self.patron_id = patron_id
         self.ws = ws
         # size of the queue is the maximum batch size we can process
-        self.q: asyncio.Queue[model.Event[Any]] = asyncio.Queue(100)
+        self.q: asyncio.Queue[model.Identified[Any]] = asyncio.Queue(100)
 
         if patron_id == ADMIN:
-            self.validator = fw.module["validateAdminCommands"]
+            self.validator = eng.module["validateAdminCommands"]
         else:
-            func = fw.module["validateUserCommands"]
+            func = eng.module["validateUserCommands"]
             self.validator = lambda rx, events: func(rx, events, self.patron_id)
 
     async def run(self) -> None:
@@ -530,7 +530,7 @@ class Reader:
 
             # make sure each event is structurally valid
             obj = msg.json()
-            errors = model.checkEvent(obj, model.checkAdminCommands)
+            errors = model.checkIdentified(obj, model.checkAdminCommands)
             if errors:
                 raise UserError(errors)
 
@@ -549,7 +549,7 @@ class Reader:
                 batch.append(self.q.get_nowait())
 
             # make sure each event is semantically valid
-            new_uuids, errors = self.fw.simulate(self.validator, batch)
+            new_uuids, errors = self.eng.simulate(self.validator, batch)
             if errors:
                 raise UserError(errors)
 
@@ -581,7 +581,7 @@ route = web.RouteTableDef()
 @route.get("/ws")
 @cancelable_request
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    fw = request.app["framework"]
+    eng = request.app["engine"]
     client = request.app["client"]
     subscriber = request.app["subscriber"]
     appender = request.app["appender"]
@@ -598,7 +598,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         since: int | None = handshake_msg.get("since")
 
         w = Writer(patron_id, ws)
-        r = Reader(fw, appender, patron_id, ws)
+        r = Reader(eng, appender, patron_id, ws)
 
         await waitgroup(w.run(), r.run(), subscriber.stream(patron_id, since, w))
 
@@ -618,7 +618,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
 @contextlib.asynccontextmanager
 async def setupKurrent(
-    fw: model.RelayFramework, connstr: str,
+    eng: model.RelayEngine, connstr: str,
 ) -> AsyncGenerator[kdbc.AsyncKurrentDBClient, Subscriber]:
     async with kdbc.AsyncKurrentDBClient(connstr) as client:
         yield client
@@ -657,8 +657,8 @@ async def setupWebserver(listen_spec: str, app_data: Dict[str, Any]) -> AsyncGen
 
 
 async def amain(connstr: str) -> None:
-    # set up the sync engine framework
-    fw = model.RelayFramework(
+    # set up the sync engine
+    eng = model.RelayEngine(
         os.path.join(os.path.dirname(__file__), "relay.js"),
         None,
         "relayMigrate",
@@ -666,19 +666,19 @@ async def amain(connstr: str) -> None:
     )
 
     # set up our kurrentdb client
-    async with setupKurrent(fw, connstr) as client:
+    async with setupKurrent(eng, connstr) as client:
 
         # create the appender and subscriber
         sync = Sync()
         appender = Appender(sync, client)
-        subscriber = Subscriber(sync, fw, client)
+        subscriber = Subscriber(sync, eng, client)
 
         # let the subscriber catch up to current state before accepting websocket connections
         await subscriber.start()
 
         # set up the webserver
         async with setupWebserver("localhost:3001", {
-            "framework": fw,
+            "engine": eng,
             "client": client,
             "appender": appender,
             "subscriber": subscriber,

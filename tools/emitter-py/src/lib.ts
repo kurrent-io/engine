@@ -26,7 +26,7 @@ const EmitterOptionsSchema: JSONSchemaType<PyEmitterOptions> = {
 };
 
 export const $lib = createTypeSpecLibrary({
-  name: '@kurrent/typespec-engine-py',
+  name: '@kurrent/phaselock-typespec-py',
   diagnostics: {},
   emitter: { options: EmitterOptionsSchema },
 } as const);

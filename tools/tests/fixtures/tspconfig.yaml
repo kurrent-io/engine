@@ -1,12 +1,12 @@
 emit:
-  - "@kurrent/typespec-engine-ts"
-  - "@kurrent/typespec-engine-py"
-  - "@kurrent/typespec-engine-go"
+  - "@kurrent/phaselock-typespec-ts"
+  - "@kurrent/phaselock-typespec-py"
+  - "@kurrent/phaselock-typespec-go"
 options:
-  "@kurrent/typespec-engine-ts":
+  "@kurrent/phaselock-typespec-ts":
     out-file: "fixtures.gen.ts"
-  "@kurrent/typespec-engine-py":
+  "@kurrent/phaselock-typespec-py":
     out-file: "model.py"
-  "@kurrent/typespec-engine-go":
+  "@kurrent/phaselock-typespec-go":
     package: "model"
     out-file: "model.go"

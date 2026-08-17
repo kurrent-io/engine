@@ -1,14 +1,14 @@
 import { Card, Flex, Spin, Tag, Typography } from 'antd';
 
 import ListView, { InlineAdd } from './ListView';
-import { useFramework } from './useFramework';
+import { usePhaseLock } from './usePhaseLock';
 import { useQuery } from './useQuery';
 import { generateUuid } from './util';
 
 const { Text } = Typography;
 
 export default function Window({ name, serverUrl }: { name: string; serverUrl: string }) {
-  const [server, connState] = useFramework(serverUrl);
+  const [server, connState] = usePhaseLock(serverUrl);
   const lists = useQuery(server.queries, 'allLists');
 
   const stateColor = {

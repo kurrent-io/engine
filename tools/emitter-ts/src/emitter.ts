@@ -1,6 +1,6 @@
 /**
  * TypeScript code generator: emits type aliases, decoders, JSON structural checkers, typed store
- * contexts, Framework classes, and typed query layers from the lowered IR.
+ * contexts, Engine classes, and typed query layers from the lowered IR.
  */
 
 import {
@@ -14,7 +14,7 @@ import {
   KArray,
   KBool,
   KDate,
-  KFramework,
+  KEngine,
   KInt,
   KJson,
   KLiteral,
@@ -33,7 +33,7 @@ import {
   Match,
   Solution,
   solveUnion,
-} from '@kurrent/typespec-engine';
+} from '@kurrent/phaselock-typespec';
 
 type Annos = Map<KType, string>;
 /** a decoder maps a value expression to a decoding expression; null is the identity decoder */
@@ -915,7 +915,7 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
   d.print(`\nexport type ${ctxName}RX = typeof ${ctxName}ReducerContext;\n`);
 }
 
-function generateFramework(d: Denter, annos: Annos, f: KFramework): void {
+function generateEngine(d: Denter, annos: Annos, f: KEngine): void {
   const eventType = annos.get(f.eventType)!;
   const commandType = annos.get(f.commandType)!;
   const ctxName = contextName(f.store.name!);
@@ -927,23 +927,23 @@ function generateFramework(d: Denter, annos: Annos, f: KFramework): void {
   const decodeCommand = `Decode${f.commandType.name}`;
 
   d.print(`
-export class ${f.name} extends Framework<${QX}, ${RX}, ${eventType}, ${commandType}> {
+export class ${f.name} extends Engine<${QX}, ${RX}, ${eventType}, ${commandType}> {
   constructor(
-    storage: Storage,
+    store: Store,
     callbacks: {
-      // optional: configure storage before any events arrive
+      // optional: configure store before any events arrive
       migrate?: (rx: ${RX}) => Reducer<void>,
       // required: reduce a batch of events into the read model
       reducer: (rx: ${RX}, events: ${eventType}[]) => Reducer<void | any[]>,
       // optional: forecast the events a server will send for a command
       forecaster?: (commands: ${commandType}) => ${eventType}[],
       // required if using sendCommands: receive events to send on the wire
-      onCommands?: (commands: Event<any>[])=> void,
+      onCommands?: (commands: Identified<any>[])=> void,
     },
     // used in cross-language support: inject an arbitrary object as the QueryContext
     qx?: any,
   ) {
-    super(qx ?? ${qx}, ${rx}, storage, {
+    super(qx ?? ${qx}, ${rx}, store, {
         ...callbacks,
         decodeEvent: ${decodeEvent},
         decodeCommand: ${decodeCommand},
@@ -979,7 +979,7 @@ export class ${f.name} extends Framework<${QX}, ${RX}, ${eventType}, ${commandTy
   d.dedent();
   d.print(`}\n`);
 
-  // Then generate a ReducerTester matching this Framework
+  // Then generate a ReducerTester matching this Engine
   d.print(`
 export class ${ctxName}ReducerTester extends ReducerTester<${RX}, ${eventType}, ${ctxName}TestData> {
   constructor(
@@ -995,7 +995,7 @@ export class ${ctxName}ReducerTester extends ReducerTester<${RX}, ${eventType}, 
         migrate = null;
         data = migrateOrInitialData;
     }
-    super(${rx}, migrate, reducer, new InMemStorage(data), new ${ctxName}TestData(data));
+    super(${rx}, migrate, reducer, new InMemStore(data), new ${ctxName}TestData(data));
   }
 }
 `);
@@ -1079,7 +1079,7 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
   d.dedent();
   d.print('}\n');
 
-  // local provider: hosts the defs on any framework with a compatible query context.  Its
+  // local provider: hosts the defs on any engine with a compatible query context.  Its
   // queries are LocalQuery-typed so they compose via awaitResult(); the interface merges with
   // the constructor function below, mirroring the Remote class being both type and value.
   d.print(`\nexport interface Local${name} extends ${name} {\n`);
@@ -1091,7 +1091,7 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
   d.print('}\n');
 
   d.print(`\nexport function Local${name}<QX>(\n`);
-  d.print(`  fw: { newQuery<X>(fn: QueryFunction<QX, X>): LocalQuery<X> },\n`);
+  d.print(`  eng: { newQuery<X>(fn: QueryFunction<QX, X>): LocalQuery<X> },\n`);
   d.print(`  defs: ${defsName}<QX>,\n`);
   d.print(`): Local${name} {\n`);
   d.indent('  ');
@@ -1101,7 +1101,7 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
     const argNames = q.args.map(([an]) => an);
     d.print(`${q.name}(${params(q)}): LocalQuery<${result(q)}> {\n`);
     d.print(
-      `  return fw.newQuery((qx: QX) => defs.${q.name}(${['qx', ...argNames].join(', ')}));\n`,
+      `  return eng.newQuery((qx: QX) => defs.${q.name}(${['qx', ...argNames].join(', ')}));\n`,
     );
     d.print('},\n');
   }
@@ -1150,7 +1150,7 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
 
 /** entrypoint: assemble the complete generated module */
 export function generateTs(lowered: LoweredProgram, skeleton: string): string {
-  const { registry, roots, stores, frameworks, queries } = lowered;
+  const { registry, roots, stores, engines, queries } = lowered;
   if (!roots.length) throw new Error('no named types found to generate code for');
 
   const d = new Denter();
@@ -1161,7 +1161,7 @@ export function generateTs(lowered: LoweredProgram, skeleton: string): string {
   const typesToVisit = [
     ...roots,
     ...stores.flatMap((s) => s.items.map((si) => si.type)),
-    ...frameworks.flatMap((f) => f.store.items.map((si) => si.type)),
+    ...engines.flatMap((f) => f.store.items.map((si) => si.type)),
   ];
 
   // Queries need their wire message type (which carries the arg types inside it) plus decoders
@@ -1190,8 +1190,8 @@ export function generateTs(lowered: LoweredProgram, skeleton: string): string {
   if (stores.length) generateStorePrereqs(d);
   for (const s of stores) generateStore(d, annos, s);
 
-  // Generate frameworks
-  for (const f of frameworks) generateFramework(d, annos, f);
+  // Generate engines
+  for (const f of engines) generateEngine(d, annos, f);
 
   // Generate query layers
   for (const kq of queries) generateQueries(d, annos, decoders, kq);

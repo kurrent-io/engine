@@ -1,14 +1,40 @@
-import { InMemStorage, migrateTodos, reduceTodos, TodoFramework } from '@todo-basic/model/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
+
+import {
+  AdminEngine,
+  adminMigrate,
+  adminReducer,
+  InMemStore,
+  UserEngine,
+  userForecaster,
+  userMigrate,
+  userReducer,
+} from './model';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
-export function useFramework(serverUrl: string): [TodoFramework, ConnectionState] {
+// function overload signature: without patronId, return AdminEngine
+export function usePhaseLock(relayUrl: string, enabled: boolean): [AdminEngine, ConnectionState];
+
+// function overload signature: with patronId, return UserEngine
+export function usePhaseLock(
+  relayUrl: string,
+  enabled: boolean,
+  patronId: string,
+): [UserEngine, ConnectionState];
+
+// implementation signature: returns either AdminEngine or UserEngine
+export function usePhaseLock(
+  relayUrl: string,
+  enabled: boolean,
+  patronId?: string,
+): [UserEngine | AdminEngine, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
   const wsRef = useRef<WebSocket | null>(null);
 
-  // create a framework instance once, for the lifetime of this hook
-  const fw = useMemo<TodoFramework>(() => {
+  // create an engine instance once, for the lifetime of this hook
+  const eng = useMemo(() => {
+    const store = new InMemStore();
     const onCommands = (commands: any[]) => {
       const ws = wsRef.current;
       if (ws?.readyState !== WebSocket.OPEN) return;
@@ -16,14 +42,32 @@ export function useFramework(serverUrl: string): [TodoFramework, ConnectionState
         ws.send(JSON.stringify(cmd));
       }
     };
-    return new TodoFramework(new InMemStorage(), {
-      migrate: migrateTodos,
-      reducer: reduceTodos,
-      onCommands,
-    });
-  }, []);
+    if (patronId !== undefined) {
+      return new UserEngine(store, {
+        migrate: userMigrate,
+        reducer: userReducer,
+        forecaster: userForecaster,
+        onCommands,
+      });
+    } else {
+      return new AdminEngine(store, {
+        migrate: adminMigrate,
+        reducer: adminReducer,
+        onCommands,
+      });
+    }
+  }, [patronId]);
 
   useEffect(() => {
+    if (!enabled) {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setConnState('disconnected');
+      return;
+    }
+
     let cancelled = false;
     let reconnectTimer: ReturnType<typeof setTimeout>;
     let backoff = 1000;
@@ -32,11 +76,11 @@ export function useFramework(serverUrl: string): [TodoFramework, ConnectionState
       if (cancelled) return;
       setConnState('connecting');
 
-      // ask the framework where we left off
-      fw.reconnect((result) => {
+      // ask the engine where we left off
+      eng.reconnect((result) => {
         if (cancelled) return;
 
-        const ws = new WebSocket(serverUrl);
+        const ws = new WebSocket(relayUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -45,9 +89,10 @@ export function useFramework(serverUrl: string): [TodoFramework, ConnectionState
             return;
           }
           backoff = 1000;
-          // handshake: identify where to resume
+          // handshake: identify ourselves and where to resume
           ws.send(
             JSON.stringify({
+              patron: patronId,
               since: result.checkpoint ?? null,
             }),
           );
@@ -61,10 +106,10 @@ export function useFramework(serverUrl: string): [TodoFramework, ConnectionState
         ws.onmessage = (msg) => {
           console.log('recv:', msg.data);
           if (msg.data === 'caughtup') {
-            fw.caughtUp();
+            eng.caughtUp();
           } else {
             const event = JSON.parse(msg.data);
-            fw.recvEvents([event]);
+            eng.recvEvents([event]);
           }
         };
 
@@ -92,7 +137,7 @@ export function useFramework(serverUrl: string): [TodoFramework, ConnectionState
         wsRef.current = null;
       }
     };
-  }, [fw, serverUrl]);
+  }, [enabled, eng, patronId, relayUrl]);
 
-  return [fw, connState];
+  return [eng, connState];
 }

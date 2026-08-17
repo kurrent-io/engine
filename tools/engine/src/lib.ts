@@ -1,7 +1,7 @@
 import { createTypeSpecLibrary, paramMessage } from '@typespec/compiler';
 
 export const $lib = createTypeSpecLibrary({
-  name: '@kurrent/typespec-engine',
+  name: '@kurrent/phaselock-typespec',
   diagnostics: {
     'invalid-key-template': {
       severity: 'error',
@@ -16,7 +16,7 @@ export const $lib = createTypeSpecLibrary({
     'not-a-store': {
       severity: 'error',
       messages: {
-        default: paramMessage`'${'name'}' is not a Store (expected an interface extending KurrentEngine.Store)`,
+        default: paramMessage`'${'name'}' is not a Store (expected an interface extending PhaseLock.Store)`,
       },
     },
     'invalid-template-args': {

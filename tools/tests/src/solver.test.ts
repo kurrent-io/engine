@@ -17,7 +17,7 @@ import {
   members,
   Solution,
   solveUnion,
-} from '@kurrent/typespec-engine';
+} from '@kurrent/phaselock-typespec';
 import { describe, expect, it } from 'vitest';
 
 /** Solve a union of the given members, returning the top-level CheckJsonType. */

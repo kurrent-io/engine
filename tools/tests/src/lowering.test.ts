@@ -1,7 +1,7 @@
 /**
  * Lowering unit tests: compile small TypeSpec programs in-memory and assert that lowerProgram()
  * translates them into the expected interned IR — type mapping, naming, interning identity, and
- * store/framework discovery.
+ * store/engine discovery.
  */
 
 import { fileURLToPath } from 'node:url';
@@ -20,15 +20,15 @@ import {
   KUnion,
   LoweredProgram,
   lowerProgram,
-} from '@kurrent/typespec-engine';
+} from '@kurrent/phaselock-typespec';
 import { type Program, resolvePath } from '@typespec/compiler';
 import { createTester } from '@typespec/compiler/testing';
 import { describe, expect, it } from 'vitest';
 
 const base = fileURLToPath(new URL('..', import.meta.url));
-const Tester = createTester(resolvePath(base), { libraries: ['@kurrent/typespec-engine'] })
-  .import('@kurrent/typespec-engine')
-  .using('KurrentEngine');
+const Tester = createTester(resolvePath(base), { libraries: ['@kurrent/phaselock-typespec'] })
+  .import('@kurrent/phaselock-typespec')
+  .using('PhaseLock');
 
 interface Lowered {
   program: Program;
@@ -202,18 +202,18 @@ describe('lowerProgram — queries', () => {
     expect(lowered.queries[1].queries[0].result).toBe(root(lowered, 'Info'));
   });
 
-  it('keeps queries interfaces out of stores and frameworks', async () => {
+  it('keeps queries interfaces out of stores and engines', async () => {
     const { lowered } = await lower(`
       model Info { id: string; }
       interface AdminQueries extends Queries { allInfos(): Info[]; }
     `);
     expect(lowered.stores).toHaveLength(0);
-    expect(lowered.frameworks).toHaveLength(0);
+    expect(lowered.engines).toHaveLength(0);
   });
 });
 
-describe('lowerProgram — frameworks', () => {
-  it('discovers a framework and its event, command, and store types', async () => {
+describe('lowerProgram — engines', () => {
+  it('discovers an engine and its event, command, and store types', async () => {
     const { lowered } = await lower(`
       model E1 { type: "e1"; }
       model E2 { type: "e2"; }
@@ -224,13 +224,13 @@ describe('lowerProgram — frameworks', () => {
       model Book { id: string; }
       model BookSpec { \`book.{id}\`: Book; }
       interface BookStore extends Store<BookSpec> {}
-      interface MyFramework extends Framework<Events, Commands, BookStore> {}
+      interface MyEngine extends Engine<Events, Commands, BookStore> {}
     `);
-    expect(lowered.frameworks).toHaveLength(1);
-    const fw = lowered.frameworks[0];
-    expect(fw.name).toBe('MyFramework');
-    expect(fw.eventType.name).toBe('Events');
-    expect(fw.commandType.name).toBe('Commands');
-    expect(fw.store.name).toBe('BookStore');
+    expect(lowered.engines).toHaveLength(1);
+    const eng = lowered.engines[0];
+    expect(eng.name).toBe('MyEngine');
+    expect(eng.eventType.name).toBe('Events');
+    expect(eng.commandType.name).toBe('Commands');
+    expect(eng.store.name).toBe('BookStore');
   });
 });

@@ -18,9 +18,9 @@ interface Server {
   queries: TodoQueries;
 }
 
-// ok, so the Framework instance is on the server, and this name doesn't make perfect sense, but
-// we'll still call this "useFramework" for consistency with the thin-basic example.
-export function useFramework(serverUrl: string): [Server, ConnectionState] {
+// The Engine instance lives on the server; this hook only wires up the websocket and the remote
+// queries, but it keeps the "usePhaseLock" name for consistency with the todo-basic example.
+export function usePhaseLock(serverUrl: string): [Server, ConnectionState] {
   const [connState, setConnState] = useState<ConnectionState>('disconnected');
 
   const mem = useRef<{

@@ -1,6 +1,6 @@
 /**
  * Python code generator: emits typing.Protocol classes, JSON structural checkers, query
- * contexts, and Framework subclasses from the lowered IR.
+ * contexts, and Engine subclasses from the lowered IR.
  */
 
 import {
@@ -14,7 +14,7 @@ import {
   KArray,
   KBool,
   KDate,
-  KFramework,
+  KEngine,
   KInt,
   KJson,
   KLiteral,
@@ -31,7 +31,7 @@ import {
   Match,
   Solution,
   solveUnion,
-} from '@kurrent/typespec-engine';
+} from '@kurrent/phaselock-typespec';
 
 type Annos = Map<KType, string>;
 /** a checker maps (valueExpr, pathExpr) to Python statements appending to `problems`; noop → "" */
@@ -434,7 +434,7 @@ function generateCheckers(
   visit(t);
 }
 
-// stores and frameworks
+// stores and engines
 
 function contextName(name: string): string {
   return name.endsWith('Store') ? name.slice(0, -5) : name;
@@ -466,17 +466,17 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
   d.dedent();
 }
 
-function frameworkName(name: string): string {
-  return name.endsWith('Framework') ? name : name + 'Framework';
+function engineName(name: string): string {
+  return name.endsWith('Engine') ? name : name + 'Engine';
 }
 
-function generateFramework(d: Denter, annos: Annos, f: KFramework): void {
+function generateEngine(d: Denter, annos: Annos, f: KEngine): void {
   const QX = `${contextName(f.store.name!)}QueryContext`;
   const E = annos.get(f.eventType);
   const C = annos.get(f.commandType);
   d.print('\n');
   d.print('\n');
-  d.print(`class ${frameworkName(f.name!)}(Framework[\n`);
+  d.print(`class ${engineName(f.name!)}(Engine[\n`);
   d.print(`    ${QX},  # python query context, enabling python queries\n`);
   d.print(`    ${E},  # event type from server\n`);
   d.print(`    ${C},  # command type to server\n`);
@@ -484,14 +484,14 @@ function generateFramework(d: Denter, annos: Annos, f: KFramework): void {
   d.print(`    def __init__(\n`);
   d.print(`        self,\n`);
   d.print(`        bundle: str,\n`);
-  d.print(`        storage: Callable[[bool], Txn] | None,\n`);
+  d.print(`        store: Callable[[bool], Txn] | None,\n`);
   d.print(`        migrate: str | None,\n`);
   d.print(`        reducer: str,\n`);
   d.print(`    ):\n`);
   d.print(`        super().__init__(\n`);
   d.print(`            bundle=bundle,\n`);
-  d.print(`            framework_cls='${frameworkName(f.name!)}',\n`);
-  d.print(`            storage=storage,\n`);
+  d.print(`            engine_cls='${engineName(f.name!)}',\n`);
+  d.print(`            store=store,\n`);
   d.print(`            qx=${QX}(),\n`);
   d.print(`            migrate=migrate,\n`);
   d.print(`            reducer=reducer,\n`);
@@ -500,7 +500,7 @@ function generateFramework(d: Denter, annos: Annos, f: KFramework): void {
 
 /** entrypoint: assemble the complete generated module */
 export function generatePy(lowered: LoweredProgram, skeleton: string): string {
-  const { registry, roots, stores, frameworks } = lowered;
+  const { registry, roots, stores, engines } = lowered;
   if (!roots.length) throw new Error('no named types found to generate code for');
 
   const d = new Denter();
@@ -510,7 +510,7 @@ export function generatePy(lowered: LoweredProgram, skeleton: string): string {
   const typesToVisit = [
     ...roots,
     ...stores.flatMap((s) => s.items.map((si) => si.type)),
-    ...frameworks.flatMap((f) => f.store.items.map((si) => si.type)),
+    ...engines.flatMap((f) => f.store.items.map((si) => si.type)),
   ];
 
   const annos: Annos = new Map();
@@ -522,7 +522,7 @@ export function generatePy(lowered: LoweredProgram, skeleton: string): string {
   for (const t of typesToVisit) generateCheckers(d, registry, annos, checkers, t, anon, loop);
 
   for (const s of stores) generateStore(d, annos, s);
-  for (const f of frameworks) generateFramework(d, annos, f);
+  for (const f of engines) generateEngine(d, annos, f);
 
   return d.getvalue() + '\n';
 }

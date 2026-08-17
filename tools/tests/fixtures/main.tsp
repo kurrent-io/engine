@@ -3,12 +3,12 @@
 // The models here are chosen to exercise every solver / codegen branch independently of the
 // demos: plain identity decode, date decode (required + optional), nested-struct recursion,
 // arrays, tuples, records, discriminated unions (by `type` and by `[type, v]`), one-of unions,
-// string- and int-literal unions, plus a Store and Framework so the store-context and framework
+// string- and int-literal unions, plus a Store and Engine so the store-context and engine
 // generation paths are exercised too.  All three emitters read this same source.
 
-import "@kurrent/typespec-engine";
+import "@kurrent/phaselock-typespec";
 
-using KurrentEngine;
+using PhaseLock;
 
 // --- plain / scalar structs -------------------------------------------------
 
@@ -46,7 +46,7 @@ model WithDateRecord {
   stamps: Record<utcDateTime>;
 }
 
-// --- discriminated union by `type` -----------------------------------------
+// --- discriminated union by `type` ------------------------------------------
 
 model Alpha {
   type: "alpha";
@@ -134,7 +134,7 @@ model Toggled {
   on: true;
 }
 
-// --- framework events / commands --------------------------------------------
+// --- engine events / commands -----------------------------------------------
 
 // distinct member set from Greek so it interns to a different union
 union Events {
@@ -157,7 +157,7 @@ union Commands {
   Undo,
 }
 
-// --- store + framework ------------------------------------------------------
+// --- store + engine ---------------------------------------------------------
 
 interface DemoStore
   extends Store<{
@@ -165,4 +165,4 @@ interface DemoStore
     `timed.{id}`: Timed;
   }> {}
 
-interface DemoFramework extends Framework<Events, Commands, DemoStore> {}
+interface DemoEngine extends Engine<Events, Commands, DemoStore> {}

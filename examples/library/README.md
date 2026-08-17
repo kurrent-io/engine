@@ -36,7 +36,7 @@ This example illustrates one frontend with multiple backends:
 ### Frontend Diagram (full w/ optimistic updates)
 
 The abstract nature of the business logic encourages the reducers block to be free of side-effects,
-making it easy to to reuse that business logic with an in-memory storage overlay to achieve
+making it easy to to reuse that business logic with an in-memory store overlay to achieve
 optimistic UI updates.  This requires an extra function from the user, which I call a "forecaster",
 that produces events the application expects the relay to create from each outgoing command.
 
@@ -44,10 +44,10 @@ that produces events the application expects the relay to create from each outgo
      ______________________________________________________
     |  PWA                                                 |
     |    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
-    |   | framework                                     |  |
+    |   | engine                                        |  |
     |       ___________           ____________________     |
     |   |  |           |       C |                    | |  |
-    |      | *reducers |<------->| *storage + overlay |    |
+    |      | *reducers |<------->| *store + overlay   |    |
     |   |  |___________|         |____________________| |  |
     |         ^ B    ^              ^         |            |
     |   |     |      |              |         | D       |  |
@@ -81,7 +81,7 @@ that produces events the application expects the relay to create from each outgo
 
 ## Backend Diagram
 
-Or: "Yes, this framework will be useful in backends, too".
+Or: "Yes, this engine will be useful in backends, too".
 
 Note that the relay shown here scales horizontally, but the decider needs to have at-most-one
 runners at a time.  To scale it, you'd need to shard its responsibility (and you'd still have
@@ -122,10 +122,10 @@ at-most-one runner mechanics within each shard).
     |             | events                  |__________________|   |
     |             |                                   |            |
     |  _ _ _ _ _ _|_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _|_ _ _ _ _   |
-    | | framework |                                   |         |  |
+    | | engine    |                                   |         |  |
     |       ______|______       _________       ______v___         |
     | |    |             |     |         |     |          |     |  |
-    |      | query graph |<----| storage |<--->| reducers |        |
+    |      | query graph |<----|  store  |<--->| reducers |        |
     | |    |_____________|     |_________|     |__________|     |  |
     |                                                              |
     | |_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _|  |

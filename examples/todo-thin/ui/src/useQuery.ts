@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from 'react';
 // the return type and legal argument types.
 //
 // Note that the return value will always be undefined upon first creating a new query; that is
-// because most storage backends (other than in-memory storage) cannot populate query results
+// because most store backends (other than the in-memory store) cannot populate query results
 // synchronously.
 export function useQuery<
   Q,

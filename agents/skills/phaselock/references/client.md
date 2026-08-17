@@ -46,7 +46,7 @@ Store choices:
   outbox — commands survive restarts until acknowledged), runs the
   forecaster, and then calls `onCommands(identified)` for the app to
   transmit.
-- `reconnect(cb)` — asks storage for `{ checkpoint, commands }`: the last
+- `reconnect(cb)` — asks the store for `{ checkpoint, commands }`: the last
   applied log position and any outbox contents. Call it before (re)dialing
   so the server can resume you from `checkpoint`, then retransmit
   `commands`.

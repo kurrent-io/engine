@@ -1,12 +1,12 @@
 // TypeSpec model for the todo demo: a collaborative to-do list.
 
-import "@kurrent/typespec-engine";
+import "@kurrent/phaselock-typespec";
 
-using KurrentEngine;
+using PhaseLock;
 
-///////////////////
-// Storage Layer //
-///////////////////
+/////////////////
+// Store Layer //
+/////////////////
 
 alias Uuid = string;
 
@@ -85,4 +85,4 @@ union TodoEvents {
   ArchiveItem,
 }
 
-interface TodoFramework extends Framework<TodoEvents, TodoEvents, TodoStore> {}
+interface TodoEngine extends Engine<TodoEvents, TodoEvents, TodoStore> {}

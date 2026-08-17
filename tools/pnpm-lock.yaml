@@ -43,11 +43,10 @@ importers:
         version: 5.9.3
 
   emitter-go:
-    dependencies:
-      '@kurrent/typespec-engine':
+    devDependencies:
+      '@kurrent/phaselock-typespec':
         specifier: workspace:*
         version: link:../engine
-    devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
@@ -59,11 +58,10 @@ importers:
         version: 5.9.3
 
   emitter-py:
-    dependencies:
-      '@kurrent/typespec-engine':
+    devDependencies:
+      '@kurrent/phaselock-typespec':
         specifier: workspace:*
         version: link:../engine
-    devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
@@ -75,11 +73,10 @@ importers:
         version: 5.9.3
 
   emitter-ts:
-    dependencies:
-      '@kurrent/typespec-engine':
+    devDependencies:
+      '@kurrent/phaselock-typespec':
         specifier: workspace:*
         version: link:../engine
-    devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
@@ -101,16 +98,16 @@ importers:
 
   tests:
     dependencies:
-      '@kurrent/typespec-engine':
+      '@kurrent/phaselock-typespec':
         specifier: workspace:*
         version: link:../engine
-      '@kurrent/typespec-engine-go':
+      '@kurrent/phaselock-typespec-go':
         specifier: workspace:*
         version: link:../emitter-go
-      '@kurrent/typespec-engine-py':
+      '@kurrent/phaselock-typespec-py':
         specifier: workspace:*
         version: link:../emitter-py
-      '@kurrent/typespec-engine-ts':
+      '@kurrent/phaselock-typespec-ts':
         specifier: workspace:*
         version: link:../emitter-ts
       '@typespec/compiler':

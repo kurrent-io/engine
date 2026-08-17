@@ -2,7 +2,7 @@
 
 Reducers are generator functions that consume events and update the store.
 They use `yield*` where async code would use `await`: every store access
-is a `yield*` so the engine can run the same reducer against any storage
+is a `yield*` so the engine can run the same reducer against any store
 backend — including IndexedDB, whose transactions demand same-stack
 execution that promises cannot provide. Read `yield*` as `await` and the
 code reads naturally.
@@ -234,7 +234,7 @@ test('new-list creates the list', () => {
 ```
 
 - The constructor takes a migrate function or an initial-data object
-  (`Record<string, any>` keyed by storage key).
+  (`Record<string, any>` keyed by store key).
 - `t.run(events)` returns `{ updates, markedSent }` — the sorted list of
   written keys and the markedSent array — so tests assert what changed
   and what round-tripped.

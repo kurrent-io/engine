@@ -1992,8 +1992,8 @@ static PyTypeObject py_cmem_type = {
 
 ////
 
-// pass a value or an exception to the storage callback
-static JSValue make_storage_callback(JSContext *ctx, JSValueConst cb, JSValue value){
+// pass a value or an exception to the store callback
+static JSValue make_store_callback(JSContext *ctx, JSValueConst cb, JSValue value){
     JSValue out = JS_EXCEPTION;
     JSValue exc = JS_UNINITIALIZED;
     JSValue arg = JS_UNINITIALIZED;
@@ -2011,7 +2011,7 @@ static JSValue make_storage_callback(JSContext *ctx, JSValueConst cb, JSValue va
         value = JS_DupValue(ctx, exc);
     }
 
-    // construct a StorageValue arg
+    // construct a StoreValue arg
     arg = JS_NewObject(ctx);
     if(JS_IsException(arg)) goto done;
 
@@ -2037,8 +2037,8 @@ done:
     return out;
 }
 
-// txn: (writable: boolean, cb: (result: StorageValue) => void) => unknown;
-static JSValue storage_txn(
+// txn: (writable: boolean, cb: (result: StoreValue) => void) => unknown;
+static JSValue store_txn(
     JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data
 ){
     (void)this_val;
@@ -2068,11 +2068,11 @@ static JSValue storage_txn(
 done:
     Py_XDECREF(writable);
     Py_XDECREF(txn);
-    return make_storage_callback(ctx, jscb, out);
+    return make_store_callback(ctx, jscb, out);
 }
 
-// commit: (txn: unknown, cb: (result: StorageDone) => void) => void;
-static JSValue storage_commit(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+// commit: (txn: unknown, cb: (result: StoreDone) => void) => void;
+static JSValue store_commit(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
     (void)this_val;
     (void)argc;
     PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
@@ -2089,11 +2089,11 @@ static JSValue storage_commit(JSContext *ctx, JSValueConst this_val, int argc, J
 
 done:
     Py_XDECREF(ret);
-    return make_storage_callback(ctx, jscb, out);
+    return make_store_callback(ctx, jscb, out);
 }
 
 // abort: (txn: unknown, cb: () => void) => void;
-static JSValue storage_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+static JSValue store_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
     (void)this_val;
     (void)argc;
     PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
@@ -2117,8 +2117,8 @@ done:
     return out;
 }
 
-// get: (txn: unknown, key: string, cb: (result: StorageValue) => void) => void;
-static JSValue storage_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+// get: (txn: unknown, key: string, cb: (result: StoreValue) => void) => void;
+static JSValue store_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
     (void)this_val;
     (void)argc;
     PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
@@ -2159,11 +2159,11 @@ done:
     Py_XDECREF(key);
     Py_XDECREF(ret);
     if(have_buf) PyBuffer_Release(&buf);
-    return make_storage_callback(ctx, jscb, out);
+    return make_store_callback(ctx, jscb, out);
 }
 
-// set: (txn: unknown, key: string, value: unknown, cb: (result: StorageDone) => void) => void;
-static JSValue storage_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+// set: (txn: unknown, key: string, value: unknown, cb: (result: StoreDone) => void) => void;
+static JSValue store_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
     (void)this_val;
     (void)argc;
     PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
@@ -2198,11 +2198,11 @@ done:
     Py_XDECREF(key);
     Py_XDECREF(val);
     Py_XDECREF(ret);
-    return make_storage_callback(ctx, jscb, out);
+    return make_store_callback(ctx, jscb, out);
 }
 
-// del: (txn: unknown, key: string, cb: (result: StorageDone) => void) => void;
-static JSValue storage_del(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+// del: (txn: unknown, key: string, cb: (result: StoreDone) => void) => void;
+static JSValue store_del(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
     (void)this_val;
     (void)argc;
     PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
@@ -2225,13 +2225,13 @@ static JSValue storage_del(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 done:
     Py_XDECREF(key);
     Py_XDECREF(ret);
-    return make_storage_callback(ctx, jscb, out);
+    return make_store_callback(ctx, jscb, out);
 }
 
-static char * const py_make_storage_doc =
-    "make_storage(txn_factory: Callable[[bool], Txn]) -> Storage\n"
-    "create a Storage object from a txn factory";
-static PyObject *py_make_storage(PyObject *self, PyObject *args, PyObject *kwds) {
+static char * const py_make_store_doc =
+    "make_store(txn_factory: Callable[[bool], Txn]) -> Store\n"
+    "create a Store object from a txn factory";
+static PyObject *py_make_store(PyObject *self, PyObject *args, PyObject *kwds) {
     (void)self;
     PyObject *qjs;
     PyObject *factory;
@@ -2248,7 +2248,7 @@ static PyObject *py_make_storage(PyObject *self, PyObject *args, PyObject *kwds)
     }
     JSContext *ctx = ((py_quickjs_t*)qjs)->ctx;
 
-    // construct an javascript ExternalCallbackStorage class from callbacks defined in python
+    // construct an javascript ExternalCallbackStore class from callbacks defined in python
     JSValue global = JS_UNINITIALIZED;
     JSValue cls = JS_UNINITIALIZED;
     JSValue jsargs[6];
@@ -2260,14 +2260,14 @@ static PyObject *py_make_storage(PyObject *self, PyObject *args, PyObject *kwds)
     // get the constructor from the context
     global = JS_GetGlobalObject(ctx);
     if(JS_IsException(global)) goto jsfail;
-    cls = JS_GetPropertyStr(ctx, global, "ExternalCallbackStorage");
+    cls = JS_GetPropertyStr(ctx, global, "ExternalCallbackStore");
     if(JS_IsException(cls)) goto jsfail;
 
     // txn arg is a closure defined in C
     Py_INCREF(factory);
     jsfactory = new_pyref(ctx, factory);
     if(JS_IsException(jsfactory)) goto jsfail;
-    JSValue jsfunc = JS_NewCFunctionData(ctx, storage_txn, 2, 0, 1, &jsfactory);
+    JSValue jsfunc = JS_NewCFunctionData(ctx, store_txn, 2, 0, 1, &jsfactory);
     if(JS_IsException(jsfunc)) goto jsfail;
     jsargs[nargs++] = jsfunc;
 
@@ -2277,11 +2277,11 @@ static PyObject *py_make_storage(PyObject *self, PyObject *args, PyObject *kwds)
         if(JS_IsException(jsfunc)) goto jsfail; \
         jsargs[nargs++] = jsfunc; \
     } while(0)
-    WRAP_SIMPLE(storage_commit, "commit", 2);
-    WRAP_SIMPLE(storage_abort, "abort", 2);
-    WRAP_SIMPLE(storage_get, "get", 3);
-    WRAP_SIMPLE(storage_set, "set", 4);
-    WRAP_SIMPLE(storage_del, "delete", 3);
+    WRAP_SIMPLE(store_commit, "commit", 2);
+    WRAP_SIMPLE(store_abort, "abort", 2);
+    WRAP_SIMPLE(store_get, "get", 3);
+    WRAP_SIMPLE(store_set, "set", 4);
+    WRAP_SIMPLE(store_del, "delete", 3);
     #undef WRAP
 
     // call constructor and return result
@@ -2308,10 +2308,10 @@ done:
 
 static PyMethodDef _quickjs_methods[] = {
     {
-        .ml_name = "make_storage",
-        .ml_meth = ARG_KWARG_FN_CAST(py_make_storage),
+        .ml_name = "make_store",
+        .ml_meth = ARG_KWARG_FN_CAST(py_make_store),
         .ml_flags = METH_VARARGS | METH_KEYWORDS,
-        .ml_doc = py_make_storage_doc,
+        .ml_doc = py_make_store_doc,
     },
     {0},  // sentinel
 };

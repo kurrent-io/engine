@@ -28,7 +28,7 @@ const EmitterOptionsSchema: JSONSchemaType<TsEmitterOptions> = {
 };
 
 export const $lib = createTypeSpecLibrary({
-  name: '@kurrent/typespec-engine-ts',
+  name: '@kurrent/phaselock-typespec-ts',
   diagnostics: {},
   emitter: { options: EmitterOptionsSchema },
 } as const);

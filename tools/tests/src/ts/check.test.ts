@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import * as M from '../../tsp-output/@kurrent/typespec-engine-ts/fixtures.gen.ts';
+import * as M from '../../tsp-output/@kurrent/phaselock-typespec-ts/fixtures.gen.ts';
 
 const ISO = '2024-01-02T03:04:05Z';
 const ISO_MS = '2020-06-07T08:09:10.123Z';
@@ -152,7 +152,7 @@ describe('bool literals', () => {
   });
 });
 
-describe('framework event / command unions', () => {
+describe('engine event / command unions', () => {
   it('checks events and commands through their unions', () => {
     ok(M.checkEvents, { type: 'beta', at: ISO });
     ok(M.checkEvents, { type: 'other' });

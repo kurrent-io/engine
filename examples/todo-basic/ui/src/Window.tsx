@@ -3,14 +3,14 @@ import { Card, Flex, Spin, Tag, Typography } from 'antd';
 import { useCallback } from 'react';
 
 import ListView, { InlineAdd, ListData } from './ListView';
-import { useFramework } from './useFramework';
-import { useQuery } from './useQuery';
+import { useLocalQuery } from './useLocalQuery';
+import { usePhaseLock } from './usePhaseLock';
 import { generateUuid } from './util';
 
 const { Text } = Typography;
 
 export default function Window({ name, serverUrl }: { name: string; serverUrl: string }) {
-  const [fw, connState] = useFramework(serverUrl);
+  const [eng, connState] = usePhaseLock(serverUrl);
 
   const listsLookup = useCallback(function* (qx: TodoQX): QueryGenerator<ListData[]> {
     const ids = (yield* qx.get.all_lists()) ?? [];
@@ -28,7 +28,7 @@ export default function Window({ name, serverUrl }: { name: string; serverUrl: s
     }
     return out;
   }, []);
-  const lists = useQuery(fw, listsLookup);
+  const lists = useLocalQuery(eng, listsLookup);
 
   const stateColor = {
     connecting: 'orange',
@@ -37,31 +37,31 @@ export default function Window({ name, serverUrl }: { name: string; serverUrl: s
   }[connState];
 
   function addList(listName: string) {
-    fw.sendCommands([{ type: 'new-list', id: generateUuid(), name: listName }]);
+    eng.sendCommands([{ type: 'new-list', id: generateUuid(), name: listName }]);
   }
 
   function renameList(id: string, listName: string) {
-    fw.sendCommands([{ type: 'rename-list', id, name: listName }]);
+    eng.sendCommands([{ type: 'rename-list', id, name: listName }]);
   }
 
   function archiveList(id: string) {
-    fw.sendCommands([{ type: 'archive-list', id }]);
+    eng.sendCommands([{ type: 'archive-list', id }]);
   }
 
   function addItem(listId: string, itemText: string) {
-    fw.sendCommands([{ type: 'new-item', id: generateUuid(), list: listId, text: itemText }]);
+    eng.sendCommands([{ type: 'new-item', id: generateUuid(), list: listId, text: itemText }]);
   }
 
   function toggleItem(id: string, done: boolean) {
-    fw.sendCommands([{ type: 'mark-item', id, done }]);
+    eng.sendCommands([{ type: 'mark-item', id, done }]);
   }
 
   function editItem(id: string, text: string) {
-    fw.sendCommands([{ type: 'edit-item', id, text }]);
+    eng.sendCommands([{ type: 'edit-item', id, text }]);
   }
 
   function archiveItem(id: string) {
-    fw.sendCommands([{ type: 'archive-item', id }]);
+    eng.sendCommands([{ type: 'archive-item', id }]);
   }
 
   return (

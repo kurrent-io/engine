@@ -1,6 +1,6 @@
 emit:
-  - "@kurrent/typespec-engine-ts"
+  - "@kurrent/phaselock-typespec-ts"
 options:
-  "@kurrent/typespec-engine-ts":
+  "@kurrent/phaselock-typespec-ts":
     emitter-output-dir: "{project-root}"
     out-file: "model.gen.ts"

@@ -41,30 +41,30 @@ type Batch struct {
 	Checkpoint uint64
 }
 
-func setupFramework(
+func setupEngine(
 	deciderEvents *[]model.DeciderEvents,
-) (*model.DeciderFramework, uint64, error) {
-	// create a framework
-	fw, err := model.NewDeciderFramework(
+) (*model.DeciderEngine, uint64, error) {
+	// create an engine
+	eng, err := model.NewDeciderEngine(
 		deciderScript,
-		model.NewInMemStorage(),
+		model.NewInMemStore(),
 		"deciderMigrate",
 		"deciderReducer",
 	)
 	if err != nil {
-		return nil, 0, fmt.Errorf("creating framework: %w", err)
+		return nil, 0, fmt.Errorf("creating engine: %w", err)
 	}
 
 	// Enable queries immediately.  We manually control when we want to ignore the decider events
 	// emitted by the query graph, based on where we are in the stream vs the last committed decider
-	// events in the database; this Framework.caughtUp() mechanism is irrelevant to us.
-	err = fw.CaughtUp()
+	// events in the database; this Engine.caughtUp() mechanism is irrelevant to us.
+	err = eng.CaughtUp()
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// DEBUG //
-	q := model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext) string {
+	q := model.NewQuery(eng, func(vm *goja.Runtime, qx model.DeciderQueryContext) string {
 		out := fmt.Sprintf("have books:\n")
 		for isbn := range qx.Editions() {
 			edition := qx.Edition(isbn)
@@ -73,7 +73,7 @@ func setupFramework(
 		return out
 	})
 	q.Subscribe(func(out string) { print(out) })
-	q = model.NewQuery(fw, func(vm *goja.Runtime, qx model.DeciderQueryContext) string {
+	q = model.NewQuery(eng, func(vm *goja.Runtime, qx model.DeciderQueryContext) string {
 		out := fmt.Sprintf("have patrons:\n")
 		for id := range qx.Patrons() {
 			patron := qx.Patron(id)
@@ -85,7 +85,7 @@ func setupFramework(
 	// END OF DEBUG //
 
 	// query for the decider events emitted by our reducer
-	query := model.NewQuery(fw, func(
+	query := model.NewQuery(eng, func(
 		vm *goja.Runtime, qx model.DeciderQueryContext,
 	) []model.DeciderEvents {
 		out := qx.Decider_events()
@@ -99,7 +99,7 @@ func setupFramework(
 	})
 
 	// also request the current checkpoint status
-	checkpoint, err := fw.Reconnect()
+	checkpoint, err := eng.Reconnect()
 	if err != nil {
 		return nil, 0, fmt.Errorf("requesting reconnect info: %w", err)
 	}
@@ -109,11 +109,11 @@ func setupFramework(
 		checkpointOut = *checkpoint
 	}
 
-	return fw, checkpointOut, nil
+	return eng, checkpointOut, nil
 }
 
 func setupKurrent(
-	base context.Context, storageCheckpoint uint64,
+	base context.Context, storeCheckpoint uint64,
 ) (
 	*kurrentdb.Client,
 	*kurrentdb.Subscription,
@@ -185,7 +185,7 @@ func setupKurrent(
 
 	// start our subscription
 	sub, err = client.SubscribeToAll(ctx, kurrentdb.SubscribeToAllOptions{
-		From: kurrentdb.Position{storageCheckpoint, storageCheckpoint},
+		From: kurrentdb.Position{storeCheckpoint, storeCheckpoint},
 		ResolveLinkTos: true,
 		Filter: &kurrentdb.SubscriptionFilter{
 			Type: kurrentdb.StreamFilterType,
@@ -241,7 +241,7 @@ func recvBatches(
 				return fmt.Errorf("SubscriptionDropped: %w", r.SubscriptionDropped.Error)
 			}
 			if r.CheckPointReached != nil {
-				// TODO: we can't actually handle these yet because the framework does not accept
+				// TODO: we can't actually handle these yet because the engine does not accept
 				// a checkpoint without events to process
 				return nil
 			}
@@ -413,15 +413,15 @@ func publishDecisions(
 }
 
 func run(ctx context.Context) error {
-	// set up the framework
+	// set up the engine
 	var deciderEvents []model.DeciderEvents
-	fw, storageCheckpoint, err := setupFramework(&deciderEvents)
+	eng, storeCheckpoint, err := setupEngine(&deciderEvents)
 	if err != nil {
 		return err
 	}
 
 	// now connect to the database
-	client, sub, dbCheckpoint, revision, cleanup, err := setupKurrent(ctx, storageCheckpoint)
+	client, sub, dbCheckpoint, revision, cleanup, err := setupKurrent(ctx, storeCheckpoint)
 	if err != nil {
 		return err
 	}
@@ -429,31 +429,31 @@ func run(ctx context.Context) error {
 
 	// note that dbCheckpoint could be any of:
 	//
-	// - less than our storageCheckpoint, if we died before writing to the db; in this case we
+	// - less than our storeCheckpoint, if we died before writing to the db; in this case we
 	//   should publish our inital deciderEvents because they haven't been published yet.
 	//
-	// - equal to our storageCheckpoint, if we died after writing to the db; in this case we can
+	// - equal to our storeCheckpoint, if we died after writing to the db; in this case we can
 	//   discard the initial deciderEvents because they've already been published.
 	//
-	// - greater than our storageCheckpoint, if we rebuilt our cache or another decider ran; in
+	// - greater than our storeCheckpoint, if we rebuilt our cache or another decider ran; in
 	//   this case we need to spend some time catching up our cache without publishing anything.
 
-	if dbCheckpoint < storageCheckpoint {
+	if dbCheckpoint < storeCheckpoint {
 		// we have unpublished decisions in our cache
-		revision, err = publishDecisions(ctx, client, deciderEvents, storageCheckpoint, revision)
+		revision, err = publishDecisions(ctx, client, deciderEvents, storeCheckpoint, revision)
 		if err != nil {
 			return err
 		}
 	}
 
 	// iterate through batches of events
-	for batch, err := range recvBatches(fw.VM(), sub, dbCheckpoint) {
+	for batch, err := range recvBatches(eng.VM(), sub, dbCheckpoint) {
 		if err != nil {
 			return err
 		}
 
-		// push a batch into the framework
-		err = fw.RecvEvents(batch.Events)
+		// push a batch into the engine
+		err = eng.RecvEvents(batch.Events)
 		if err != nil {
 			return err
 		}

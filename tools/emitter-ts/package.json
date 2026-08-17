@@ -1,7 +1,7 @@
 {
-  "name": "@kurrent/typespec-engine-ts",
+  "name": "@kurrent/phaselock-typespec-ts",
   "version": "0.1.0",
-  "description": "TypeScript emitter for Kurrent Engine TypeSpec models",
+  "description": "TypeScript emitter for PhaseLock TypeSpec models",
   "type": "module",
   "main": "dist/src/index.js",
   "exports": {
@@ -13,13 +13,12 @@
   "scripts": {
     "build": "tsc -p ."
   },
-  "dependencies": {
-    "@kurrent/typespec-engine": "workspace:*"
-  },
   "peerDependencies": {
+    "@kurrent/phaselock-typespec": "workspace:*",
     "@typespec/compiler": "^1.0.0"
   },
   "devDependencies": {
+    "@kurrent/phaselock-typespec": "workspace:*",
     "@types/node": "^22.0.0",
     "@typespec/compiler": "^1.0.0",
     "typescript": "^5.6.0"

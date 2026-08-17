@@ -3,7 +3,7 @@
 PhaseLock is an event-sourcing sync engine: events live in KurrentDB,
 TypeScript reducers derive state everywhere (browser, Node, Python, Go),
 and live queries serve it. Positioning and concepts: README.md. Status
-and planned work: ROADMAP.md. Pending renames and chores: FOLLOWUPS.md.
+and planned work: ROADMAP.md. Remaining chores: FOLLOWUPS.md.
 
 Two kinds of work happen here; orient first:
 
@@ -15,25 +15,6 @@ Two kinds of work happen here; orient first:
 - **Changing PhaseLock itself** (`tools/` — the TypeSpec vocabulary,
   emitters, and runtime skeletons): read `tools/CLAUDE.md` for settled
   design decisions before touching anything there.
-
-## Rename in progress (docs vs code)
-
-README, ROADMAP, and the skill are written against the decided names.
-The code has not been renamed yet. Mapping (docs name ← current code):
-
-| Docs / skill say | Code currently says |
-|------------------|---------------------|
-| `Engine`, `<Name>Engine` | `Framework`, `<Name>Framework` |
-| `Store` (interface), `InMemStore`, `IndexedDBStore`, `OverlayStore`, `ExternalStore` | `Storage`, `InMemStorage`, `IndexedDBStorage`, `OverlayStorage`, `ExternalStorage` |
-| `Identified<T>` / `Committed<T>` | `Event<T>` / `RealEvent<T>` |
-| `usePhaseLock` | `useFramework` |
-| `useLocalQuery` | `useQuery` (the function-taking hook; todo-thin's keyof-based `useQuery` keeps its name) |
-| `@kurrent/phaselock-typespec{,-ts,-py,-go}` | `@kurrent/typespec-engine{,-ts,-py,-go}` |
-| `using PhaseLock;` | `using KurrentEngine;` |
-| `kurrent.phaselock._quickjs` | `_quickjs` (in-tree C extension) |
-
-When working in code, use the current names; do not partially rename.
-The full rename is tracked in FOLLOWUPS.md.
 
 ## Repo layout
 
@@ -52,7 +33,7 @@ agents/           The "phaselock" agent plugin; canonical skill at
 ```
 
 The runtime skeletons (`tools/emitter-*/assets/skeleton.{ts,py,go}`) are
-the canonical framework runtime — generated files embed a copy. Edit
+the canonical engine runtime — generated files embed a copy. Edit
 skeletons in `tools/`, never in generated output.
 
 ## Build and check
@@ -61,7 +42,7 @@ Tools (`cd tools`):
 
 - `pnpm install && pnpm -r build` — build vocabulary + emitters
 - `pnpm test` — regenerate fixtures, run the vitest suite
-- `pnpm --filter @kurrent/typespec-engine-tests test:py` / `test:go` —
+- `pnpm --filter @kurrent/phaselock-typespec-tests test:py` / `test:go` —
   emitted-Python / emitted-Go checker suites
 
 Todo examples (`cd examples/todo-basic` or `todo-thin`):
@@ -88,10 +69,9 @@ and read the regenerated files rather than assuming their shape.
 - Demo code is meant to be read: high quality, simple, and it
   intentionally omits things (auth, users, subscription sharing).
   Don't "fix" an omission without asking; the omissions are the design.
-- The generic query hooks (`useQuery.ts`; the function-taking variant
-  becomes `useLocalQuery.ts`) are library-quality; `usePhaseLock.ts`
-  (currently `useFramework.ts`) is app-specific by design — clarity over
-  generality.
+- The generic query hooks (`useLocalQuery.ts`, and todo-thin's
+  keyof-based `useQuery.ts`) are library-quality; `usePhaseLock.ts` is
+  app-specific by design — clarity over generality.
 - Wrap new documentation files at 80 columns.
 - If a result contradicts your model of the system, stop and ask rather
   than iterating on guesses; this codebase has few but sharp invariants,

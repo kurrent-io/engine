@@ -1,11 +1,11 @@
 export {
-  UserFramework,
+  UserEngine,
   UserQueryContext,
   UserReducerContext,
-  AdminFramework,
+  AdminEngine,
   AdminQueryContext,
   AdminReducerContext,
   DecodeLibraryEvents,
-  InMemStorage,
+  InMemStore,
 } from './model.gen';
 export { userMigrate, userReducer, userForecaster, adminMigrate, adminReducer } from './reducers';

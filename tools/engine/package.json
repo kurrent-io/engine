@@ -1,7 +1,7 @@
 {
-  "name": "@kurrent/typespec-engine",
+  "name": "@kurrent/phaselock-typespec",
   "version": "0.1.0",
-  "description": "Kurrent Engine data-model vocabulary for TypeSpec: stores, key templates, frameworks",
+  "description": "PhaseLock data-model vocabulary for TypeSpec: stores, key templates, engines",
   "type": "module",
   "main": "dist/src/index.js",
   "tspMain": "lib/main.tsp",

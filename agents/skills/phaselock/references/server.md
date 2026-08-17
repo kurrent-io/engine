@@ -210,7 +210,7 @@ places it goes:
    identity and enforces write rights: a patron may rename only
    themselves, cancel only their own holds; an admin may do more. This can
    be implemented as reducer-shaped code that runs in `Engine.simulate()`
-   to be able to read from Storage to make decisions against latest-known
+   to be able to read from the Store to make decisions against latest-known
    state.
 3. **Sanitization on the way out.** Whatever streams a client is not
    entitled to see in full, the server rewrites or withholds before

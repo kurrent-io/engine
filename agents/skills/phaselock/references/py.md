@@ -47,7 +47,7 @@ q = engine.new_query(query_generator) # async-style typed query context
 `engine.module["validateUserCommands"]` reaches any export of the bundle;
 wrap it with connection args before handing to `simulate`.
 
-## Storage
+## Stores
 
 Pass a transaction factory instead of `None` — a callable
 `(writable: bool) -> Txn` where `Txn` has `get`/`set`/`delete`/
@@ -56,7 +56,7 @@ Pass a transaction factory instead of `None` — a callable
 ## Validation
 
 Structural validation without an engine: the generated `check*` functions
-take plain dicts and return a list of problems; `model.checkEvent(obj,
+take plain dicts and return a list of problems; `model.checkIdentified(obj,
 model.checkUserCommands)` validates the `Identified` wrapper plus body.
 
 ## Host bridging

@@ -602,7 +602,7 @@ func JSONToGoja(vm *goja.Runtime, s []byte) (goja.Value, error) {
 	return root, nil
 }
 
-//// framework /////////////////////////////////////////////////////////////////////////////////////
+//// engine ////////////////////////////////////////////////////////////////////////////////////////
 
 type GoError struct {
 	Inner interface{}
@@ -698,21 +698,21 @@ func (s FileSource) ToSource() (string, string, error) {
 
 //
 
-type Storage interface {
-	ToStorage(vm *goja.Runtime) (goja.Value, error)
+type Store interface {
+	ToStore(vm *goja.Runtime) (goja.Value, error)
 }
 
-type InMemStorage struct {}
+type InMemStore struct {}
 
-func NewInMemStorage() Storage {
-	return InMemStorage{}
+func NewInMemStore() Store {
+	return InMemStore{}
 }
 
-func (s InMemStorage) ToStorage(vm *goja.Runtime) (goja.Value, error) {
-	return vm.New(vm.GlobalObject().Get("InMemStorage"))
+func (s InMemStore) ToStore(vm *goja.Runtime) (goja.Value, error) {
+	return vm.New(vm.GlobalObject().Get("InMemStore"))
 }
 
-// async storage not yet supported
+// async store not yet supported
 type Txn interface {
 	Commit() error
 	Abort()
@@ -733,15 +733,15 @@ func (o *Opaque) Delete(key string) bool { return false }
 func (o *Opaque) Keys() []string { return nil }
 
 
-type GoStorage struct {
+type GoStore struct {
 	txnFactory func(writable bool) (Txn, error)
 }
 
-func NewGoStorage(txnFactory func(writable bool) (Txn, error)) Storage {
-	return &GoStorage{txnFactory}
+func NewGoStore(txnFactory func(writable bool) (Txn, error)) Store {
+	return &GoStore{txnFactory}
 }
 
-func storageSend(vm *goja.Runtime, cb goja.Value, val goja.Value, err error) (goja.Value, error) {
+func storeSend(vm *goja.Runtime, cb goja.Value, val goja.Value, err error) (goja.Value, error) {
 	out := vm.NewObject()
 
 	cbfn, ok := goja.AssertFunction(cb)
@@ -763,53 +763,53 @@ func storageSend(vm *goja.Runtime, cb goja.Value, val goja.Value, err error) (go
 	return cbfn(goja.Undefined(), out)
 }
 
-func wrapStorage(vm *goja.Runtime, fn func(call goja.FunctionCall) (goja.Value, error)) goja.Value {
+func wrapStore(vm *goja.Runtime, fn func(call goja.FunctionCall) (goja.Value, error)) goja.Value {
 	return WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
 		val, err := fn(call)
 		cb := call.Arguments[len(call.Arguments)-1]
-		return storageSend(vm, cb, val, err)
+		return storeSend(vm, cb, val, err)
 	})
 }
 
-func (s GoStorage) ToStorage(vm *goja.Runtime) (goja.Value, error) {
-	sym := "ExternalCallbackStorage"
+func (s GoStore) ToStore(vm *goja.Runtime) (goja.Value, error) {
+	sym := "ExternalCallbackStore"
 	cls := vm.GlobalObject().Get(sym)
 	if cls == nil {
-		return nil, fmt.Errorf("unable to create storage: no such symbol: %v", sym)
+		return nil, fmt.Errorf("unable to create store: no such symbol: %v", sym)
 	}
 
-	factory := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+	factory := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
 		writable := call.Arguments[0]
 		txn, err := s.txnFactory(writable.ToBoolean())
 		if err != nil {
-			return nil, fmt.Errorf("GoStorage.txnFactory: %w", err)
+			return nil, fmt.Errorf("GoStore.txnFactory: %w", err)
 		}
 		return vm.NewDynamicObject(&Opaque{txn}), nil
 
 	})
-	commit := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+	commit := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
 		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
 		err := txn.Commit()
 		return vm.ToValue(true), err
 	})
-	abort := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+	abort := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
 		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
 		txn.Abort()
 		return vm.ToValue(true), nil
 	})
-	get := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+	get := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
 		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
 		key := call.Arguments[1].Export().(string)
 		return txn.Get(key)
 	})
-	set := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+	set := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
 		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
 		key := call.Arguments[1].Export().(string)
 		val := call.Arguments[2]
 		err := txn.Set(key, val)
 		return vm.ToValue(true), err
 	})
-	del := wrapStorage(vm, func(call goja.FunctionCall) (goja.Value, error) {
+	del := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
 		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
 		key := call.Arguments[1].Export().(string)
 		err := txn.Del(key)
@@ -935,9 +935,9 @@ func makeSetTimeout() (func (goja.FunctionCall) goja.Value, func() error) {
 	return setTimeout, run
 }
 
-type Framework[QX QueryContext, E any, C any] struct {
+type Engine[QX QueryContext, E any, C any] struct {
 	vm *goja.Runtime
-	fw *goja.Object
+	eng *goja.Object
 	run func() error
 	newQuery goja.Callable
 	recvEvents goja.Callable
@@ -947,14 +947,14 @@ type Framework[QX QueryContext, E any, C any] struct {
 	qxFactory func(*goja.Runtime, Ask) QX
 }
 
-func NewFramework[QX QueryContext, E any, C any](
+func NewEngine[QX QueryContext, E any, C any](
 	source Source,
 	className string,
-	storage Storage,
+	store Store,
 	migrate string,
 	reducer string,
 	qxFactory func(*goja.Runtime, Ask) QX,
-) (*Framework[QX, E, C], error) {
+) (*Engine[QX, E, C], error) {
 	vm := goja.New()
 
 	// configure a console.log()
@@ -992,9 +992,9 @@ func NewFramework[QX QueryContext, E any, C any](
 		vm.GlobalObject().Set(key, exported.Get(key))
 	}
 
-	storageVal, err := storage.ToStorage(vm)
+	storeVal, err := store.ToStore(vm)
 	if err != nil {
-		return nil, fmt.Errorf("storage: %w", err)
+		return nil, fmt.Errorf("store: %w", err)
 	}
 
 	var migrateFn goja.Value
@@ -1019,45 +1019,45 @@ func NewFramework[QX QueryContext, E any, C any](
 	// we handle QX entirely in go
 	jsqx := goja.Undefined()
 
-	// call `new Framework()`
-	fwClass := vm.GlobalObject().Get(className)
-	if fwClass == nil {
-		return nil, fmt.Errorf("unable to locate Framework subclass: no such symbol: %q", className)
+	// call `new Engine()`
+	engClass := vm.GlobalObject().Get(className)
+	if engClass == nil {
+		return nil, fmt.Errorf("unable to locate Engine subclass: no such symbol: %q", className)
 	}
-	fwConstructor, ok := goja.AssertConstructor(fwClass)
+	engConstructor, ok := goja.AssertConstructor(engClass)
 	if !ok {
 		return nil, fmt.Errorf("symbol %q is not a constructor", className)
 	}
-	fw, err := fwConstructor(nil, storageVal, callbacks, jsqx)
+	eng, err := engConstructor(nil, storeVal, callbacks, jsqx)
 	if err != nil {
-		return nil, fmt.Errorf("new Framework(): %w", err)
+		return nil, fmt.Errorf("new Engine(): %w", err)
 	}
 
 	// get methods now
-	newQuery, ok := goja.AssertFunction(fw.Get("newQuery"))
+	newQuery, ok := goja.AssertFunction(eng.Get("newQuery"))
 	if !ok {
 		return nil, errors.New(".newQuery() method not callable")
 	}
-	recvEvents, ok := goja.AssertFunction(fw.Get("recvEvents"))
+	recvEvents, ok := goja.AssertFunction(eng.Get("recvEvents"))
 	if !ok {
 		return nil, errors.New(".recvEvents() method not callable")
 	}
-	reconnect, ok := goja.AssertFunction(fw.Get("reconnect"))
+	reconnect, ok := goja.AssertFunction(eng.Get("reconnect"))
 	if !ok {
 		return nil, errors.New(".reconnect() method not callable")
 	}
-	fellBehind, ok := goja.AssertFunction(fw.Get("fellBehind"))
+	fellBehind, ok := goja.AssertFunction(eng.Get("fellBehind"))
 	if !ok {
 		return nil, errors.New(".fellBehind() method not callable")
 	}
-	caughtUp, ok := goja.AssertFunction(fw.Get("caughtUp"))
+	caughtUp, ok := goja.AssertFunction(eng.Get("caughtUp"))
 	if !ok {
 		return nil, errors.New(".caughtUp() method not callable")
 	}
 
-	return &Framework[QX, E, C]{
+	return &Engine[QX, E, C]{
 		vm,
-		fw,
+		eng,
 		run,
 		newQuery,
 		recvEvents,
@@ -1068,29 +1068,29 @@ func NewFramework[QX QueryContext, E any, C any](
 	}, nil
 }
 
-func (f *Framework[QX, E, C]) VM() *goja.Runtime {
+func (f *Engine[QX, E, C]) VM() *goja.Runtime {
 	return f.vm
 }
 
-func (f *Framework[QX, E, C]) RecvEvents(rawEvents []goja.Value) error {
-	_, err := f.recvEvents(f.fw, f.vm.ToValue(rawEvents))
+func (f *Engine[QX, E, C]) RecvEvents(rawEvents []goja.Value) error {
+	_, err := f.recvEvents(f.eng, f.vm.ToValue(rawEvents))
 	if err != nil {
 		return err
 	}
 	return f.run()
 }
 
-func (f *Framework[QX, E, C]) FellBehind() error {
-	_, err := f.fellBehind(f.fw)
+func (f *Engine[QX, E, C]) FellBehind() error {
+	_, err := f.fellBehind(f.eng)
 	return err
 }
 
-func (f *Framework[QX, E, C]) CaughtUp() error {
-	_, err := f.caughtUp(f.fw)
+func (f *Engine[QX, E, C]) CaughtUp() error {
+	_, err := f.caughtUp(f.eng)
 	return err
 }
 
-func (f *Framework[QX, E, C]) Reconnect() (*uint64, error) {
+func (f *Engine[QX, E, C]) Reconnect() (*uint64, error) {
 	var out *uint64
 	jsfn := WrapPanics(f.vm, func(call goja.FunctionCall) (goja.Value, error) {
 		var value goja.Value = call.Arguments[0]
@@ -1109,7 +1109,7 @@ func (f *Framework[QX, E, C]) Reconnect() (*uint64, error) {
 		out = &checkpoint
 		return nil, nil
 	})
-	_, err := f.reconnect(f.fw, jsfn)
+	_, err := f.reconnect(f.eng, jsfn)
 	return out, err
 }
 
@@ -1230,7 +1230,7 @@ func (q *Query[T]) Subscribe(fn func(T)) func() {
 }
 
 func NewQuery[QX QueryContext, E any, C any, T any](
-	fw *Framework[QX, E, C],
+	eng *Engine[QX, E, C],
 	fn func(vm *goja.Runtime, qx QX) T,
 ) *Query[T] {
 	// each time a query is run, we create a new javascript iterator around a new coroutine
@@ -1239,16 +1239,16 @@ func NewQuery[QX QueryContext, E any, C any, T any](
 
 		// start query function in a goroutine
 		next := newcoro[goja.Value, goja.Value, T](func(ask func(goja.Value) goja.Value) T {
-			qx := fw.qxFactory(fw.vm, ask)
-			return fn(fw.vm, qx)
+			qx := eng.qxFactory(eng.vm, ask)
+			return fn(eng.vm, qx)
 		})
 
 		// return something that looks like a javascript iterator
-		it := fw.vm.NewObject()
-		it.Set("next", WrapPanics(fw.vm, func(call goja.FunctionCall) (goja.Value, error) {
+		it := eng.vm.NewObject()
+		it.Set("next", WrapPanics(eng.vm, func(call goja.FunctionCall) (goja.Value, error) {
 			question, result, done := next(call.Arguments[0])
 			// return {value, done}
-			out := fw.vm.NewObject()
+			out := eng.vm.NewObject()
 			out.Set("done", done)
 			if !done {
 				out.Set("value", question)
@@ -1261,21 +1261,21 @@ func NewQuery[QX QueryContext, E any, C any, T any](
 		return it
 	}
 
-	// call javascript method: Framework.newQuery(), which should not throw
-	query, err := fw.newQuery(fw.fw, fw.vm.ToValue(queryfunc))
+	// call javascript method: Engine.newQuery(), which should not throw
+	query, err := eng.newQuery(eng.eng, eng.vm.ToValue(queryfunc))
 	if err != nil {
-		panic("framework.newQuery failed??")
+		panic("engine.newQuery failed??")
 	}
 
 	return &Query[T]{
-		vm:    fw.vm,
+		vm:    eng.vm,
 		query: query.(*goja.Object),
 	}
 }
 
 // helpers for dealing with metadata-wrapped event types
 
-func CheckEvent(
+func CheckIdentified(
 	vm *goja.Runtime,
 	value goja.Value,
 	path string,
