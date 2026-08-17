@@ -53,7 +53,7 @@ pnpm install
 pnpm -r build       # tsc for engine + all three emitters
 ```
 
-Demo data models live with the demos (`model/library.tsp`, `todo/model/model.tsp`); each demo's
+Demo data models live with the demos (`model/model.tsp`, `todo/model/model.tsp`); each demo's
 model package depends on the engine and emitters via `link:` entries and declares its outputs in
 `tspconfig.yaml`, so `pnpm exec tsp compile <model>.tsp` there emits under `tsp-output/@kurrent/`.
 The demo makefiles drive this (build the tooling, compile the demo's model, copy outputs into

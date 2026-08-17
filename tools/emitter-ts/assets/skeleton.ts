@@ -2399,10 +2399,105 @@ function matchSent<C>(tpl: any, cmd: C): boolean {
   return Object.entries(tpl).every(([k, v]) => matchSent(v, (cmd as Record<string, any>)[k]));
 }
 
-// "R"educerConte"x"t
-// "Q"ueryConte"x"t
-// "E"vents
-// "C"ommands
+/*
+  Framework diagram: internals, and how it fits into a fully offline-capable client application.
+
+    (* = owned by user)
+     ______________________________________________________
+    |  PWA                                                 |
+    |    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
+    |   | framework                                     |  |
+    |       ___________           ____________________     |
+    |   |  |           |       C |                    | |  |
+    |      | *reducers |<------->| *storage + overlay |    |
+    |   |  |___________|         |____________________| |  |
+    |         ^ B    ^              ^         |            |
+    |   |     |      |              |         | D       |  |
+    |         |     _|___________   |   ______v______      |
+    |   |     |    |             |  |  |             |  |  |
+    |         |    |*forecasters |  |  | query graph |     |
+    |   |     |    |_____________|  |  |_____________|  |  |
+    |         |             ^ G     |         |            |
+    |   |     |         I   |     H |         |         |  |
+    |         |       +-----+-------+         |            |
+    |   |_ _ _|_ _ _ _|_ _ _^_ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
+    |         |       |     |                 | E          |
+    |       __|_______v__   |              ___v__          |
+    |      |             |  | F           |      |         |
+    |      | *websocket  |  +-------------| *UI  |         |
+    |      |_____________|                |______|         |
+    |            ^ A                                       |
+    |____________|_________________________________________|
+                 |
+            _____v______
+           |            |
+           |   *relay   |
+           |____________|
+                 ^
+                 |
+            _____v______
+           |            |
+           | KurrentDB  |
+           |____________|
+
+  **Interfaces**
+
+  A: relay to/from websocket:
+    - relay authenticates connection
+    - relay authorizes which streams a client can read, relays from KurrentDB
+    - relay authorizes and validates incoming write events, relays to KurrentDB
+    - websocket automatically reconnects after network disruptions
+
+  B: websocket to reducers:
+    - incoming events accumulate into batches while waiting for processing
+    - checkpoint data is passed along with events
+    - user can customize batch boundaries if they have specific "packet" boundaries to honor
+    - reducers process incoming batches
+    - write result to storage, along with provided checkpoint
+    - txn will be based on storage
+    - overlay is invalidated (and reconstructed if necessary)
+
+  C: reducers to storage+overlay
+    - when reducers run, they are provided a r+w txn
+    - for real events, txn is based on storage
+        - storage is provided by the user
+        - any transactional key-value store works
+    - for forecast events, txn is based on overlay
+        - overlay is in-memory
+        - reads prefer overlay but fall back to storage
+        - writes only go to overlay
+
+  D: storage+overlay to query graph
+    - query graph woken after every write txn
+    - query graph always based on overaly
+    - modified keys trigger reruns of queries
+
+  D: query graph to ui
+    - ui creates queries, which are functions that do a series of key lookups and
+      return a result that the UI cares about
+    - queries are composable, so they are stored in a graph
+    - each time a query is run, the graph captures the keys it looks up
+    - after every txn, the graph reruns queries that depend on updated keys
+    - queries that return different results on rerun wake up the ui
+    - we should offer generic callback api, as well as popular UI integrations
+
+  F: ui passes new commands into framework
+    - triggers G, H, and I per command
+
+  G: new commands to forecasters
+    - forecaster creates 0 or more forecast events per new event
+    - forecast events go to reducers to update overlay
+
+  H: new commands saved to storage (outbox)
+
+  I: new commands get sent over websocket
+
+  Type variables to Framework:
+  - RX = ReducerContext
+  - QX = QueryContext
+  - E = Events
+  - C = Commands
+*/
 export class Framework<QX, RX, E, C> {
   #rx: RX;
   #storage: Storage;

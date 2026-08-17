@@ -1,244 +1,66 @@
-# Kurrent Engine
+# Kurrent PhaseLock
 
-The sync engine that keeps you "kurrent".
+No more polling for new data.  No more writing REST APIs.
 
-Kurrent engine uses event sourcing to distribute state efficiently from KurrentDB to both backend
-and frontend services.  Business logic for processing events can be written in TypeScript and resued
-by both backend and frontend services.
+Define your data types and how to process them once, and reuse that in your web
+app, your mobile app, and your backend workers.
 
-## Repo Layout (wip)
+## How it works
 
-The tooling for defining types and generating code is in `tools/` (see its README):
+An "event" is what happened, stored in KurrentDB.
 
-- `tools/engine` defines the available types (the TypeSpec vocabulary + lowering IR)
-- `tools/emitter-{ts,py,go}` are the code emitters; each ships its runtime skeleton
-  in `assets/`
-- each demo's data model is a `.tsp` file in its model directory (e.g. `model/library.tsp`),
-  which depends on the engine and emitters via `link:` entries in its package.json
+A "command" is what a client submits, like an event but flowing towards
+KurrentDB rather than read from it.
 
-The business logic lives in `model/`.  The basic idea is that a bundler (`rollup`, in this case) is
-used to capture the all the business logic in `model/` and expose it to one of the system components
-(the `ui`, the `relay`, or the `decider`):
+A "reducer" is a function that reads events to derive current state.
 
-- `model/library.tsp` defines the data types (see `skill/data-model.md`)
-- `model/library.gen.ts` is the TypeScript emitter's output for `model/library.tsp`
-- `model/reducers.ts` contains the business logic for compiling snapshots from events
-- `model/{ui,relay,decider}.ts` are the stubs that export names for use in each system component.
-
-Each system component (`ui/`, `relay/`, `decider`) follows a similar pattern:
-
-- The `model/` is bundled into a json file:
-    - `relay/model.py`
-    - `decider/model/model.go`
-    - `ui/src/{model.js,model.d.ts}`
-- The remaining files implement approximately the user code needed to consume the framework.
-- The relay additioanl contains quickjs bindings for python in `relay/_quickjs.c`.
-
-All outputs (except the built ui) can be generated or built by running `make`.  Type checking for
-python and typescript can be ran with `make check`.
-
-## Running the Demo
-
-- `cd model && pnpm i`: install dependencies for model
-- `cd ui && pnpm i`: install dependencies for ui
-- `make`: generate and compile all non-ui outputs
-- `cd ui && pnpm serve`: run the ui demo
-
-## Architecture Diagrams
-
-### Frontend Diagram (simple version w/o optimistic updates)
-
-This diagram gives a useful mental model of the framework, but in practice would have issues that
-UI events need to a network round trip before they appear in the UI (a user updates text in a field,
-then has to wait a quarter second for that field's value to get update in storage and show in the
-UI).
-
-```
-(* = owned by user)
- ____________________________________________
-|                                            |
-|    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
-|   | framework                           |  |
-|      ___________            __________     |
-|   | |           |          |          | |  |
-|     | *reducers |<-------->| *storage |    |
-|   | |___________|          |__________| |  |
-|         ^                       |          |
-|   |     |                       |       |  |
-|         |               ________v____      |
-|   |     |              |             |  |  |
-|         |              | query graph |     |
-|   |     |              |_____________|  |  |
-|         |                     |            |
-|   |_ _ _|_ _ _ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
-|         |                     |            |
-|       __|__________        ___v__          |
-|      |             |      |      |         |
-|      | *websocket  |<-----| *UI  |         |
-|      |_____________|      |______|         |
-|            ^                               |
-|____________|_______________________________|
-             |
-        _____v______
-       |            |
-       |   *relay   |
-       |____________|
-             ^
-             |
-        _____v______
-       |            |
-       | KurrentDB  |
-       |____________|
-```
-
-### Frontend Diagram (full w/ optimistic updates)
-
-The abstract nature of the business logic encourages the reducers block to be free of side-effects,
-making it easy to to reuse that business logic with an in-memory storage overlay to achieve
-optimistic UI updates.  This requires an extra function from the user, which I call a "forecaster",
-that produces events the application expects the relay to create from each outgoing command.
-
-```
-(* = owned by user)
- ______________________________________________________
-|  PWA                                                 |
-|    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
-|   | framework                                     |  |
-|       ___________           ____________________     |
-|   |  |           |       C |                    | |  |
-|      | *reducers |<------->| *storage + overlay |    |
-|   |  |___________|         |____________________| |  |
-|         ^ B    ^              ^         |            |
-|   |     |      |              |         | D       |  |
-|         |     _|___________   |   ______v______      |
-|   |     |    |             |  |  |             |  |  |
-|         |    |*forecasters |  |  | query graph |     |
-|   |     |    |_____________|  |  |_____________|  |  |
-|         |             ^ G     |         |            |
-|   |     |         I   |     H |         |         |  |
-|         |       +-----+-------+         |            |
-|   |_ _ _|_ _ _ _|_ _ _^_ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
-|         |       |     |                 | E          |
-|       __|_______v__   |              ___v__          |
-|      |             |  | F           |      |         |
-|      | *websocket  |  +-------------| *UI  |         |
-|      |_____________|                |______|         |
-|            ^ A                                       |
-|____________|_________________________________________|
-             |
-        _____v______
-       |            |
-       |   *relay   |
-       |____________|
-             ^
-             |
-        _____v______
-       |            |
-       | KurrentDB  |
-       |____________|
-```
-
-**Interfaces**
-
-A: relay to/from websocket:
-  - relay authenticates connection
-  - relay authorizes which streams a client can read, relays from KurrentDB
-  - relay authorizes and validates incoming write events, relays to KurrentDB
-  - websocket automatically reconnects after network disruptions
-
-B: websocket to reducers:
-  - incoming events accumulate into batches while waiting for processing
-  - checkpoint data is passed along with events
-  - user can customize batch boundaries if they have specific "packet" boundaries to honor
-  - reducers process incoming batches
-  - write result to storage, along with provided checkpoint
-  - txn will be based on storage
-  - overlay is invalidated (and reconstructed if necessary)
-
-C: reducers to storage+overlay
-  - when reducers run, they are provided a r+w txn
-  - for real events, txn is based on storage
-      - storage is provided by the user
-      - any transactional key-value store works
-  - for forecast events, txn is based on overlay
-      - overlay is in-memory
-      - reads prefer overlay but fall back to storage
-      - writes only go to overlay
-
-D: storage+overlay to query graph
-  - query graph woken after every write txn
-  - query graph always based on overaly
-  - modified keys trigger reruns of queries
-
-D: query graph to ui
-  - ui creates queries, which are functions that do a series of key lookups and
-    return a result that the UI cares about
-  - queries are composable, so they are stored in a graph
-  - each time a query is run, the graph captures the keys it looks up
-  - after every txn, the graph reruns queries that depend on updated keys
-  - queries that return different results on rerun wake up the ui
-  - we should offer generic callback api, as well as popular UI integrations
-
-F: ui passes new events into framework
-
-G: new events to forecasters
-  - forecaster creates 0 or more forecast events per new event
-  - forecast events go to reducers to update overlay
-
-H: new events saved to storage (outbox)
-
-I: new events get sent over websocket
+     ______________________________
+    |          Frontend            |
+    |  _________   _______   ____  |
+    | |         | |       | |    | |
+    | | Reducer | | State | | UI | |
+    | |_________| |_______| |____| |
+    |___^____________________|_____|
+        |                    |
+        | Events             | Commands
+        | are                | are
+        | read               | written
+     ___|____________________v_____
+    |           Backend            |
+    |  __________________________  |
+    | |                          | |
+    | |         Server           | |
+    | |__________________________| |
+    |  __________________________  |
+    | |                          | |
+    | |        KurrentDB         | |
+    | |__________________________| |
+    |______________________________|
 
 
-## Backend Diagram
+PhaseLock is tooling around this simple architecture to unlock:
 
-Or: "Yes, this framework will be useful in backends, too".
+- Live queries against current state
+- Optimistic updates without modifying reducers or UI
+- Offline-capable clients that maintain state locally
+- Thin clients that rely on server-side state
+- Hybrid clients that read server-side state while hydrating local state
+- Backend workers that watch the event log to trigger side-effects
 
-Note that the relay shown here scales horizontally, but the decider needs to have at-most-one
-runners at a time.  To scale it, you'd need to shard its responsibility (and you'd still have
-at-most-one runner mechanics within each shard).
-```
-               ____________________________________________
-             _|__________________________________________  |
-           _|__________________________________________  | |
-          |                                            | |_|
-          |                  clients                   |_|
-          |____________________________________________|
-              ^                                   |
-              | events                            | commands
- _____________|___________________________________|____________
-| Relay       |                                   |            |
-|     ________|___________________________________v____        |
-|    |                                                 |       |
-|    |                  websockets                     |       |
-|    |_________________________________________________|       |
-|             ^                                   |            |
-|      _______|_________                  ________v_____       |
-|     |                 |                |              |      |
-|     | incoming stream |                | authn checks |      |
-|     |_________________|                |______________|      |
-|             ^                                   |            |
-|_____________|___________________________________|____________|
-              |                                   |
- _____________|___________________________________v____________
-|                                                              |
-|                         KurrentDB                            |
-|______________________________________________________________|
-              ^                                   |
- _____________|___________________________________|____________
-| Decider     |                                   |            |
-|             |                          _________v________    |
-|             | outgoing                |                  |   |
-|             | decision                | committed events |   |
-|             | events                  |__________________|   |
-|             |                                   |            |
-|  _ _ _ _ _ _|_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _|_ _ _ _ _   |
-| | framework |                                   |         |  |
-|       ______|______       _________       ______v___         |
-| |    |             |     |         |     |          |     |  |
-|      | query graph |<----| storage |<--->| reducers |        |
-| |    |_____________|     |_________|     |__________|     |  |
-|                                                              |
-| |_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _|  |
-|______________________________________________________________|
-```
+## How to get started
+
+Kurrent PhaseLock is still in alpha.  Tests are sparse, docs are missing.
+
+Your coding agent can help until our docs are ready.  Try:
+
+- For Claude: `/plugin marketplace add kurrent-io/phaselock` (XXX, is that it?)
+- For XXX: `...`
+
+Then ask your agent, "how do I use PhaseLock to build \<decribe your app\>?"
+
+Also check out our [examples](./examples), which demonstrate many of the core
+capabilities.
+
+Finally, skim through [skeleton.ts](XXX), the backbone to all of PhaseLock.
+
+Open issues when you find them, and come say hi in [discord](XXX)!
