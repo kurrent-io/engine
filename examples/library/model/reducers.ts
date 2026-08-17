@@ -68,7 +68,7 @@ import {
   VHold,
   VHoldRejected,
   VStatusRX,
-} from './library.gen';
+} from './model.gen';
 
 /* ----- migrations ----- */
 

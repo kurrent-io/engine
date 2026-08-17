@@ -7,5 +7,5 @@ export {
   AdminReducerContext,
   DecodeLibraryEvents,
   InMemStorage,
-} from './library.gen';
+} from './model.gen';
 export { userMigrate, userReducer, userForecaster, adminMigrate, adminReducer } from './reducers';

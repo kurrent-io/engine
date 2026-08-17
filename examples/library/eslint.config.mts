@@ -17,7 +17,7 @@ export default [
   {
     ignores: [
       '**/dist/',
-      'model/library.gen.ts',
+      'model/model.gen.ts',
       'ui/src/model.js',
       'ui/src/model.d.ts',
       'relay/relay.js',

@@ -10,13 +10,13 @@ all: model relay decider ui
 
 # all generated sources
 .PHONY: gen
-gen: model/library.gen.ts relay/relay.js relay/model.py decider/decider.js decider/model/model.go ui/src/model.js ui/src/model.d.ts
+gen: model/model.gen.ts relay/relay.js relay/model.py decider/decider.js decider/model/model.go ui/src/model.js ui/src/model.d.ts
 
-model/library.gen.ts relay/model.py decider/model/model.go &: model/library.tsp model/tspconfig.yaml
-	cd model && pnpm exec tsp compile library.tsp
+model/model.gen.ts relay/model.py decider/model/model.go &: model/model.tsp model/tspconfig.yaml
+	cd model && pnpm exec tsp compile model.tsp
 
 .PHONY: model
-model: model/library.gen.ts
+model: model/model.gen.ts
 
 .PHONY: model/check
 model/check: model
@@ -25,11 +25,11 @@ model/check: model
 .PHONY: relay
 relay: relay/relay.js relay/model.py relay/_quickjs.so
 
-relay/relay.js: model/library.gen.ts model/relay.ts
+relay/relay.js: model/model.gen.ts model/relay.ts
 	cd model && pnpm esbuild relay.ts --bundle --format=esm --sourcemap=inline --outfile=../$@
 
 relay/quickjs:
-	rm -rf quickjs~
+	rm -rf $@~
 	git clone https://github.com/bellard/quickjs $@~
 	mv $@~ $@
 
@@ -46,7 +46,7 @@ relay/check: relay
 .PHONY: decider
 decider: decider/decider
 
-decider/decider.js: model/library.gen.ts model/decider.ts
+decider/decider.js: model/model.gen.ts model/decider.ts
 	cd model && pnpm esbuild decider.ts --bundle --format=cjs --sourcemap=inline --outfile=../$@
 
 decider/decider: decider/decider.js decider/main.go decider/model/model.go
@@ -55,10 +55,10 @@ decider/decider: decider/decider.js decider/main.go decider/model/model.go
 .PHONY: ui
 ui: ui/src/model.js ui/src/model.d.ts
 
-ui/src/model.js: model/library.gen.ts model/ui.ts
+ui/src/model.js: model/model.gen.ts model/ui.ts
 	cd model && pnpm esbuild ui.ts --bundle --format=esm --sourcemap=inline --outfile=../$@
 
-ui/src/model.d.ts: model/library.gen.ts model/ui.ts
+ui/src/model.d.ts: model/model.gen.ts model/ui.ts
 	cd model && pnpm dts-bundle-generator ui.ts -o ../$@
 
 .PHONY: ui/check
@@ -82,12 +82,12 @@ fmt:
 .PHONY: check
 check: decider/decider model/check relay/_quickjs.so relay/check ui/check lint fmt/check
 
-.PHONY: serve
-serve: ui
-	cd ui && pnpm serve
+.PHONY: dev
+dev:
+	./devstack.mts
 
 clean:
-	@rm -f model/library.gen.ts \
+	@rm -f model/model.gen.ts \
 		relay/relay.js relay/model.py relay/_quickjs.so \
 		decider/decider decider/model/model.go \
 		ui/src/model.js ui/src/model.d.ts

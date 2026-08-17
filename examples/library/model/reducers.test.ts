@@ -1,4 +1,4 @@
-import { UserReducerTester } from './library.gen';
+import { UserReducerTester } from './model.gen';
 import { userMigrate, userReducer } from './reducers';
 
 test('user reducer', () => {
