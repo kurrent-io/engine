@@ -72,7 +72,7 @@ Todo examples (`cd examples/todo-basic` or `todo-thin`):
 
 Library example (`cd examples/library`):
 
-- `make gen` — regenerate all generated sources from library.tsp
+- `make gen` — regenerate all generated sources from model.tsp
 - `make` / `make check` — build everything / typecheck + lint + format
 - `cd model && pnpm test` — reducer tests (jest, via ReducerTester)
 - `./devstack.mts` — run the stack (KurrentDB + decider + relay + UI)
