@@ -1,0 +1,8 @@
+{
+  "name": "phaselock",
+  "description": "Build applications on Kurrent PhaseLock: TypeSpec data models, reducers, live queries, optimistic updates, and KurrentDB-backed servers.",
+  "author": {
+    "name": "Kurrent, Inc.",
+    "url": "https://github.com/kurrent-io/phaselock"
+  }
+}
