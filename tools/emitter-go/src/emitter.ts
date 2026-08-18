@@ -1038,14 +1038,15 @@ function generateStore(d: Denter, annos: Annos, converters: Converters, store: K
 
   d.print(`\ntype ${impl} struct {\n`);
   d.indent('\t');
-  d.print(`vm  *goja.Runtime\n`);
-  d.print(`ask Ask\n`);
+  d.print(`vm   *goja.Runtime\n`);
+  d.print(`jsqx goja.Value\n`);
+  d.print(`ask  Ask\n`);
   d.dedent();
   d.print(`}\n`);
 
-  d.print(`\nfunc New${iface}(vm *goja.Runtime, ask Ask) ${iface} {\n`);
+  d.print(`\nfunc New${iface}(vm *goja.Runtime, jsqx goja.Value, ask Ask) ${iface} {\n`);
   d.indent('\t');
-  d.print(`return &${impl}{vm, ask}\n`);
+  d.print(`return &${impl}{vm, jsqx, ask}\n`);
   d.dedent();
   d.print(`}\n`);
 
@@ -1061,8 +1062,8 @@ function generateStore(d: Denter, annos: Annos, converters: Converters, store: K
     d.print(`) ${annos.get(si.type)} {\n`);
     d.indent('\t');
     d.print(`vm := qx.vm\n`);
-    d.print(`value := queryAsk(vm, qx.ask, "${si.chunks.join('%s')}"`);
-    for (const param of si.params) d.print(`, ${param}`);
+    d.print(`value := queryAsk(vm, qx.jsqx, qx.ask, "${si.name}"`);
+    for (const p of si.params) d.print(`, ${p}`);
     d.print(`)\n`);
     d.print(`out := ${converters.get(si.type)!('value')}\n`);
     d.print(`return out\n`);

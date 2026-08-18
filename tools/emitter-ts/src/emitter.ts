@@ -714,22 +714,22 @@ function generateCheckers(
 
 function generateStorePrereqs(d: Denter): void {
   d.print('\n');
-  d.print('function *queryGet<T>(key: string): QueryGenerator<T> {\n');
-  d.print("  const ans = yield {'store': {[key]: true}};\n");
+  d.print('function *queryGet<T>(key: string, decoder: StoreDecoder): QueryGenerator<T> {\n');
+  d.print("  const ans = yield {'store': {[key]: decoder}};\n");
   d.print('  const sv = ans.store[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
   d.print('  return readOnly(sv.value) as T\n');
   d.print('}\n');
   d.print('\n');
-  d.print('function *reducerOld<T>(key: string): Reducer<T> {\n');
-  d.print("  const ans = yield {'old': {[key]: true}};\n");
+  d.print('function *reducerOld<T>(key: string, decoder: StoreDecoder): Reducer<T> {\n');
+  d.print("  const ans = yield {'old': {[key]: decoder}};\n");
   d.print('  const sv = ans.old[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
   d.print('  return copyOnWrite(sv.value) as T\n');
   d.print('}\n');
   d.print('\n');
-  d.print('function *reducerGet<T>(key: string): Reducer<T> {\n');
-  d.print("  const ans = yield {'get': {[key]: true}};\n");
+  d.print('function *reducerGet<T>(key: string, decoder: StoreDecoder): Reducer<T> {\n');
+  d.print("  const ans = yield {'get': {[key]: decoder}};\n");
   d.print('  const sv = ans.get[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
   d.print('  return copyOnWrite(sv.value) as T\n');
@@ -745,8 +745,10 @@ function generateStorePrereqs(d: Denter): void {
   d.print('  const sv = ans.del[key];\n');
   d.print("  if ('err' in sv) throw sv.err;\n");
   d.print('}\n');
-  d.print('function *reducerUpdate<T, R>(key: string, fn: (t: T) => R): Reducer<R> {\n');
-  d.print('  const obj = yield* reducerGet<T>(key);\n');
+  d.print(
+    'function *reducerUpdate<T, R>(key: string, decoder: StoreDecoder, fn: (t: T) => R): Reducer<R> {\n',
+  );
+  d.print('  const obj = yield* reducerGet<T>(key, decoder);\n');
   d.print('  const out = fn(obj);\n');
   d.print('  yield* reducerSet(key, obj);\n');
   d.print('  return out;\n');
@@ -788,13 +790,22 @@ function printTemplate(
   d.print(si.chunks[si.chunks.length - 1]);
 }
 
-function generateStore(d: Denter, annos: Annos, store: KStore): void {
+function printDecoder(d: Denter, decoders: Decoders, t: KType) {
+  const decoder = decoders.get(t);
+  if (decoder === null) {
+    d.print('null');
+  } else {
+    d.print(`(x: any) => ${decoder!('x')}`);
+  }
+}
+
+function generateStore(d: Denter, annos: Annos, decoders: Decoders, store: KStore): void {
   const ctxName = contextName(store.name!);
   // Generate the QueryContext singleton.
   d.print(`\nexport const ${ctxName}QueryContext = {\n`);
   d.indent('  ');
   // generate getters like:
-  // topic: (topic_uuid: Uuid) => queryGet<Topic>(`topic.${topic_uuid}`)
+  // topic: (topic_uuid: Uuid) => queryGet<Topic>(`topic.${topic_uuid}`, (x) => DecodeTopic(x))
   d.print('get: {\n');
   d.indent('  ');
   const originalItems = store.originalItems;
@@ -803,7 +814,9 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
     d.print(si.params.map((p) => p + ': string').join(', '));
     d.print(`) => queryGet<${annos.get(si.type)}>(\``);
     printTemplate(d, si);
-    d.print('`),\n');
+    d.print('`, ');
+    printDecoder(d, decoders, si.type);
+    d.print('),\n');
   }
   // also use the spread operator to reuse definitions from our deps
   for (const dep of store.deps) {
@@ -822,7 +835,7 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
   d.indent('  ');
 
   // generate old getters like:
-  // topic: (topic_uuid: Uuid) => reducerOld<Topic>(`topic.${topic_uuid}`)
+  // topic: (topic_uuid: Uuid) => reducerOld<Topic>(`topic.${topic_uuid}`, (x) => DecodeTopic(x))
   d.print('old: {\n');
   d.indent('  ');
   for (const si of originalItems) {
@@ -830,7 +843,9 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
     d.print(si.params.map((p) => p + ': string').join(', '));
     d.print(`) => reducerOld<${annos.get(si.type)}>(\``);
     printTemplate(d, si);
-    d.print('`),\n');
+    d.print('`, ');
+    printDecoder(d, decoders, si.type);
+    d.print('),\n');
   }
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}ReducerContext.old,\n`);
@@ -839,7 +854,7 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
   d.print('},\n');
 
   // generate getters like:
-  // topic: (topic_uuid: Uuid) => reducerGet<Topic>(`topic.${topic_uuid}`)
+  // topic: (topic_uuid: Uuid) => reducerGet<Topic>(`topic.${topic_uuid}`, (x) => DecodeTopic(x))
   d.print('get: {\n');
   d.indent('  ');
   for (const si of originalItems) {
@@ -847,7 +862,9 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
     d.print(si.params.map((p) => p + ': string').join(', '));
     d.print(`) => reducerGet<${annos.get(si.type)}>(\``);
     printTemplate(d, si);
-    d.print('`),\n');
+    d.print('`, ');
+    printDecoder(d, decoders, si.type);
+    d.print('),\n');
   }
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}ReducerContext.get,\n`);
@@ -901,7 +918,9 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
     d.print(`fn: (value: ${annos.get(si.type)}) => R`);
     d.print(') => reducerUpdate(`');
     printTemplate(d, si);
-    d.print('`, fn),\n');
+    d.print('`, ');
+    printDecoder(d, decoders, si.type);
+    d.print(', fn),\n');
   }
   for (const dep of store.deps) {
     d.print(`...${contextName(dep.name!)}ReducerContext.update,\n`);
@@ -937,13 +956,11 @@ export class ${f.name} extends Engine<${QX}, ${RX}, ${eventType}, ${commandType}
       reducer: (rx: ${RX}, events: ${eventType}[]) => Reducer<void | any[]>,
       // optional: forecast the events a server will send for a command
       forecaster?: (commands: ${commandType}) => ${eventType}[],
-      // required if using sendCommands: receive events to send on the wire
+      // required if using sendCommands: receive events to send on the wire (in plain-json format)
       onCommands?: (commands: Identified<any>[])=> void,
     },
-    // used in cross-language support: inject an arbitrary object as the QueryContext
-    qx?: any,
   ) {
-    super(qx ?? ${qx}, ${rx}, store, {
+    super(${qx}, ${rx}, store, {
         ...callbacks,
         decodeEvent: ${decodeEvent},
         decodeCommand: ${decodeCommand},
@@ -1188,7 +1205,7 @@ export function generateTs(lowered: LoweredProgram, skeleton: string): string {
 
   // Generate stores
   if (stores.length) generateStorePrereqs(d);
-  for (const s of stores) generateStore(d, annos, s);
+  for (const s of stores) generateStore(d, annos, decoders, s);
 
   // Generate engines
   for (const e of engines) generateEngine(d, annos, e);

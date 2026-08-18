@@ -53,8 +53,9 @@ from it. Nothing else writes the store — not the UI, not the server code.
 Every component (browser tab, server, worker) runs the same loop: feed
 events to reducers, keep a store of current state, serve live queries from
 it. The reducers are written once, in TypeScript, and run in the browser,
-in Node, or embedded in other languages (currently Python (QuickJS) and
-Go (goja) bindings exist).
+in Node, or embedded in other languages (proof-of-concept Python
+(QuickJS) and Go (goja) bindings exist; see their reference files for
+status).
 
 You define the data model (events, commands, store layout, queries) in
 TypeSpec. Code generation produces typed TypeScript and cross-language

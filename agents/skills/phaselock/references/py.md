@@ -7,6 +7,11 @@ extension ships as its own package (`kurrent-phaselock-quickjs`,
 imported as `kurrent.phaselock._quickjs`); `model.py` imports it
 internally.
 
+**Status: proof of concept.** The Python host works for evaluation and
+experiments but is not ready for serious use; in particular the
+Python-native store path is untested — pass `None` to use the in-memory
+store.
+
 ## Bundle
 
 The component's entry stub is bundled to ESM with inline sourcemaps

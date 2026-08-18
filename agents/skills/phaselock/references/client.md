@@ -26,26 +26,33 @@ Store choices:
 
 - `InMemStore` — ephemeral; state rebuilds from the log each load.
 - `IndexedDBStore` — persistent; the app resumes from its checkpoint and
-  works offline. Constructed with an open `IDBDatabase`, an object-store
-  name, and encode/decode hooks for values.
+  works offline. Constructed with an open `IDBDatabase` and an
+  object-store name.
 - `ExternalStore` — adapt any transactional key-value store by supplying
-  a transaction factory (used server-side more than in browsers).
+  a transaction factory (used server-side more than in browsers). The
+  Store is responsible for accepting rich values for `set` and returning
+  rich values for `get`.  `set` can use EncodeProto to lower to plain JSON
+  or protoStringify to lower to json-encoded string; `get` receives a
+  decoder parameter to lift from plain JSON to rich object.  If the store
+  natively handles rich types, the decoder can be ignored.
 
 ## The engine API
 
 - `recvEvents(events)` — feed committed events from the wire, each shaped
-  `{ position, id, data }` (a `Committed`). Data is raw JSON; the engine
-  decodes internally.
+  `{ position, id, data }` (a `Committed`). `events` should be in plain
+  JSON format (no Date, Map, or Set); the engine applies the generated
+  decoders internally so don't pre-decode events yourself.
 - `caughtUp()` / `fellBehind()` — bracket live-ness. During catchup (and
   disconnection) events fold into the store but queries hold; on
   `caughtUp()` all queries run once against the settled state.  For most
   applications, calling `caughtUp()` once after waking up and finishing
   the initial sync is sufficient.
-- `sendCommands(commands)` — hand over plain command values. The engine
-  wraps each as `Identified` (assigns the wrapper id), persists it (the
-  outbox — commands survive restarts until acknowledged), runs the
-  forecaster, and then calls `onCommands(identified)` for the app to
-  transmit.
+- `sendCommands(commands)` — hand over command values in rich form (a
+  `Date` field is a real `Date`). The engine wraps each as `Identified`
+  (assigns the wrapper id), persists it (the outbox — commands survive
+  restarts until acknowledged), runs the forecaster, and then calls
+  `onCommands(identified)` with the commands already encoded to plain
+  JSON — transmit them as-is.
 - `reconnect(cb)` — asks the store for `{ checkpoint, commands }`: the last
   applied log position and any outbox contents. Call it before (re)dialing
   so the server can resume you from `checkpoint`, then retransmit
@@ -130,7 +137,12 @@ engine.sendCommands([{ type: 'new-list', id: crypto.randomUUID(), name }]);
 
 The `id` in that command is the new list's permanent identity, minted by
 the client — see the next section, because that one line carries a lot of
-the offline story.
+the offline story. Note that rich data types are passed to sendCommands
+(like Date), but what you later receive in your onCommands or reconnect
+callback will be plain json (Dates encoded as strings).  The reason is that
+sendCommands() is called from the UI with rich typing, but onCommands and
+reconnect callbacks are meant to be passed directly over the wire, with
+nothing but a type-agnostic JSON.stringify() or messagepack step.
 
 ## Client-minted ids
 

@@ -5,6 +5,11 @@ JavaScript interpreter (no cgo). The generated `model.go` wraps the
 embedded engine with typed native APIs, so host code mostly avoids raw
 JavaScript values.
 
+**Status: proof of concept.** The Go host works for evaluation and
+experiments but is not ready for serious use: the Go generator does not
+handle some model shapes at all, and the Go-native store path
+(`NewGoStore`) is untested — use `NewInMemStore`.
+
 ## Bundle
 
 The component's entry stub is bundled to CJS with inline sourcemaps

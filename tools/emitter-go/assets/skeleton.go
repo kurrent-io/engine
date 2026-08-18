@@ -645,14 +645,34 @@ type QueryContext interface {
 	Ask(goja.Value) goja.Value
 }
 
-func queryAsk(vm *goja.Runtime, ask Ask, key string, keyargs... interface{}) goja.Value {
-	if len(keyargs) > 0 {
-		key = fmt.Sprintf(key, keyargs...)
+func queryAsk(vm *goja.Runtime, jsqx goja.Value, ask Ask, fn string, args... string) goja.Value {
+	// call the native JS QX since it knows what decoder to include with the StoreQuestion
+	getter, ok := goja.AssertFunction(jsqx.(*goja.Object).Get("get").(*goja.Object).Get(fn))
+	if !ok {
+		panic(fmt.Sprintf("jsqx.get.%s is not a function!", fn))
 	}
-	store := vm.NewObject()
-	store.Set(key, true)
-	question := vm.NewObject()
-	question.Set("store", store)
+	// call the JS QX function, which returns an iterator
+	jsargs := make([]goja.Value, len(args))
+	for i, arg := range args {
+		jsargs[i] = vm.ToValue(arg)
+	}
+	jsiter, err := getter(goja.Undefined(), jsargs...)
+	if err != nil {
+		panic(err)
+	}
+	// call next on the iterator to actually get the StoreQuestion
+	nextFn, ok := goja.AssertFunction(jsiter.(*goja.Object).Get("next"))
+	if !ok {
+		panic(fmt.Sprintf("jsqx.get.%s() did not return an iterator!", fn))
+	}
+	yielded, err := nextFn(jsiter)
+	if err != nil {
+		panic(err)
+	}
+	question := yielded.(*goja.Object).Get("value")
+	// hijack the key from the question
+	key := question.(*goja.Object).Get("store").(*goja.Object).Keys()[0]
+	// actually ask the question, but intercept the answer here (avoid queryGet()'s readOnly() call)
 	answer := ask(question).(*goja.Object).Get("store").(*goja.Object).Get(key).(*goja.Object)
 	if err := answer.Get("err"); err != nil {
 		panic(err)
@@ -944,7 +964,7 @@ type Engine[QX QueryContext, E any, C any] struct {
 	reconnect goja.Callable
 	fellBehind goja.Callable
 	caughtUp goja.Callable
-	qxFactory func(*goja.Runtime, Ask) QX
+	qxFactory func(*goja.Runtime, goja.Value, Ask) QX
 }
 
 func NewEngine[QX QueryContext, E any, C any](
@@ -953,7 +973,7 @@ func NewEngine[QX QueryContext, E any, C any](
 	store Store,
 	migrate string,
 	reducer string,
-	qxFactory func(*goja.Runtime, Ask) QX,
+	qxFactory func(*goja.Runtime, goja.Value, Ask) QX,
 ) (*Engine[QX, E, C], error) {
 	vm := goja.New()
 
@@ -1016,9 +1036,6 @@ func NewEngine[QX QueryContext, E any, C any](
 	callbacks.Set("reducer", reducerFn)
 	callbacks.Set("migrate", migrateFn)
 
-	// we handle QX entirely in go
-	jsqx := goja.Undefined()
-
 	// call `new Engine()`
 	engClass := vm.GlobalObject().Get(className)
 	if engClass == nil {
@@ -1028,7 +1045,7 @@ func NewEngine[QX QueryContext, E any, C any](
 	if !ok {
 		return nil, fmt.Errorf("symbol %q is not a constructor", className)
 	}
-	eng, err := engConstructor(nil, storeVal, callbacks, jsqx)
+	eng, err := engConstructor(nil, storeVal, callbacks)
 	if err != nil {
 		return nil, fmt.Errorf("new Engine(): %w", err)
 	}
@@ -1236,10 +1253,11 @@ func NewQuery[QX QueryContext, E any, C any, T any](
 	// each time a query is run, we create a new javascript iterator around a new coroutine
 	queryfunc := func(call goja.FunctionCall) goja.Value {
 		// arg is just (qx: javscriptQX)
+		jsqx := call.Arguments[0]
 
 		// start query function in a goroutine
 		next := newcoro[goja.Value, goja.Value, T](func(ask func(goja.Value) goja.Value) T {
-			qx := eng.qxFactory(eng.vm, ask)
+			qx := eng.qxFactory(eng.vm, jsqx, ask)
 			return fn(eng.vm, qx)
 		})
 

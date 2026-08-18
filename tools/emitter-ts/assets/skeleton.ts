@@ -1206,7 +1206,8 @@ export class FutureContext {
 
 // an indexeddb-compatible, transactional key-value store built around generators.
 //
-// A note about typing: the Store interface must receive a value with .set() and return the same
+// A note about typing: the Store interface must receive a rich value with .set() and return the
+// same rich value with .get().
 // type value with .get().  It must not matter which implementation of Store is in use.  However,
 // most of the access to the store is untyped.  So the store cannot get() and set() the real proto
 // values.  Instead, a Store implementation which stores anywhere other than in-memory must do
@@ -1217,6 +1218,12 @@ export class FutureContext {
 // is callback-based and should support multiple parallel gets and sets at the API level, even if
 // they must be serialized internally.  The run{R,W}Txn functions are used to convert the callback
 // interface of WTxn and RTxn to the StoreGenerator protocol.
+//
+// The store should accept rich values (including Date, Map, and Set) via .set() and it should
+// return rich values with .get(), even if it can't store them.  For sets, EncodeProto and
+// protoStringify can help lower values to plain json objects or json string.  For gets, the
+// generated decoder is passed along with each .get() that can lift values from plain json objects
+// to rich objects.
 export interface Store {
   withWTxn<T>(fx: FutureContext, fn: (txn: WTxn) => Future<T>): Future<T>;
   withRTxn<T>(fx: FutureContext, fn: (txn: RTxn) => Future<T>): Future<T>;
@@ -1225,20 +1232,24 @@ export interface Store {
 export type StoreValue = { value: unknown } | { err: Error };
 export type StoreDone = { value: true } | { err: Error };
 
+// Every .set can use the same EncodeProto, but reads need to know what generated decoder to use.
+// null means "identity"
+export type StoreDecoder = null | ((value: unknown) => unknown);
+
 export interface WTxn {
-  get(key: string, cb: (result: StoreValue) => void): void;
+  get(key: string, decoder: StoreDecoder, cb: (result: StoreValue) => void): void;
   set(key: string, value: unknown, cb: (result: StoreDone) => void): void;
   del(key: string, cb: (result: StoreDone) => void): void;
 }
 
 export interface RTxn {
-  get(key: string, cb: (result: StoreValue) => void): void;
+  get(key: string, decoder: StoreDecoder, cb: (result: StoreValue) => void): void;
 }
 
 export type WStoreQuestion = {
-  // keys to look up
-  get?: Record<string, true>;
-  // key-values to set
+  // keys to look up, plus the generated decoder to take them from plain json -> rich types
+  get?: Record<string, StoreDecoder>;
+  // key-values to set (no encoder needed; EncodeProto or protoStringify work on all storable types)
   set?: Record<string, unknown>;
   // key-values to delete
   del?: Record<string, true>;
@@ -1246,7 +1257,7 @@ export type WStoreQuestion = {
 
 export type RStoreQuestion = {
   // keys to look up
-  get?: Record<string, true>;
+  get?: Record<string, StoreDecoder>;
 };
 
 export type StoreAnswer = {
@@ -1262,8 +1273,8 @@ export type WStoreGenerator<T> = Generator<WStoreQuestion, T, StoreAnswer>;
 export type RStoreGenerator<T> = Generator<RStoreQuestion, T, StoreAnswer>;
 
 // function to interact with the StoreGenerator
-export function* txnGet(key: string): RStoreGenerator<unknown> {
-  const ans = (yield { get: { [key]: true } }).get[key];
+export function* txnGet(key: string, decoder: StoreDecoder): RStoreGenerator<unknown> {
+  const ans = (yield { get: { [key]: decoder } }).get[key];
   if ('err' in ans) {
     throw ans.err;
   }
@@ -1316,8 +1327,8 @@ function* runWTxn<T>(fx: FutureContext, txn: WTxn, g: WStoreGenerator<T>): Futur
       ready = false;
 
       // start gets
-      for (const key of Object.keys(value.get ?? {})) {
-        txn.get(key, (result) => {
+      for (const [key, decoder] of Object.entries(value.get ?? {})) {
+        txn.get(key, decoder, (result) => {
           if (!valid) return; // ignore late callback
           ans.get[key] = result;
           ready = true;
@@ -1369,8 +1380,8 @@ function* runRTxn<T>(fx: FutureContext, txn: RTxn, g: RStoreGenerator<T>): Futur
       ready = false;
 
       // start gets
-      for (const key of Object.keys(value.get ?? {})) {
-        txn.get(key, (result) => {
+      for (const [key, decoder] of Object.entries(value.get ?? {})) {
+        txn.get(key, decoder, (result) => {
           if (!valid) return; // ignore late callback
           ans.get[key] = result;
           ready = true;
@@ -1386,20 +1397,13 @@ function* runRTxn<T>(fx: FutureContext, txn: RTxn, g: RStoreGenerator<T>): Futur
   }
 }
 
-type StoreCoders = {
-  encoder: (key: string, val: unknown) => unknown;
-  decoder: (key: string, val: unknown) => unknown;
-};
-
 export class IndexedDBStore {
   #db: IDBDatabase;
   #store: string;
-  #coders: StoreCoders;
 
-  constructor(db: IDBDatabase, store: string, coders: StoreCoders) {
+  constructor(db: IDBDatabase, store: string) {
     this.#db = db;
     this.#store = store;
-    this.#coders = coders;
   }
 
   *#withTxn<T>(
@@ -1423,7 +1427,7 @@ export class IndexedDBStore {
       fx.wakeup();
     };
     const store = txn.objectStore(this.#store);
-    const indexedDBTxn = new IndexedDBTxn(store, this.#coders);
+    const indexedDBTxn = new IndexedDBTxn(store);
 
     // run the user function
     let result: T;
@@ -1450,17 +1454,16 @@ export class IndexedDBStore {
 
 class IndexedDBTxn {
   #store: IDBObjectStore;
-  #coders: StoreCoders;
 
-  constructor(store: IDBObjectStore, coders: StoreCoders) {
+  constructor(store: IDBObjectStore) {
     this.#store = store;
-    this.#coders = coders;
   }
 
-  get(key: string, cb: (result: StoreValue) => void): void {
+  get(key: string, _decoder: StoreDecoder, cb: (result: StoreValue) => void): void {
     const req = this.#store.get(key);
     req.onsuccess = () => {
-      cb({ value: this.#coders.decoder(key, req.result) });
+      // IndexedDB does not need decoding
+      cb({ value: req.result });
     };
     req.onerror = () => {
       cb({ err: new Error(`failed to look up "${key}"`) });
@@ -1468,7 +1471,8 @@ class IndexedDBTxn {
   }
 
   set(key: string, value: unknown, cb: (result: StoreDone) => void): void {
-    const req = this.#store.put(this.#coders.encoder(key, value), key);
+    // IndexedDB does not need encoding
+    const req = this.#store.put(value, key);
     req.onsuccess = () => {
       cb({ value: true });
     };
@@ -1488,7 +1492,6 @@ class IndexedDBTxn {
   }
 }
 
-// InMemStore does not require any StoreCoders because it never encodes or decodes.
 export class InMemStore {
   #data: Record<string, unknown>;
 
@@ -1530,7 +1533,7 @@ class InMemTxn {
     this.#updates = updates;
   }
 
-  get(key: string, cb: (result: StoreValue) => void): void {
+  get(key: string, _decoder: StoreDecoder, cb: (result: StoreValue) => void): void {
     if (key in this.#updates) {
       cb({ value: this.#updates[key] });
     } else {
@@ -1598,13 +1601,13 @@ class OverlayTxn {
     this.#updates = updates;
   }
 
-  get(key: string, cb: (result: StoreValue) => void): void {
+  get(key: string, decoder: StoreDecoder, cb: (result: StoreValue) => void): void {
     if (key in this.#updates) {
       cb({ value: this.#updates[key] });
     } else if (key in this.#data) {
       cb({ value: this.#data[key] });
     } else {
-      this.#base.get(key, cb);
+      this.#base.get(key, decoder, cb);
     }
   }
 
@@ -1625,9 +1628,9 @@ type MaybePromise<T> = T | Promise<T>;
 
 // ExternalStoreTxn is part of ExternalStore.
 export interface ExternalStoreTxn {
-  // get gets a value
-  get(key: string): MaybePromise<unknown>;
-  // set sets a value
+  // get gets a value (specific decoder is provided, if needed)
+  get(key: string, decoder: StoreDecoder): MaybePromise<unknown>;
+  // set sets a value (store backend may call EncodeProto if needed)
   set(key: string, value: unknown): MaybePromise<void>;
   // del deletes a value
   del(key: string): MaybePromise<void>;
@@ -1678,8 +1681,8 @@ export class ExternalStore {
 
     const userTxn = yield* resolve(this.#txnFn(writable));
     const txn: WTxn = {
-      get: (key: string, cb: (result: StoreValue) => void) => {
-        toPromise(userTxn.get(key)).then(
+      get: (key: string, decoder: StoreDecoder, cb: (result: StoreValue) => void) => {
+        toPromise(userTxn.get(key, decoder)).then(
           (result) => cb({ value: result }),
           (e: unknown) => cb({ err: e as Error }),
         );
@@ -1725,9 +1728,9 @@ export class ExternalStore {
 
 export type ReducerQuestion = {
   // keys to look up
-  old?: Record<string, true>;
+  old?: Record<string, StoreDecoder>;
   // keys to look up
-  get?: Record<string, true>;
+  get?: Record<string, StoreDecoder>;
   // key-values to set
   set?: Record<string, unknown>;
   // key-values to delete
@@ -1818,7 +1821,7 @@ export function* runReducer(
       ans = { old: {}, get: {}, set: {}, del: {} };
       ready = false;
 
-      for (const key of Object.keys(value.old ?? {})) {
+      for (const [key, decoder] of Object.entries(value.old ?? {})) {
         if (key in old) {
           // we already know this one
           // note that copyOnWrite() is applied inside the ReducerContext; not here
@@ -1826,12 +1829,12 @@ export function* runReducer(
           ready = true;
         } else if (!inflight[key]) {
           inflight[key] = true;
-          storeQuestion.get![key] = true;
+          storeQuestion.get![key] = decoder;
           setdefault(pending, key, {}).old = true;
         }
       }
 
-      for (const key of Object.keys(value.get ?? {})) {
+      for (const [key, decoder] of Object.entries(value.get ?? {})) {
         if (key in cur) {
           // value was already set
           // TODO: let copyOnWrite() fork an existing copyOnWrite object, so we don't have to
@@ -1846,7 +1849,7 @@ export function* runReducer(
           ready = true;
         } else if (!inflight[key]) {
           inflight[key] = true;
-          storeQuestion.get![key] = true;
+          storeQuestion.get![key] = decoder;
           setdefault(pending, key, {}).get = true;
         }
       }
@@ -1933,7 +1936,7 @@ export interface LocalQuery<T> extends Query<T> {
 
 export type QueryQuestion = {
   // which keys to look up in the store
-  store?: Record<string, true>;
+  store?: Record<string, StoreDecoder>;
   // which query ids to await their result
   query?: Record<string, true>;
 };
@@ -2106,7 +2109,7 @@ class GraphRun<QX> {
     let runnable: Record<string, QueryAnswer> = {};
     // which queries are unblocked by a given answer
     // {answer_key: query_id[]}
-    const wantAnswers: Record<string, string[]> = {};
+    const wantAnswers: Record<string, [StoreDecoder, string[]]> = {};
     // which queries are unblocked by a given query result
     // {query_id: query_id[]}
     const wantResults: Record<string, string[]> = {};
@@ -2144,8 +2147,8 @@ class GraphRun<QX> {
             continue;
           }
           // query is blocked; handle its store and query questions
-          for (const key of Object.keys(value.store ?? {})) {
-            setdefault(wantAnswers, key, []).push(qid);
+          for (const [key, decoder] of Object.entries(value.store ?? {})) {
+            setdefault(wantAnswers, key, [decoder, []])[1].push(qid);
           }
           for (const id of Object.keys(value.query ?? {})) {
             // has this query ran yet?
@@ -2164,9 +2167,9 @@ class GraphRun<QX> {
       if (Object.keys(active).length === 0) break;
 
       // send all pending questions to the store
-      const gets: Record<string, true> = {};
-      for (const key of Object.keys(wantAnswers)) {
-        gets[key] = true;
+      const gets: Record<string, StoreDecoder> = {};
+      for (const [key, [decoder]] of Object.entries(wantAnswers)) {
+        gets[key] = decoder;
       }
       const answers = (yield { get: gets }).get;
 
@@ -2176,7 +2179,7 @@ class GraphRun<QX> {
         throw new Error('empty answer');
       }
       for (const [key, value] of answerEntries) {
-        for (const qid of wantAnswers[key]) {
+        for (const qid of wantAnswers[key][1]) {
           setdefault(runnable, qid, { query: {}, store: {} }).store[key] = value;
         }
         delete wantAnswers[key];
@@ -2348,6 +2351,10 @@ export type Committed<T> = Identified<T> & {
   position: number;
 };
 
+export function DecodeIdentified<T>(val: any, subdecoder: (val: any) => T): Identified<T> {
+  return { ...val, data: subdecoder(val.data) } as Identified<T>;
+}
+
 export function DecodeCommitted<T>(val: any, subdecoder: (val: any) => T): Committed<T> {
   return { ...val, data: subdecoder(val.data) } as Committed<T>;
 }
@@ -2392,113 +2399,82 @@ function matchSent<C>(tpl: any, cmd: C): boolean {
   return Object.entries(tpl).every(([k, v]) => matchSent(v, (cmd as Record<string, any>)[k]));
 }
 
-/*
-  Engine diagram: internals, and how it fits into a fully offline-capable client application.
+/* Engine builds a sync engine out of a Store implementation and a reducer to process incoming
+   events.
 
-    (* = owned by user)
-     ______________________________________________________
-    |  PWA                                                 |
-    |    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
-    |   | engine                                        |  |
-    |       ___________           ____________________     |
-    |   |  |           |       C |                    | |  |
-    |      | *reducers |<------->| *store + overlay   |    |
-    |   |  |___________|         |____________________| |  |
-    |         ^ B    ^              ^         |            |
-    |   |     |      |              |         | D       |  |
-    |         |     _|___________   |   ______v______      |
-    |   |     |    |             |  |  |             |  |  |
-    |         |    |*forecasters |  |  | query graph |     |
-    |   |     |    |_____________|  |  |_____________|  |  |
-    |         |             ^ G     |         |            |
-    |   |     |         I   |     H |         |         |  |
-    |         |       +-----+-------+         |            |
-    |   |_ _ _|_ _ _ _|_ _ _^_ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
-    |         |       |     |                 | E          |
-    |       __|_______v__   |              ___v__          |
-    |      |             |  | F           |      |         |
-    |      | *websocket  |  +-------------| *UI  |         |
-    |      |_____________|                |______|         |
-    |            ^ A                                       |
-    |____________|_________________________________________|
-                 |
-            _____v______
-           |            |
-           |   *relay   |
-           |____________|
-                 ^
-                 |
-            _____v______
-           |            |
-           | KurrentDB  |
-           |____________|
+   Optionally, it also receives the following user configurations:
+     - a migrate function, to prepare the Store on startup
+     - an onCommands hook and a forecaster, to enable optimistic updates, such as for a UI.
 
-  **Interfaces**
+   When provided with onCommands, forecaster, and a persistent Store implementation, Engine forms
+   the core of a fully offline-capable application.
 
-  A: relay to/from websocket:
-    - relay authenticates connection
-    - relay authorizes which streams a client can read, relays from KurrentDB
-    - relay authorizes and validates incoming write events, relays to KurrentDB
-    - websocket automatically reconnects after network disruptions
+   Engine internals diagram:
 
-  B: websocket to reducers:
-    - incoming events accumulate into batches while waiting for processing
-    - checkpoint data is passed along with events
-    - user can customize batch boundaries if they have specific "packet" boundaries to honor
-    - reducers process incoming batches
-    - write result to the store, along with provided checkpoint
-    - txn will be based on the store
-    - overlay is invalidated (and reconstructed if necessary)
+       (* = owned by user)
+        ______________________________________________________
+       |  PWA                                                 |
+       |    _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _   |
+       |   | engine                                        |  |
+       |       ___________           __________________       |
+       |   |  |           |       C |                  |   |  |
+       |      | *reducers |<------->| *store + overlay |      |
+       |   |  |___________|         |__________________|   |  |
+       |         ^ B    ^              ^         |            |
+       |   |     |      |              |         | D       |  |
+       |         |     _|___________   |   ______v______      |
+       |   |     |    |             |  |  |             |  |  |
+       |         |    |*forecasters |  |  | query graph |     |
+       |   |     |    |_____________|  |  |_____________|  |  |
+       |         |             ^ G     |         |            |
+       |   |     |         I   |     H |         |         |  |
+       |         |       +-----+-------+         |            |
+       |   |_ _ _|_ _ _ _|_ _ _^_ _ _ _ _ _ _ _ _|_ _ _ _ _|  |
+       |         |       |     |                 | E          |
+       |       __|_______v__   |              ___v__          |
+       |      |             |  | F           |      |         |
+       |      | *transport  |  +-------------| *UI  |         |
+       |      |_____________|                |______|         |
+       |            ^ A                                       |
+       |____________|_________________________________________|
+                    |
+               _____v______
+              |            |
+              |   *relay   |
+              |____________|
+                    ^
+                    |
+               _____v______
+              |            |
+              | KurrentDB  |
+              |____________|
 
-  C: reducers to store+overlay
-    - when reducers run, they are provided a r+w txn
-    - for real events, txn is based on the store
-        - store is provided by the user
-        - any transactional key-value store works
-    - for forecast events, txn is based on overlay
-        - overlay is in-memory
-        - reads prefer overlay but fall back to the store
-        - writes only go to overlay
+       A: transport talks to relay, reading events, writing commands, and handling disconnects
 
-  D: store+overlay to query graph
-    - query graph woken after every write txn
-    - query graph always based on overaly
-    - modified keys trigger reruns of queries
+       B: transport calls Engine.recvEvents() on new events, which triggers reducers
 
-  D: query graph to ui
-    - ui creates queries, which are functions that do a series of key lookups and
-      return a result that the UI cares about
-    - queries are composable, so they are stored in a graph
-    - each time a query is run, the graph captures the keys it looks up
-    - after every txn, the graph reruns queries that depend on updated keys
-    - queries that return different results on rerun wake up the ui
-    - we should offer generic callback api, as well as popular UI integrations
+       C: reducers process incoming batches, updating store
 
-  F: ui passes new commands into engine
-    - triggers G, H, and I per command
+       D: query graph wakes after store update and reruns queries whose dependencies have changed
 
-  G: new commands to forecasters
-    - forecaster creates 0 or more forecast events per new event
-    - forecast events go to reducers to update overlay
+       E: fresh query results are delivered to the UI
 
-  H: new commands saved to the store (outbox)
+       F: UI submits new commands with Engine.sendCommands()
 
-  I: new commands get sent over websocket
+       G: new commands trigger forecaster; forecasted events are reduced onto storage overlay
 
-  Type variables to Engine:
-  - RX = ReducerContext
-  - QX = QueryContext
-  - E = Events
-  - C = Commands
+       H: new commands are also stored in an outbox in the store
+
+       I: new commands also trigger the user's onCommands() hook so they can be sent over transport
 */
 export class Engine<QX, RX, E, C> {
   #rx: RX;
   #store: Store;
   #decodeEvent: (raw: any) => E;
+  #decodeCommand: (raw: any) => Identified<C>;
   #migrate: null | ((rx: RX) => Reducer<void>);
   #reducer: (rx: RX, events: E[]) => Reducer<any[] | void>;
   #forecaster: null | ((commands: C) => E[]);
-  #decodeCommand: null | ((raw: any) => C);
   #onCommands: null | ((commands: Identified<any>[]) => void);
 
   #live: boolean = false;
@@ -2532,9 +2508,9 @@ export class Engine<QX, RX, E, C> {
     // if store is null, InMemStore is used
     store: Store | null,
     callbacks: {
-      // required: convert from json format to full type
+      // injected by generated subclass: convert from json format to full type
       decodeEvent: (raw: any) => E;
-      // required if using sendCommands: convert from store/wire format
+      // injected by generated subclass: convert from store/wire format
       decodeCommand: (raw: any) => C;
       // optional: configure store before any events arrive
       migrate?: (rx: RX) => Reducer<void>;
@@ -2542,14 +2518,14 @@ export class Engine<QX, RX, E, C> {
       reducer: (rx: RX, events: E[]) => Reducer<void | any[]>;
       // optional: forecast the events a server will send for a batch of commands
       forecaster?: (commands: C) => E[];
-      // required if using sendCommands: receive events to send on the wire
+      // required if using sendCommands: receive events to send on the wire (in plain-json format)
       onCommands?: (commands: any[]) => void;
     },
   ) {
     this.#rx = rx;
     this.#store = store ?? new InMemStore();
     this.#decodeEvent = callbacks.decodeEvent;
-    this.#decodeCommand = callbacks.decodeCommand ?? null;
+    this.#decodeCommand = (value: any) => DecodeIdentified(value, callbacks.decodeCommand);
     this.#migrate = callbacks.migrate ?? null;
     this.#reducer = callbacks.reducer;
     this.#forecaster = callbacks.forecaster ?? null;
@@ -2574,7 +2550,8 @@ export class Engine<QX, RX, E, C> {
     this.#schedule();
   }
 
-  // new events from the wire come here
+  // New events from the wire come here.  They must be in plain json format (the decodeEvent
+  // callback from the constructor is applied universally to the raw incoming events).
   recvEvents(raw: Committed<any>[]): void {
     for (const r of raw) {
       const event = DecodeCommitted(r, this.#decodeEvent);
@@ -2593,13 +2570,12 @@ export class Engine<QX, RX, E, C> {
     this.#schedule();
   }
 
-  // after forecasting and saving to the store, these will appear in an onCommands() callback
+  // After forecasting and saving to the store, these will appear in an onCommands() callback.
+  // Note that the provided commands should be in rich format (Date, Maps, and Sets all intact),
+  // but they will be encoded to plain json for the onCommands() callback.
   sendCommands(commands: C[]): void {
-    if (!this.#onCommands || !this.#decodeCommand) {
-      throw new Error(
-        'if sendCommands() is used, the following callbacks must be defined: ' +
-          'onCommands and decodeCommand',
-      );
+    if (!this.#onCommands) {
+      throw new Error('if sendCommands() is used, the onCommands callback is required');
     }
     this.#sendCommands.push(...commands);
     this.#schedule();
@@ -2620,6 +2596,9 @@ export class Engine<QX, RX, E, C> {
     return this.#graph.newQuery(fn);
   }
 
+  // simulate runs some events through the provided reducer-like function.  A temporary overlay is
+  // used and the real Storage is unaffected.  The events should be provided in plain-json format,
+  // the same as for recvEvents().
   simulate<T>(
     fn: (rx: RX, decodedEvents: E[]) => Reducer<T>,
     cb: (result: T) => void,
@@ -2660,20 +2639,22 @@ export class Engine<QX, RX, E, C> {
     }
 
     // load unsent commands from the store
-    const commands: Identified<any>[] = [];
+    const encoded: Identified<any>[] = [];
     yield* withRTxn(this.#fx, this.#store, function* () {
-      const index = ((yield* txnGet('.commands')) as string[]) ?? [];
+      // no decoding needed for `string[]` of command ids
+      const index = ((yield* txnGet('.commands', null)) as string[]) ?? [];
       for (const id of index) {
-        const command = (yield* txnGet(`.command-${id}`)) as Identified<any>;
-        commands.push(command);
+        // commands are stored in their plain json form, which needs no decoding (yet)
+        const enc = (yield* txnGet(`.command-${id}`, null)) as Identified<any>;
+        encoded.push(enc);
       }
     });
-    if (commands.length === 0) return;
+    if (encoded.length === 0) return;
 
     if (!this.#forecaster) {
       // reload just the list of unset event ids
-      for (const command of commands) {
-        this.#unsent.set(command.id, []);
+      for (const enc of encoded) {
+        this.#unsent.set(enc.id, []);
       }
       return;
     }
@@ -2681,9 +2662,11 @@ export class Engine<QX, RX, E, C> {
     // reload forecasted state
 
     const forecasts: E[] = [];
-    for (const command of commands) {
+    for (const enc of encoded) {
+      // at this point we must decode the commands (which we stored in encoded form)
+      const command = this.#decodeCommand(enc);
       // note that since the store may be in-memory, we must take care to preserve command.data
-      const c = copyOnWrite(this.#decodeCommand!(command.data));
+      const c = copyOnWrite(command.data);
       const fs = recover(this.#forecaster(c));
       this.#unsent.set(command.id, fs);
       forecasts.push(...fs);
@@ -2710,7 +2693,7 @@ export class Engine<QX, RX, E, C> {
     // - recieve sentCommands and update commands in the store
     // - receive sendCommands
     //     - then commit them to the store,
-    //         - then send those to onCommand hook
+    //         - then send those to onCommands hook
     //     - then forecast events,
     //     - then pass them to reducers,
     //     - then commit that result to the overlay
@@ -2800,11 +2783,12 @@ export class Engine<QX, RX, E, C> {
           );
           for (const id of self.#unsent.keys()) {
             if (id in toIgnore) continue;
-            const event = (yield* txnGet(`.command-${id}`)) as Identified<any>;
-            const cmd = self.#decodeCommand!(event.data);
+            // commands are stored pre-encoded, so no decoder needed to load from store
+            const enc = (yield* txnGet(`.command-${id}`, null)) as Identified<C>;
             for (const m of markedSent) {
-              if (!matchSent(m, cmd)) continue;
-              self.#roundTripped.push(event.id);
+              // but we need to decode it to run matchSent
+              if (!matchSent(m, self.#decodeCommand(enc).data)) continue;
+              self.#roundTripped.push(enc.id);
               break;
             }
           }
@@ -2857,27 +2841,24 @@ export class Engine<QX, RX, E, C> {
     }));
     this.#sendCommands = [];
 
-    // encode once for both the store and sending over the wire
-    const encoded: Identified<any>[] = commands.map((c) => ({
-      id: c.id,
-      data: EncodeProto(c.data),
-    }));
+    // encode once now for both storage and the onCommands callback
+    const encoded = commands.map(EncodeProto);
 
     // open a write txn to the real store
     yield* withWTxn(this.#fx, this.#store, function* () {
       const added = [];
       // write each command to the store
-      for (const ec of encoded) {
-        yield* txnSet(`.command-${ec.id}`, ec);
-        added.push(ec.id);
+      for (const enc of encoded) {
+        yield* txnSet(`.command-${enc.id}`, enc);
+        added.push(enc.id);
       }
-      // update the index
-      const index = ((yield* txnGet('.commands')) as string[]) ?? [];
+      // update the index (which needs no encoder)
+      const index = ((yield* txnGet('.commands', null)) as string[]) ?? [];
       yield* txnSet('.commands', [...index, ...added]);
     });
 
     // schedule a callback for the user to know it is time to send these commands
-    setTimeout(() => this.#onCommands!(commands));
+    setTimeout(() => this.#onCommands!(deepCopy(encoded)));
 
     // store those commands as unsent
 
@@ -2923,7 +2904,7 @@ export class Engine<QX, RX, E, C> {
       roundTripped[id] = true;
     }
     // load the index of batches of commands
-    const index = ((yield* txnGet('.commands')) as string[]) ?? [];
+    const index = ((yield* txnGet('.commands', null)) as string[]) ?? [];
     // decide what to delete
     const toDelete = index.filter((id) => roundTripped[id]);
     if (toDelete.length === 0) return false;
@@ -2959,17 +2940,18 @@ export class Engine<QX, RX, E, C> {
 
   *#onReconnects(): Generator<void, void, void> {
     const { checkpoint, commands } = yield* withRTxn(this.#fx, this.#store, function* () {
-      const checkpoint = (yield* txnGet('.checkpoint')) as number | undefined;
+      const checkpoint = (yield* txnGet('.checkpoint', null)) as number | undefined;
       const commands: Identified<any>[] = [];
-      const index = ((yield* txnGet('.commands')) as string[]) ?? [];
+      const index = ((yield* txnGet('.commands', null)) as string[]) ?? [];
       for (const id of index) {
-        const command = (yield* txnGet(`.command-${id}`)) as Identified<any>;
-        commands.push(command);
+        // commands are stored pre-encoded and need no decoder
+        const enc = (yield* txnGet(`.command-${id}`, null)) as Identified<any>;
+        commands.push(enc);
       }
       return { checkpoint, commands };
     });
     for (const resolve of this.#reconnects) {
-      resolve({ checkpoint, commands });
+      resolve({ checkpoint, commands: deepCopy(commands) });
     }
     this.#reconnects = [];
   }

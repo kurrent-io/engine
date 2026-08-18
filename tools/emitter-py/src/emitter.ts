@@ -446,20 +446,19 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
     : '';
   d.print(`\nclass ${contextName(store.name!)}QueryContext${supers}:\n`);
   d.indent('    ');
+  d.print('def __init__(self, jsqx: _quickjs.Value):\n');
+  d.print('    self._jsqx = jsqx\n');
+  d.print('\n');
   const originalItems = store.originalItems;
   originalItems.forEach((si, i) => {
     if (i) d.print('\n');
-    d.print('@staticmethod\n');
-    d.print(`def ${si.name}(`);
+    d.print(`def ${si.name}(self, `);
     d.print(si.params.map((p) => p + ': str').join(', '));
     d.print(`) -> Awaitable[${annos.get(si.type)}]:\n`);
     d.indent('    ');
-    d.print(`return _StoreResult(` + (si.params.length ? "f'" : "'"));
-    for (let j = 0; j < si.params.length; j++) {
-      d.print(si.chunks[j] + '{' + si.params[j] + '}');
-    }
-    d.print(si.chunks[si.chunks.length - 1]);
-    d.print(`')\n`);
+    d.print(`return _StoreResult(self._jsqx.get.${si.name}(`);
+    d.print(si.params.join(', '));
+    d.print(`))\n`);
     d.dedent();
   });
   if (!originalItems.length) d.print('pass\n');
@@ -492,7 +491,7 @@ function generateEngine(d: Denter, annos: Annos, f: KEngine): void {
   d.print(`            bundle=bundle,\n`);
   d.print(`            engine_cls='${engineName(f.name!)}',\n`);
   d.print(`            store=store,\n`);
-  d.print(`            qx=${QX}(),\n`);
+  d.print(`            qx_factory=${QX},\n`);
   d.print(`            migrate=migrate,\n`);
   d.print(`            reducer=reducer,\n`);
   d.print(`        )\n`);

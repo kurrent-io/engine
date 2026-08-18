@@ -37,7 +37,7 @@ class StoreValue(TypedDict):
 
 
 class QueryQuestion(TypedDict):
-    store: NotRequired[Dict[str, Literal[True]]]
+    store: NotRequired[Dict[str, None | Callable[[Any], Any]]]
     query: NotRequired[Dict[str, Literal[True]]]
 
 
@@ -58,11 +58,18 @@ class _QueryResult:
 
 
 class _StoreResult:
-    def __init__(self, key: str) -> None:
-        self._key = key
+    def __init__(self, jsiter: _quickjs.Value) -> None:
+        self._jsiter = jsiter
 
     def __await__(self) -> Generator[QueryQuestion, QueryAnswer, Any]:
-        ans = (yield {"store": {self._key: True}})["store"][self._key]
+        # rely on the javascript QX to ask the StoreQuestion with the right decoder attached
+        got = self._jsiter.next(None)
+        assert not got.done
+        # capture the key in the question
+        key = next(iter(got.value.store))
+        # yield the question, intercept the answer
+        ans = (yield got.value)["store"][key]
+        # handle the answer ourselves, without JS's queryGet() and corresponding readOnly() wrapper
         if "err" in ans:
             raise ValueError(ans["err"])
         return ans["value"]
@@ -129,11 +136,12 @@ class Engine[QX, E, C]:
         engine_cls: str,
         # if store is None, InMemStore (from typescript) is used
         store: Callable[[bool], Txn] | None,
-        qx: QX,
+        qx_factory: Callable[[_quickjs.Value], QX],
         migrate: str | None,
         reducer: str,
     ) -> None:
         self._js = _quickjs.QuickJS()
+        self._qx_factory = qx_factory
 
         # The Engine api is already callback-based, not async, so a very simple event loop is
         # enough to support setTimeout().  Support setTimeout() with non-zero delay is not needed.
@@ -188,13 +196,13 @@ class Engine[QX, E, C]:
         }
 
         self._engine: _quickjs.Value = self._js.eval(
-            "(cls, store, callbacks, qx) => new cls(store, callbacks, qx)",
-        )(self.module[engine_cls], storejs, callbacks, _quickjs.Opaque(qx))
+            "(cls, store, callbacks) => new cls(store, callbacks)",
+        )(self.module[engine_cls], storejs, callbacks)
 
     def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:
         # queryfunc will wrap the python generator in a javascript iterator
-        def queryfunc(qx: QX) -> Any:
-            g = generator(qx)
+        def queryfunc(jsqx: _quickjs.Value) -> Any:
+            g = generator(self._qx_factory(jsqx))
             first = True
 
             def nextfunc(val: Any = None) -> Any:
