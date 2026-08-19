@@ -2471,9 +2471,8 @@ static struct PyModuleDef _quickjs_module = {
     PyModuleDef_HEAD_INIT,
     .m_name = "_quickjs",
     .m_doc = "python bindings to quickjs",
-    // XXX we don't have global state...?
     .m_size = -1, /* size of per-interpreter state of the module,
-                     or -1 if the module keeps state in global variables. */
+                     or -1 if the module keeps state in global variables, like `quickjs_error` */
     .m_methods = _quickjs_methods,
 };
 
