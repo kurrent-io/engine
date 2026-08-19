@@ -24,6 +24,7 @@ from typing import (
 
 from aiohttp import web
 import kurrentdbclient as kdbc
+import lmdb
 
 import model
 
@@ -655,12 +656,40 @@ async def setupWebserver(listen_spec: str, app_data: Dict[str, Any]) -> AsyncGen
         await site.stop()
         await runner.cleanup()
 
+# configure a persistent lmdb-based Store
+env = lmdb.Environment(os.path.join(os.path.dirname(__file__), ".lmdb"))
+
+class LmdbTxn(model.Txn):
+    UNDEFINED = object()
+
+    def __init__(self, txn: lmdb.Transaction) -> None:
+        self.txn = txn
+
+    def commit(self) -> None:
+        self.txn.commit()
+
+    def abort(self) -> None:
+        self.txn.abort()
+
+    def get(self, key: str) -> collections.abc.Buffer:
+        value = self.txn.get(key=key.encode('utf8'), default=self.UNDEFINED)
+        if value is self.UNDEFINED:
+            raise KeyError(key)
+        assert isinstance(value, collections.abc.Buffer)
+        return value
+
+    def set(self, key: str, value: collections.abc.Buffer) -> None:
+        self.txn.put(key.encode('utf8'), value, overwrite=True)
+
+    def delete(self, key: str) -> None:
+        self.txn.delete(key.encode('utf8'))
+
 
 async def amain(connstr: str) -> None:
     # set up the sync engine
     eng = model.RelayEngine(
         os.path.join(os.path.dirname(__file__), "relay.js"),
-        None,
+        lambda write: LmdbTxn(env.begin(write=True, buffers=True)),
         "relayMigrate",
         "relayReducer",
     )

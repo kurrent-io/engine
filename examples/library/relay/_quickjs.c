@@ -85,6 +85,7 @@ typedef struct {
 // a wrapper around allocated C memory implementing python buffer api
 typedef struct {
     PyObject_HEAD;
+    JSContext *ctx;
     char *mem;
     Py_ssize_t len; // reusued as shape[0]
     Py_ssize_t stride; // always 1
@@ -2008,12 +2009,13 @@ static PyTypeObject py_opaque_type = {
 
 ////
 
-static py_cmem_t *new_cmem(char *mem, Py_ssize_t len){
+static py_cmem_t *new_cmem(JSContext *ctx, char *mem, Py_ssize_t len){
     py_cmem_t *cmem = PyObject_New(py_cmem_t, &py_cmem_type);
     if(!cmem){
-        free(mem);
+        js_free(ctx, mem);
         return NULL;
     }
+    cmem->ctx = ctx; Py_INCREF((PyObject*)JS_GetContextOpaque(ctx));
     cmem->mem = mem;
     cmem->len = len;
     cmem->stride = 1;
@@ -2022,7 +2024,10 @@ static py_cmem_t *new_cmem(char *mem, Py_ssize_t len){
 }
 
 static void py_cmem_dealloc(py_cmem_t *self){
-    if(self->mem) free(self->mem);
+    if(self->ctx){
+        if(self->mem) js_free(self->ctx, self->mem);
+        Py_DECREF((PyObject*)JS_GetContextOpaque(self->ctx));
+    }
     Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
@@ -2089,152 +2094,98 @@ static PyTypeObject py_cmem_type = {
 
 ////
 
-// pass a value or an exception to the store callback
-static JSValue make_store_callback(JSContext *ctx, JSValueConst cb, JSValue value){
-    JSValue out = JS_EXCEPTION;
-    JSValue exc = JS_UNINITIALIZED;
-    JSValue arg = JS_UNINITIALIZED;
-
-    const char *key = "value";
-    if(JS_IsException(value)){
-        key = "err";
-        // promote a python exception to a javascript one
-        if(PyErr_Occurred()){
-            py_exception(ctx);
+static PyObject *get_this_txn(JSContext *ctx, JSValueConst this_val){
+    JSValue jstxn = JS_GetPropertyStr(ctx, this_val, "txn");
+    if(JS_IsException(jstxn)) return NULL;
+    PyObject *txn = JS_GetOpaque(jstxn, js_pyref_class_id);
+    if(!txn){
+        // not really possible
+        JSValue err = JS_NewError(ctx);
+        if(JS_IsException(err)) abort();
+        JSValue message = JS_NewString(ctx, "txn disappeared?");
+        if(!JS_IsException(message)){
+            JS_DefinePropertyValueStr(ctx, err, "message", message, JS_PROP_C_W_E);
         }
-        // catch the javascript exception
-        exc = JS_GetException(ctx);
-        // we'll use this as the value
-        value = JS_DupValue(ctx, exc);
+        JS_Throw(ctx, err);
     }
-
-    // construct a StoreValue arg
-    arg = JS_NewObject(ctx);
-    if(JS_IsException(arg)) goto done;
-
-    int ret = JS_DefinePropertyValueStr(ctx, arg, key, JS_DupValue(ctx, value), JS_PROP_C_W_E);
-    if(ret < 0) goto done;
-
-    // call the callback
-    out = JS_Call(ctx, cb, JS_NULL, 1, &arg);
-
-done:
-    if(!JS_IsUninitialized(arg)) JS_FreeValue(ctx, arg);
-    JS_FreeValue(ctx, value);
-    if(!JS_IsUninitialized(exc)){
-        // deal with the old exception
-        if(JS_IsException(out)){
-            // failed to pass the exception to the callback; re-throw it now
-            JS_Throw(ctx, exc);
-        }else{
-            // we passed it along, we're done with it now
-            JS_FreeValue(ctx, exc);
-        }
-    }
-    return out;
+    JS_FreeValue(ctx, jstxn);
+    return txn;
 }
 
-// txn: (writable: boolean, cb: (result: StoreValue) => void) => unknown;
-static JSValue store_txn(
-    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data
-){
-    (void)this_val;
-    (void)argc;
-    (void)magic;
-    JSValueConst jswritable = argv[0];
-    JSValueConst jscb = argv[1];
-    // get closure variable
-    PyObject *factory = JS_GetOpaque(data[0], js_pyref_class_id);
-
-    PyObject *writable = NULL;
-    PyObject *txn = NULL;
-    JSValue out = JS_EXCEPTION;
-
-    writable = js2py(ctx, jswritable, Py_None);
-    if(!writable) goto done;
-
-    // call txn factory
-    txn = PyObject_CallFunctionObjArgs(factory, writable, NULL);
-    if(!txn) goto done;
-
-    // wrap in js
-    Py_INCREF(txn);
-    out = new_pyref(ctx, txn);
-    if(JS_IsException(out)) goto done;
-
-done:
-    Py_XDECREF(writable);
-    Py_XDECREF(txn);
-    return make_store_callback(ctx, jscb, out);
-}
-
-// commit: (txn: unknown, cb: (result: StoreDone) => void) => void;
+// commit: () => MaybePromise<void>
 static JSValue store_commit(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
-    (void)this_val;
     (void)argc;
-    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
-    JSValueConst jscb = argv[1];
+    (void)argv;
+    PyObject *txn = get_this_txn(ctx, this_val);
+    if(!txn) return JS_EXCEPTION;
 
     PyObject *ret = NULL;
     JSValue out = JS_EXCEPTION;
 
     // just call txn.commit()
     ret = PyObject_CallMethod(txn, "commit", "()");
-    if(!ret) goto done;
-
-    out = JS_TRUE;
-
-done:
-    Py_XDECREF(ret);
-    return make_store_callback(ctx, jscb, out);
-}
-
-// abort: (txn: unknown, cb: () => void) => void;
-static JSValue store_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
-    (void)this_val;
-    (void)argc;
-    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
-    JSValueConst jscb = argv[1];
-
-    PyObject *ret = NULL;
-    JSValue out = JS_EXCEPTION;
-
-    // call txn.abort(); no error is allowed, no return value is accepted
-    ret = PyObject_CallMethod(txn, "abort", "()");
     if(!ret){
         py_exception(ctx);
         goto done;
     }
 
-    // call the callback with no arg
-    out = JS_Call(ctx, jscb, JS_NULL, 0, NULL);
+    out = JS_UNDEFINED;
 
 done:
     Py_XDECREF(ret);
     return out;
 }
 
-// get: (txn: unknown, key: string, cb: (result: StoreValue) => void) => void;
-static JSValue store_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
-    (void)this_val;
+// abort: () => MaybePromise<void>
+static JSValue store_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
     (void)argc;
-    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
-    JSValueConst jskey = argv[1];
-    JSValueConst jscb = argv[2];
+    (void)argv;
+    PyObject *txn = get_this_txn(ctx, this_val);
+    if(!txn) return JS_EXCEPTION;
+
+    PyObject *ret = NULL;
+    JSValue out = JS_EXCEPTION;
+
+    // just call txn.abort()
+    ret = PyObject_CallMethod(txn, "abort", "()");
+    if(!ret){
+        // it must not fail, but that's not our concern right here
+        py_exception(ctx);
+        goto done;
+    }
+
+    out = JS_UNDEFINED;
+
+done:
+    Py_XDECREF(ret);
+    return out;
+}
+
+// get: (key: string, decoder: StoreDecoder) => MaybePromise<any>
+static JSValue store_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
+    (void)argc;
+    PyObject *txn = get_this_txn(ctx, this_val);
+    if(!txn) return JS_EXCEPTION;
+    JSValueConst jskey = argv[0];
+    JSValueConst decoder = argv[1];
 
     PyObject *key = NULL;
     PyObject *ret = NULL;
     Py_buffer buf;
     bool have_buf = false;
+    JSValue plain = JS_UNINITIALIZED;
     JSValue out = JS_EXCEPTION;
 
     key = js2py(ctx, jskey, Py_None);
-    if(!key) goto done;
+    if(!key){
+        py_exception(ctx);
+        goto done;
+    }
 
     // call txn.get(key)
     ret = PyObject_CallMethod(txn, "get", "(O)", key);
     if(!ret){
-        if(PyErr_ExceptionMatches((PyObject*)&PyExc_KeyError)){
+        if(PyErr_ExceptionMatches(PyExc_KeyError)){
             // convert KeyError to javascript undefined
             PyErr_Clear();
             // return `undefined`
@@ -2242,98 +2193,218 @@ static JSValue store_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
             goto done;
         }else{
             // any other error
+            py_exception(ctx);
             goto done;
         }
     }
 
-    // get succeeded; convert bytes -> javascript
+    // get succeeded.  Convert bytes-like response to buffer.
     int iret = PyObject_GetBuffer(ret, &buf, PyBUF_SIMPLE);
-    if(iret) goto done;
-    out = JS_ReadObject(ctx, buf.buf, (size_t)buf.len, JS_READ_OBJ_REFERENCE);
-    if(JS_IsException(out)) goto done;
+    if(iret){
+        py_exception(ctx);
+        goto done;
+    }
+    have_buf = true;
+
+    // convert buffer to plain json
+    plain = JS_ReadObject(ctx, buf.buf, (size_t)buf.len, JS_READ_OBJ_REFERENCE);
+    if(JS_IsException(plain)) goto done;
+
+    // decode plain json into rich result
+    if(JS_IsNull(decoder)){
+        out = plain;
+        plain = JS_UNINITIALIZED;
+    }else{
+        out = JS_Call(ctx, decoder, JS_NULL, 1, &plain);
+    }
 
 done:
     Py_XDECREF(key);
     Py_XDECREF(ret);
+    JS_FreeValue(ctx, plain);
     if(have_buf) PyBuffer_Release(&buf);
-    return make_store_callback(ctx, jscb, out);
+    return out;
 }
 
-// set: (txn: unknown, key: string, value: unknown, cb: (result: StoreDone) => void) => void;
+// set: (key: string, value: unknown) => MaybePromise<void>
 static JSValue store_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
-    (void)this_val;
     (void)argc;
-    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
-    JSValueConst jskey = argv[1];
-    JSValueConst jsval = argv[2];
-    JSValueConst jscb = argv[3];
+    PyObject *txn = get_this_txn(ctx, this_val);
+    if(!txn) return JS_EXCEPTION;
+    JSValueConst jskey = argv[0];
+    JSValueConst jsval = argv[1];
 
     PyObject *key = NULL;
     PyObject *ret = NULL;
     PyObject *val = NULL;
+    JSValue encode_proto = JS_UNINITIALIZED;
+    JSValue plain = JS_UNINITIALIZED;
     JSValue out = JS_EXCEPTION;
 
     key = js2py(ctx, jskey, Py_None);
-    if(!key) goto done;
+    if(!key){
+        py_exception(ctx);
+        goto done;
+    }
 
-    // convert jsval to bytes
+    // get EncodeProto to lower rich type to plain json
+    encode_proto = JS_GetPropertyStr(ctx, this_val, "encode_proto");
+    if(JS_IsException(encode_proto)) goto done;
+
+    // call EncodeProto
+    plain = JS_Call(ctx, encode_proto, JS_NULL, 1, &jsval);
+    if(JS_IsException(plain)) goto done;
+
+    // convert plain json to bytes
     size_t len;
-    uint8_t *mem = JS_WriteObject(ctx, &len, jsval, JS_WRITE_OBJ_REFERENCE);
+    uint8_t *mem = JS_WriteObject(ctx, &len, plain, JS_WRITE_OBJ_REFERENCE);
     if(!mem) goto done;
 
     // create python buffer wrapper around allocated memory
-    val = (PyObject*)new_cmem((char*)mem, (Py_ssize_t)len);
-    if(!val) goto done;
+    val = (PyObject*)new_cmem(ctx, (char*)mem, (Py_ssize_t)len);
+    if(!val){
+        py_exception(ctx);
+        goto done;
+    }
 
     // call txn.set(key, val)
     ret = PyObject_CallMethod(txn, "set", "(OO)", key, val);
-    if(!ret) goto done;
+    if(!ret){
+        py_exception(ctx);
+        goto done;
+    }
 
-    out = JS_TRUE;
+    out = JS_UNDEFINED;
 
 done:
     Py_XDECREF(key);
     Py_XDECREF(val);
     Py_XDECREF(ret);
-    return make_store_callback(ctx, jscb, out);
+    JS_FreeValue(ctx, plain);
+    JS_FreeValue(ctx, encode_proto);
+    return out;
 }
 
-// del: (txn: unknown, key: string, cb: (result: StoreDone) => void) => void;
+// del: (key: string) => MaybePromise<void>
 static JSValue store_del(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv){
-    (void)this_val;
     (void)argc;
-    PyObject *txn = JS_GetOpaque(argv[0], js_pyref_class_id);
-    JSValueConst jskey = argv[1];
-    JSValueConst jscb = argv[2];
+    PyObject *txn = get_this_txn(ctx, this_val);
+    if(!txn) return JS_EXCEPTION;
+    JSValueConst jskey = argv[0];
 
     PyObject *key = NULL;
     PyObject *ret = NULL;
     JSValue out = JS_EXCEPTION;
 
     key = js2py(ctx, jskey, Py_None);
-    if(!key) goto done;
+    if(!key){
+        py_exception(ctx);
+        goto done;
+    }
 
-    // call txn.del(key)
-    ret = PyObject_CallMethod(txn, "del", "(O)", key);
-    if(!ret) goto done;
+    // call txn.delete(key)
+    ret = PyObject_CallMethod(txn, "delete", "(O)", key);
+    if(!ret){
+        py_exception(ctx);
+        goto done;
+    }
 
-    out = JS_TRUE;
+    out = JS_UNDEFINED;
 
 done:
     Py_XDECREF(key);
     Py_XDECREF(ret);
-    return make_store_callback(ctx, jscb, out);
+    return out;
+}
+
+// Wrap a user-provided python txn_factory (via closure) so we can intercept the ExternalStore's
+// call to its .#txnFn(writable) to install interceptors on each method of ExternalStoreTxn.
+//
+// store_txn is a closure around the user's python-defined txn_factory and global EncodeProto
+// satisfying ExternalStore's arg requirement:
+//    store_txn: (writable: boolean) => MaybePromise<ExternalStoreTxn>;
+static JSValue store_txn(
+    JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *data
+){
+    (void)this_val;
+    (void)argc;
+    (void)magic;
+    JSValueConst jswritable = argv[0];
+    // get closure variables
+    PyObject *txn_factory = JS_GetOpaque(data[0], js_pyref_class_id);
+    JSValueConst encode_proto = data[1];
+
+    PyObject *writable = NULL;
+    PyObject *txn = NULL;
+    JSValue jstxn = JS_UNINITIALIZED;
+    JSValue this = JS_UNINITIALIZED;
+    JSValue out = JS_EXCEPTION;
+
+    writable = js2py(ctx, jswritable, Py_None);
+    if(!writable){
+        py_exception(ctx);
+        goto done;
+    }
+
+    // call user's txn_factory
+    txn = PyObject_CallFunctionObjArgs(txn_factory, writable, NULL);
+    if(!txn){
+        py_exception(ctx);
+        goto done;
+    }
+
+    // wrap it to pass into js
+    jstxn = new_pyref(ctx, txn);
+    txn = NULL;
+    if(JS_IsException(jstxn)) goto done;
+
+    // wrap in js object so we can intercept each of commit/abort/get/set/del calls
+    this = JS_NewObject(ctx);
+    if(JS_IsException(this)) goto done;
+
+    JS_SetPropertyStr(ctx, this, "txn", jstxn);
+    jstxn = JS_UNDEFINED;
+    JS_SetPropertyStr(ctx, this, "encode_proto", JS_DupValue(ctx, encode_proto));
+
+    #define WRAP_METHOD(func, name, nparams) do { \
+        JSValue jsfunc = JS_NewCFunction(ctx, func, name, nparams); \
+        if(JS_IsException(jsfunc)) goto done; \
+        JS_SetPropertyStr(ctx, this, name, jsfunc); \
+    } while(0)
+    WRAP_METHOD(store_commit, "commit", 0);
+    WRAP_METHOD(store_abort, "abort", 0);
+    WRAP_METHOD(store_get, "get", 2);
+    WRAP_METHOD(store_set, "set", 2);
+    WRAP_METHOD(store_del, "del", 1);
+    #undef WRAP_METHOD
+
+    // success
+    out = this;
+    this = JS_UNDEFINED;
+
+    goto done;
+
+done:
+    JS_FreeValue(ctx, jstxn);
+    JS_FreeValue(ctx, this);
+    Py_CLEAR(writable);
+    Py_CLEAR(txn);
+    return out;
 }
 
 static char * const py_make_store_doc =
-    "make_store(txn_factory: Callable[[bool], Txn]) -> Store\n"
+    "make_store(qjs, ExternalStore, EncodeProto, txn_factory: Callable[[bool], Txn]) -> Store\n"
     "create a Store object from a txn factory";
 static PyObject *py_make_store(PyObject *self, PyObject *args, PyObject *kwds) {
     (void)self;
     PyObject *qjs;
-    PyObject *factory;
-    char *kwnames[] = { "qjs", "txn_factory", NULL };
-    int ret = PyArg_ParseTupleAndKeywords(args, kwds, "OO", kwnames, &qjs, &factory);
+    PyObject *ExternalStore;
+    PyObject *EncodeProto;
+    PyObject *txn_factory;
+    char *kwnames[] = { "qjs", "ExternalStore", "EncodeProto", "txn_factory", NULL };
+    int ret = PyArg_ParseTupleAndKeywords(
+        args, kwds, "OOOO", kwnames, &qjs, &ExternalStore, &EncodeProto, &txn_factory
+    );
     if(!ret) return NULL;
 
     int isinstance;
@@ -2345,44 +2416,30 @@ static PyObject *py_make_store(PyObject *self, PyObject *args, PyObject *kwds) {
     }
     JSContext *ctx = ((py_quickjs_t*)qjs)->ctx;
 
-    // construct an javascript ExternalCallbackStore class from callbacks defined in python
-    JSValue global = JS_UNINITIALIZED;
+    // construct a javascript ExternalStore class around txn_factory
     JSValue cls = JS_UNINITIALIZED;
-    JSValue jsargs[6];
+    JSValue encode_proto = JS_UNINITIALIZED;
     JSValue jsfactory = JS_UNINITIALIZED;
-    int nargs = 0;
+    JSValue jsfunc = JS_UNINITIALIZED;
     JSValue jsout = JS_UNINITIALIZED;
     PyObject *out = NULL;
 
-    // get the constructor from the context
-    global = JS_GetGlobalObject(ctx);
-    if(JS_IsException(global)) goto jsfail;
-    cls = JS_GetPropertyStr(ctx, global, "ExternalCallbackStore");
+    // get the js values under ExternalStore and EncodeProto
+    cls = py2js(ctx, ExternalStore);
     if(JS_IsException(cls)) goto jsfail;
+    encode_proto = py2js(ctx, EncodeProto);
+    if(JS_IsException(encode_proto)) goto jsfail;
 
-    // txn arg is a closure defined in C
-    Py_INCREF(factory);
-    jsfactory = new_pyref(ctx, factory);
+    // txn_factory arg to ExternalStore is C-defined closure around txn_factory and EncodeProto
+    Py_INCREF(txn_factory);
+    jsfactory = new_pyref(ctx, txn_factory);
     if(JS_IsException(jsfactory)) goto jsfail;
-    JSValue jsfunc = JS_NewCFunctionData(ctx, store_txn, 2, 0, 1, &jsfactory);
+    JSValue jsargs[] = {jsfactory, encode_proto};
+    jsfunc = JS_NewCFunctionData(ctx, store_txn, 1, 0, 2, jsargs);
     if(JS_IsException(jsfunc)) goto jsfail;
-    jsargs[nargs++] = jsfunc;
-
-    // remaining args are plain wrappers around C functions
-    #define WRAP_SIMPLE(func, name, nparams) do { \
-        JSValue jsfunc = JS_NewCFunction(ctx, func, name, nparams); \
-        if(JS_IsException(jsfunc)) goto jsfail; \
-        jsargs[nargs++] = jsfunc; \
-    } while(0)
-    WRAP_SIMPLE(store_commit, "commit", 2);
-    WRAP_SIMPLE(store_abort, "abort", 2);
-    WRAP_SIMPLE(store_get, "get", 3);
-    WRAP_SIMPLE(store_set, "set", 4);
-    WRAP_SIMPLE(store_del, "delete", 3);
-    #undef WRAP_SIMPLE
 
     // call constructor and return result
-    jsout = JS_CallConstructor(ctx, cls, nargs, jsargs);
+    jsout = JS_CallConstructor(ctx, cls, 1, &jsfunc);
     if(JS_IsException(jsout)) goto jsfail;
 
     out = py_value_new(ctx, jsout, Py_None);
@@ -2392,11 +2449,11 @@ jsfail:
     js_exception(ctx);
 
 done:
-    for(int i = 0; i < nargs; i++) JS_FreeValue(ctx, jsargs[i]);
-    if(!JS_IsUninitialized(jsfactory)) JS_FreeValue(ctx, jsfactory);
-    if(!JS_IsUninitialized(cls)) JS_FreeValue(ctx, cls);
-    if(!JS_IsUninitialized(global)) JS_FreeValue(ctx, global);
-    if(!JS_IsUninitialized(jsout)) JS_FreeValue(ctx, jsout);
+    JS_FreeValue(ctx, jsfunc);
+    JS_FreeValue(ctx, jsfactory);
+    JS_FreeValue(ctx, encode_proto);
+    JS_FreeValue(ctx, cls);
+    JS_FreeValue(ctx, jsout);
     return out;
 }
 

@@ -32,6 +32,8 @@ main({
       post: [
         httpCheck("http://localhost:2113/health/live?liveCode=200"),
         exec("python3", "populate.py"),
+        // a new db container means the old lmdb is no longer valid
+        exec("rm", "-rf", "relay/.lmdb"),
       ],
     },
     // then run the go decider

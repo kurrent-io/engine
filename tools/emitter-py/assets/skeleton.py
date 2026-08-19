@@ -1,4 +1,5 @@
 import base64
+import collections.abc
 import datetime
 import json
 import uuid
@@ -119,8 +120,8 @@ class Txn(Protocol):
     def commit(self) -> None: ...
     def abort(self) -> None: ...
     # get shall raise a KeyError if the key is not present
-    def get(self, key: str) -> memoryview: ...
-    def set(self, key: str, value: memoryview) -> None: ...
+    def get(self, key: str) -> collections.abc.Buffer: ...
+    def set(self, key: str, value: collections.abc.Buffer) -> None: ...
     def delete(self, key: str) -> None: ...
 
 
@@ -188,7 +189,17 @@ class Engine[QX, E, C]:
         flags = 1 | (1<<5) # JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY
         self.module = self._js.eval(text, file=bundle, sourcemap=sourcemap, flags=flags)
 
-        storejs = store and _quickjs.make_store(self._js, store)
+        if store is None:
+            storejs = None
+        else:
+            ExternalStore = self.module.ExternalStore
+            EncodeProto = self.module.EncodeProto
+            if ExternalStore is None or EncodeProto is None:
+                raise ValueError(
+                    "both ExternalStore and EncodeProto must be exported by typescript stub "
+                    "if a Store is configured (otherwise in-memory store will be used)"
+                )
+            storejs = _quickjs.make_store(self._js, ExternalStore, EncodeProto, store)
 
         callbacks: Dict[str, Any] = {
             "migrate": migrate and self.module[migrate],
@@ -200,9 +211,18 @@ class Engine[QX, E, C]:
         )(self.module[engine_cls], storejs, callbacks)
 
     def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:
+        # bind the qx_factory without binding `self`, because that would create
+        # an unbroken cyclic gc between languages:
+        # - Query object holds queryfunc
+        # - queryfunc holds self
+        # - self holds QuickJS
+        # - QuickJS holds QueryGraph
+        # - QueryGraph holds Query
+        qx_factory = self._qx_factory
+
         # queryfunc will wrap the python generator in a javascript iterator
         def queryfunc(jsqx: _quickjs.Value) -> Any:
-            g = generator(self._qx_factory(jsqx))
+            g = generator(qx_factory(jsqx))
             first = True
 
             def nextfunc(val: Any = None) -> Any:

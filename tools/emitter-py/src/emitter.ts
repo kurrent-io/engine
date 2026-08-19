@@ -448,10 +448,9 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
   d.indent('    ');
   d.print('def __init__(self, jsqx: _quickjs.Value):\n');
   d.print('    self._jsqx = jsqx\n');
-  d.print('\n');
   const originalItems = store.originalItems;
   originalItems.forEach((si, i) => {
-    if (i) d.print('\n');
+    d.print('\n');
     d.print(`def ${si.name}(self, `);
     d.print(si.params.map((p) => p + ': str').join(', '));
     d.print(`) -> Awaitable[${annos.get(si.type)}]:\n`);
@@ -461,7 +460,7 @@ function generateStore(d: Denter, annos: Annos, store: KStore): void {
     d.print(`))\n`);
     d.dedent();
   });
-  if (!originalItems.length) d.print('pass\n');
+  d.print('\n');
   d.dedent();
 }
 
