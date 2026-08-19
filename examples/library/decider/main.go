@@ -9,10 +9,12 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/dop251/goja"
 	"github.com/kurrent-io/KurrentDB-Client-Go/kurrentdb"
 	"github.com/google/uuid"
+	"go.etcd.io/bbolt"
 
 	"github.com/kurrent-io/engine/go/model"
 )
@@ -41,13 +43,82 @@ type Batch struct {
 	Checkpoint uint64
 }
 
+var storeBucket = []byte("store")
+
+// NewBboltStore sets up a PhaseLock Store backed by bbolt.
+func NewBboltStore(path string) (model.Store, error) {
+	// the file lock is held by one process at a time; fail fast instead of waiting
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: time.Second})
+	if err != nil {
+		return nil, err
+	}
+	store, err := newBboltStore(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func newBboltStore(db *bbolt.DB) (model.Store, error) {
+	err := db.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists(storeBucket)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return model.NewGoStore(func(writable bool) (model.Txn, error) {
+		tx, err := db.Begin(writable)
+		if err != nil {
+			return nil, err
+		}
+		return &BboltTxn{tx}, nil
+	}), nil
+}
+
+type BboltTxn struct {
+	tx *bbolt.Tx
+}
+
+func (t *BboltTxn) Commit() error {
+	// the engine commits read transactions too; bbolt requires Rollback for those
+	if !t.tx.Writable() {
+		return t.tx.Rollback()
+	}
+	return t.tx.Commit()
+}
+
+func (t *BboltTxn) Abort() {
+	_ = t.tx.Rollback()
+}
+
+func (t *BboltTxn) Get(key string) ([]byte, error) {
+	// nil means absent; the slice is only valid until the transaction ends,
+	// which is fine because the engine decodes it before then
+	return t.tx.Bucket(storeBucket).Get([]byte(key)), nil
+}
+
+func (t *BboltTxn) Set(key string, val []byte) error {
+	return t.tx.Bucket(storeBucket).Put([]byte(key), val)
+}
+
+func (t *BboltTxn) Del(key string) error {
+	return t.tx.Bucket(storeBucket).Delete([]byte(key))
+}
+
+
 func setupEngine(
 	deciderEvents *[]model.DeciderEvents,
 ) (*model.DeciderEngine, uint64, error) {
-	// create an engine
+	// create an engine backed by a persistent local store
+	store, err := NewBboltStore(".bbolt")
+	if err != nil {
+		return nil, 0, fmt.Errorf("opening store: %w", err)
+	}
 	eng, err := model.NewDeciderEngine(
 		deciderScript,
-		model.NewInMemStore(),
+		store,
 		"deciderMigrate",
 		"deciderReducer",
 	)

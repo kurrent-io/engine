@@ -722,36 +722,15 @@ type Store interface {
 	ToStore(vm *goja.Runtime) (goja.Value, error)
 }
 
-type InMemStore struct {}
-
-func NewInMemStore() Store {
-	return InMemStore{}
-}
-
-func (s InMemStore) ToStore(vm *goja.Runtime) (goja.Value, error) {
-	return vm.New(vm.GlobalObject().Get("InMemStore"))
-}
-
 // async store not yet supported
 type Txn interface {
 	Commit() error
 	Abort()
-	Get(string) (goja.Value, error)
-	Set(string, goja.Value) error
-	Del(string) error
+	// Get returns nil (with nil error) when the key is absent.
+	Get(key string) ([]byte, error)
+	Set(key string, val []byte) error
+	Del(key string) error
 }
-
-// Opaque implements goja.DynamicObject, but acts like an empty object in javascript.
-type Opaque struct {
-	Inner interface{}
-}
-
-func (o *Opaque) Get(key string) goja.Value { return nil }
-func (o *Opaque) Set(key string, val goja.Value) bool { return false }
-func (o *Opaque) Has(key string) bool { return false }
-func (o *Opaque) Delete(key string) bool { return false }
-func (o *Opaque) Keys() []string { return nil }
-
 
 type GoStore struct {
 	txnFactory func(writable bool) (Txn, error)
@@ -761,82 +740,71 @@ func NewGoStore(txnFactory func(writable bool) (Txn, error)) Store {
 	return &GoStore{txnFactory}
 }
 
-func storeSend(vm *goja.Runtime, cb goja.Value, val goja.Value, err error) (goja.Value, error) {
-	out := vm.NewObject()
-
-	cbfn, ok := goja.AssertFunction(cb)
-	if !ok {
-		return nil, fmt.Errorf("expected cb function but got %T", cb)
-	}
-
-	if err != nil {
-		if _, ok := err.(*goja.Exception); ok {
-			out.Set("err", err)
-		} else {
-			// non-goja errors get wrapped
-			out.Set("err", vm.NewGoError(err))
-		}
-	} else {
-		out.Set("value", val)
-	}
-
-	return cbfn(goja.Undefined(), out)
-}
-
-func wrapStore(vm *goja.Runtime, fn func(call goja.FunctionCall) (goja.Value, error)) goja.Value {
-	return WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
-		val, err := fn(call)
-		cb := call.Arguments[len(call.Arguments)-1]
-		return storeSend(vm, cb, val, err)
-	})
-}
-
+// ToStore builds a txnFn for `new ExternalStore(txnFn)`.
 func (s GoStore) ToStore(vm *goja.Runtime) (goja.Value, error) {
-	sym := "ExternalCallbackStore"
-	cls := vm.GlobalObject().Get(sym)
+	cls := vm.GlobalObject().Get("ExternalStore")
 	if cls == nil {
-		return nil, fmt.Errorf("unable to create store: no such symbol: %v", sym)
+		return nil, fmt.Errorf("to use NewGoStore, your typescript stub must export ExternalStore")
+	}
+	stringify, ok := goja.AssertFunction(vm.GlobalObject().Get("protoStringify"))
+	if !ok {
+		return nil, fmt.Errorf("to use NewGoStore, your typescript stub must export protoStringify")
 	}
 
-	factory := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
-		writable := call.Arguments[0]
-		txn, err := s.txnFactory(writable.ToBoolean())
+	txnFn := WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
+		txn, err := s.txnFactory(call.Argument(0).ToBoolean())
 		if err != nil {
 			return nil, fmt.Errorf("GoStore.txnFactory: %w", err)
 		}
-		return vm.NewDynamicObject(&Opaque{txn}), nil
 
-	})
-	commit := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
-		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
-		err := txn.Commit()
-		return vm.ToValue(true), err
-	})
-	abort := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
-		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
-		txn.Abort()
-		return vm.ToValue(true), nil
-	})
-	get := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
-		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
-		key := call.Arguments[1].Export().(string)
-		return txn.Get(key)
-	})
-	set := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
-		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
-		key := call.Arguments[1].Export().(string)
-		val := call.Arguments[2]
-		err := txn.Set(key, val)
-		return vm.ToValue(true), err
-	})
-	del := wrapStore(vm, func(call goja.FunctionCall) (goja.Value, error) {
-		txn := call.Arguments[0].Export().(*Opaque).Inner.(Txn)
-		key := call.Arguments[1].Export().(string)
-		err := txn.Del(key)
-		return vm.ToValue(true), err
+		obj := vm.NewObject()
+		obj.Set("get", WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
+			key := call.Argument(0).String()
+			byts, err := txn.Get(key)
+			if err != nil {
+				return nil, err
+			}
+			if byts == nil {
+				// missing keys read as undefined
+				return goja.Undefined(), nil
+			}
+			plain, err := JSONToGoja(vm, byts)
+			if err != nil {
+				return nil, err
+			}
+			// a null decoder (StoreDecoder) means the plain value is the result
+			decoderVal := call.Argument(1)
+			if goja.IsNull(decoderVal) || goja.IsUndefined(decoderVal) {
+				return plain, nil
+			}
+			decoder, ok := goja.AssertFunction(decoderVal)
+			if !ok {
+				return nil, fmt.Errorf("store get(%q): decoder is not a function", key)
+			}
+			return decoder(goja.Undefined(), plain)
+		}))
+		obj.Set("set", WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
+			key := call.Argument(0).String()
+			plain, err := stringify(goja.Undefined(), call.Argument(1))
+			if err != nil {
+				return nil, err
+			}
+			return goja.Undefined(), txn.Set(key, []byte(plain.String()))
+		}))
+		obj.Set("del", WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
+			return goja.Undefined(), txn.Del(call.Argument(0).String())
+		}))
+		obj.Set("commit", WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
+			return goja.Undefined(), txn.Commit()
+		}))
+		obj.Set("abort", WrapPanics(vm, func(call goja.FunctionCall) (goja.Value, error) {
+			txn.Abort()
+			return goja.Undefined(), nil
+		}))
+		return obj, nil
 	})
 
-	return vm.New(cls, factory, commit, abort, get, set, del)
+	return vm.New(cls, txnFn)
 }
 
 //
@@ -1012,9 +980,15 @@ func NewEngine[QX QueryContext, E any, C any](
 		vm.GlobalObject().Set(key, exported.Get(key))
 	}
 
-	storeVal, err := store.ToStore(vm)
-	if err != nil {
-		return nil, fmt.Errorf("store: %w", err)
+	var storeVal goja.Value
+	if store == nil {
+		// no store means "in-mem store", both in this go layer and in the typescript Engine layer
+		storeVal = goja.Undefined()
+	} else {
+		storeVal, err = store.ToStore(vm)
+		if err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
 	}
 
 	var migrateFn goja.Value
@@ -1110,9 +1084,10 @@ func (f *Engine[QX, E, C]) CaughtUp() error {
 func (f *Engine[QX, E, C]) Reconnect() (*uint64, error) {
 	var out *uint64
 	jsfn := WrapPanics(f.vm, func(call goja.FunctionCall) (goja.Value, error) {
-		var value goja.Value = call.Arguments[0]
+		// cb receives {checkpoint, commands}
+		value := call.Argument(0).ToObject(f.vm).Get("checkpoint")
 		// did we get a checkpoint value?
-		if goja.IsUndefined(value) {
+		if value == nil || goja.IsUndefined(value) {
 			return nil, nil
 		}
 		// export received checkpoint value
@@ -1127,7 +1102,14 @@ func (f *Engine[QX, E, C]) Reconnect() (*uint64, error) {
 		return nil, nil
 	})
 	_, err := f.reconnect(f.eng, jsfn)
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	// the callback fires during a run-loop pump
+	if err := f.run(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 type Query[T any] struct {

@@ -32,14 +32,16 @@ main({
       post: [
         httpCheck("http://localhost:2113/health/live?liveCode=200"),
         exec("python3", "populate.py"),
-        // a new db container means the old lmdb is no longer valid
+        // a new db container means the old on-disk stores are stale
+        exec("rm", "-rf", "decider/.bbolt"),
         exec("rm", "-rf", "relay/.lmdb"),
       ],
     },
     // then run the go decider
     decider: {
-      pre: exec("make", "decider"),
-      cmd: ["decider/decider"],
+      cwd: "decider",
+      pre: exec("make", "-C", "..", "decider"),
+      cmd: ["./decider"],
     },
     // then run the python relay
     relay: {
