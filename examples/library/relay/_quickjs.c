@@ -328,6 +328,15 @@ static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
     PyObject *pywr = NULL;
     JSValue jswr = JS_UNINITIALIZED;
 
+    /* functions skip the weakref scheme because a function may be defined once in a prototype and
+       resued with many different `this` values */
+    if(JS_IsFunction(ctx, val)){
+        // wrap value in Function
+        out = py_value_new(ctx, val, this);
+        if(!out) goto done;
+        goto skip_weakref;
+    }
+
     // next: check if we have a weakref to a working python object
     jswr = JS_GetProperty(ctx, val, q->weakref_symbol);
     if(JS_IsException(jswr)){
@@ -353,13 +362,6 @@ static PyObject *js2py(JSContext *ctx, JSValueConst val, PyObject *this) {
             Py_CLEAR(pywr_borrowed);
             JS_SetOpaque(jswr, NULL);
         }
-    }
-
-    if(JS_IsFunction(ctx, val)){
-        // wrap value in Function
-        out = py_value_new(ctx, val, this);
-        if(!out) goto done;
-        goto embed_weakref;
     }
 
     int is_array = JS_IsArray(ctx, val);
@@ -410,6 +412,7 @@ embed_weakref:
     // jswr now owned by value
     jswr = JS_UNINITIALIZED;
 
+skip_weakref:
     success = true;
 
 done:
@@ -1146,23 +1149,77 @@ static PyTypeObject py_quickjs_type = {
             """Return all enumerable (key, value) tuples."""
 */
 
+static int py_value_clear(py_value_t *self){
+    Py_CLEAR(self->cache);
+    Py_CLEAR(self->this);
+    return 0;
+}
+
 static void py_value_dealloc(py_value_t *self){
+    PyObject_GC_UnTrack(self);
+    // weakrefs are apparently cleared manually before .tp_clear in the cyclic-GC case, and we are
+    // supposed to also clear them before py_value_clear() in the refcount-to-zero case, since they
+    // can trigger arbitrary code that might call into this object.
+    if(self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject*)self);
+    // clear is idempotent, and may not have been called if a cycle was not detected
+    py_value_clear(self);
     JSContext *ctx = self->ctx;
     if(ctx && !JS_IsUninitialized(self->jsval)){
         JS_FreeValue(ctx, self->jsval);
         self->jsval = JS_UNINITIALIZED;
     }
-    if(self->weakreflist != NULL) PyObject_ClearWeakRefs((PyObject*)self);
-    Py_CLEAR(self->cache);
-    Py_CLEAR(self->this);
     Py_TYPE(self)->tp_free((PyObject*)self);
     // also decrement the QuickJS object
     if(ctx) Py_DECREF((PyObject*)JS_GetContextOpaque(ctx));
 }
 
+static int py_value_traverse(py_value_t *self, visitproc visit, void *arg){
+    Py_VISIT(self->cache);
+    Py_VISIT(self->this);
+    return 0;
+}
+
+// hash needed since richcompare is set
+static Py_hash_t py_value_hash(py_value_t *self) {
+    return Py_HashPointer(JS_VALUE_GET_PTR(self->jsval));
+}
+
+static PyObject *py_value_richcompare(py_value_t *self, PyObject *other, int op) {
+    if(op != Py_EQ && op != Py_NE) {
+        Py_INCREF(Py_NotImplemented);
+        return Py_NotImplemented;
+    }
+    // objects are considered equal if they are pointer-equal
+    bool iseq = (void*)self == (void*)other;
+    if(!iseq){
+        int isinstance;
+        // otherwise they must be both py_value_t...
+        if(!(isinstance = PyObject_IsInstance(other, (PyObject*)&py_value_type))){
+            if(isinstance < 0) return NULL;
+            py_value_t *otherval = (py_value_t*)other;
+            // and hail from the same quickjs instance...
+            if(self->ctx == otherval->ctx){
+                // and have the same jsval...
+                if(JS_StrictEq(self->ctx, self->jsval, otherval->jsval)){
+                    // and have equal .this values (which is another rich comparison)
+                    int ret = PyObject_RichCompareBool(self->this, otherval->this, Py_EQ);
+                    if(ret < 0) return NULL;
+                    iseq = !!ret;
+                }
+            }
+        }
+    }
+
+    if(iseq == (op == Py_EQ)){
+        Py_RETURN_TRUE;
+    } else {
+        Py_RETURN_FALSE;
+    }
+}
+
 // jsval and this are both borrowed
 static PyObject *py_value_new(JSContext *ctx, JSValue jsval, PyObject *this){
-    py_value_t *out = PyObject_New(py_value_t, (PyTypeObject*)&py_value_type);
+    py_value_t *out = PyObject_GC_New(py_value_t, (PyTypeObject*)&py_value_type);
     if(!out) return NULL;
 
     // no-fail setup to make dealloc safe
@@ -1212,6 +1269,8 @@ static PyObject *py_value_new(JSContext *ctx, JSValue jsval, PyObject *this){
     if(!out->cache){
         goto fail;
     }
+
+    PyObject_GC_Track((PyObject*)out);
 
     return (PyObject*)out;
 
@@ -1277,11 +1336,12 @@ static PyObject *py_value_getstr(py_value_t *self, const char *key){
     out = js2py(self->ctx, jsval, (PyObject*)self);
     if(!out) goto done;
 
-    // Cache all types on self.  If there is a circular reference in javascript, we can create
-    // space leaks in python since we haven't enabling GC on this python object.  But that seems
-    // unlikely, at least for now.
-    int ret = PyDict_SetItemString(self->cache, key, out);
-    if(ret) goto done;
+    /* Cache all types on self, except functions which would create a cyclic gc hook back to us
+       (via .this) every time, creating memory pressure as we wait for cyclic gc to run */
+    if(!JS_IsFunction(self->ctx, jsval)){
+        int ret = PyDict_SetItemString(self->cache, key, out);
+        if(ret) goto done;
+    }
 
     success = true;
 
@@ -1886,13 +1946,18 @@ static PyTypeObject py_value_type = {
     .tp_basicsize = sizeof(py_value_t),
     // 0 means "size is not variable"
     .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     /* note: when I use tp_flags |= Py_TPFLAGS_MANAGED_WEAKREF I always get a
        segfault, so we use the legacy weakref system here: */
     .tp_weaklistoffset = offsetof(py_value_t, weakreflist),
 
     .tp_new = PyType_GenericNew,
     .tp_dealloc = (destructor) py_value_dealloc,
+    .tp_free = PyObject_GC_Del,
+    .tp_traverse = (traverseproc)py_value_traverse,
+    .tp_hash = (hashfunc)py_value_hash,
+    .tp_richcompare = (richcmpfunc)py_value_richcompare,
+    .tp_clear = (inquiry)py_value_clear,
     .tp_methods = py_value_methods,
     .tp_init = (initproc)py_value_init,
     .tp_getattro = (getattrofunc)py_value_getattro,
