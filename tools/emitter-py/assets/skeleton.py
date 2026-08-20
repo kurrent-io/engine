@@ -8,28 +8,18 @@ from typing import (
     Awaitable,
     Callable,
     Coroutine,
-    Dict,
     Generator,
-    List,
     Literal,
     NotRequired,
-    Optional,
     Protocol,
-    Tuple,
     TypedDict,
-    TypeVar,
     cast,
 )
 
 import _quickjs
 
 
-JSON = Dict[str, 'JSON'] | List['JSON'] | str | int | bool | None
-
-T = TypeVar('T')
-E = TypeVar('E')
-C = TypeVar('C')
-QX = TypeVar('QX')
+type JSON = dict[str, JSON] | list[JSON] | str | int | bool | None
 
 
 class StoreValue(TypedDict):
@@ -38,8 +28,8 @@ class StoreValue(TypedDict):
 
 
 class QueryQuestion(TypedDict):
-    store: NotRequired[Dict[str, None | Callable[[Any], Any]]]
-    query: NotRequired[Dict[str, Literal[True]]]
+    store: NotRequired[dict[str, None | Callable[[Any], Any]]]
+    query: NotRequired[dict[str, Literal[True]]]
 
 
 class QueryResult(TypedDict):
@@ -48,8 +38,8 @@ class QueryResult(TypedDict):
 
 
 class QueryAnswer(TypedDict):
-    store: Dict[str, StoreValue]
-    query: Dict[str, QueryResult]
+    store: dict[str, StoreValue]
+    query: dict[str, QueryResult]
 
 
 class _QueryResult:
@@ -81,8 +71,8 @@ class _StoreResult:
 
 
 # technically we have type information of what is yielded and sent, but async python wants Any,Any
-QueryGenerator = Coroutine[Any, Any, T]
-QueryFunction = Callable[[QX], QueryGenerator[T]]
+type QueryGenerator[T] = Coroutine[Any, Any, T]
+type QueryFunction[QX, T] = Callable[[QX], QueryGenerator[T]]
 
 
 class Query[T]:
@@ -131,7 +121,7 @@ class Txn(Protocol):
 
 class ReconnectInfo[C](Protocol):
     checkpoint: int | None
-    commands: List[C]
+    commands: list[C]
 
 
 class Engine[QX, E, C]:
@@ -205,7 +195,7 @@ class Engine[QX, E, C]:
                 )
             storejs = _quickjs.make_store(self._js, ExternalStore, encodeProto, store)
 
-        callbacks: Dict[str, Any] = {
+        callbacks: dict[str, Any] = {
             "migrate": migrate and self.module[migrate],
             "reducer": self.module[reducer],
         }
@@ -214,7 +204,7 @@ class Engine[QX, E, C]:
             "(cls, store, callbacks) => new cls(store, callbacks)",
         )(self.module[engine_cls], storejs, callbacks)
 
-    def new_query(self, generator: QueryFunction[QX, T]) -> Query[T]:
+    def new_query[T](self, generator: QueryFunction[QX, T]) -> Query[T]:
         # bind the qx_factory without binding `self`, because that would create
         # an unbroken cyclic gc between languages:
         # - Query object holds queryfunc
@@ -255,7 +245,7 @@ class Engine[QX, E, C]:
 
         return query
 
-    def recv_events(self, events: List[Any]) -> None:
+    def recv_events(self, events: list[Any]) -> None:
         self._engine.recvEvents(events)
         self._run()
 
@@ -281,8 +271,8 @@ class Engine[QX, E, C]:
 
     def simulate[T](
         self,
-        fn: Callable[[Any, List[E]], T],
-        undecoded_events: List[Identified[Any]] | None = None,
+        fn: Callable[[Any, list[E]], T],
+        undecoded_events: list[Identified[Any]] | None = None,
     ) -> T:
         sentinel = object()
         result: Any = sentinel
@@ -303,9 +293,9 @@ class Identified[T](TypedDict):
     id: str
     data: T
 
-def checkIdentified(
-    val: Any, subchecker: Callable[[Any, str], List[str]], path: str = "<root>",
-) -> List[str]:
+def check_identified(
+    val: Any, subchecker: Callable[[Any, str], list[str]], path: str = "<root>",
+) -> list[str]:
     if not isinstance(val, dict):
         return [path + f': is a {type(val).__name__}, not json object']
     problems = []

@@ -2,7 +2,7 @@
 """Behavioral test of the emitted Python checkers.
 
 Runs the actual generated code: `pnpm gen` compiles fixtures/main.tsp through the Python emitter
-into tsp-output/, and the tests below feed native dicts/lists to the checkX functions and inspect
+into tsp-output/, and the tests below feed native dicts/lists to the check_x functions and inspect
 the returned list of problem strings.  Checkers validate structure and discriminate unions; a
 valid value yields [], a malformed one yields one or more problems.
 
@@ -80,20 +80,20 @@ ISO_MS = "2020-06-07T08:09:10.123Z"
 
 @register_test
 def test_plain_ok():
-    ok(model.checkPlain, {"id": "x", "n": 7, "flag": True})
+    ok(model.check_plain, {"id": "x", "n": 7, "flag": True})
 
 
 @register_test
 def test_plain_wrong_types_and_missing():
-    fails(model.checkPlain, {"id": 1, "n": 7, "flag": True}, needle="not string")
-    fails(model.checkPlain, {"id": "x", "n": "7", "flag": True}, needle="not int")
-    fails(model.checkPlain, {"id": "x", "n": 7}, needle="missing required key flag")
-    fails(model.checkPlain, ["not", "a", "dict"], needle="not json object")
+    fails(model.check_plain, {"id": 1, "n": 7, "flag": True}, needle="not string")
+    fails(model.check_plain, {"id": "x", "n": "7", "flag": True}, needle="not int")
+    fails(model.check_plain, {"id": "x", "n": 7}, needle="missing required key flag")
+    fails(model.check_plain, ["not", "a", "dict"], needle="not json object")
 
 
 @register_test
 def test_plain_rejects_extra_keys():
-    fails(model.checkPlain, {"id": "x", "n": 7, "flag": True, "surprise": 1}, needle="contains extra keys")
+    fails(model.check_plain, {"id": "x", "n": 7, "flag": True, "surprise": 1}, needle="contains extra keys")
 
 
 # --- dates -----------------------------------------------------------------------------------
@@ -101,20 +101,20 @@ def test_plain_rejects_extra_keys():
 
 @register_test
 def test_timed_accepts_both_iso_formats():
-    ok(model.checkTimed, {"at": ISO})
-    ok(model.checkTimed, {"at": ISO_MS, "note": ISO})
+    ok(model.check_timed, {"at": ISO})
+    ok(model.check_timed, {"at": ISO_MS, "note": ISO})
 
 
 @register_test
 def test_timed_optional_note_absent_is_ok():
-    ok(model.checkTimed, {"at": ISO})
+    ok(model.check_timed, {"at": ISO})
 
 
 @register_test
 def test_timed_bad_and_missing_dates():
-    fails(model.checkTimed, {"at": "nope"}, needle="invalid timestamp")
-    fails(model.checkTimed, {"at": 123}, needle="invalid timestamp")
-    fails(model.checkTimed, {"note": ISO}, needle="missing required key at")
+    fails(model.check_timed, {"at": "nope"}, needle="invalid timestamp")
+    fails(model.check_timed, {"at": 123}, needle="invalid timestamp")
+    fails(model.check_timed, {"note": ISO}, needle="missing required key at")
 
 
 # --- nested / collections --------------------------------------------------------------------
@@ -122,30 +122,30 @@ def test_timed_bad_and_missing_dates():
 
 @register_test
 def test_nested_recurses_into_inner_struct():
-    ok(model.checkNested, {"inner": {"at": ISO}, "tags": ["a", "b"], "count": 3})
-    fails(model.checkNested, {"inner": {"at": "bad"}, "tags": [], "count": 3}, needle="invalid timestamp")
+    ok(model.check_nested, {"inner": {"at": ISO}, "tags": ["a", "b"], "count": 3})
+    fails(model.check_nested, {"inner": {"at": "bad"}, "tags": [], "count": 3}, needle="invalid timestamp")
 
 
 @register_test
 def test_with_record_ok_and_bad_value():
-    ok(model.checkWithRecord, {"meta": {"a": 1, "b": 2}})
-    fails(model.checkWithRecord, {"meta": {"a": "one"}}, needle="not int")
+    ok(model.check_with_record, {"meta": {"a": 1, "b": 2}})
+    fails(model.check_with_record, {"meta": {"a": "one"}}, needle="not int")
 
 
 @register_test
 def test_with_date_record_checks_values():
-    ok(model.checkWithDateRecord, {"stamps": {"a": ISO, "b": ISO_MS}})
-    fails(model.checkWithDateRecord, {"stamps": {"a": "nope"}}, needle="invalid timestamp")
-    fails(model.checkWithDateRecord, {"stamps": {"a": 123}}, needle="invalid timestamp")
+    ok(model.check_with_date_record, {"stamps": {"a": ISO, "b": ISO_MS}})
+    fails(model.check_with_date_record, {"stamps": {"a": "nope"}}, needle="invalid timestamp")
+    fails(model.check_with_date_record, {"stamps": {"a": 123}}, needle="invalid timestamp")
 
 
 @register_test
 def test_tuple_shape_and_elements():
-    ok(model.checkWithTuple, {"pair": ["label", ISO]})
-    fails(model.checkWithTuple, {"pair": ["label"]}, needle="expected 2 items")
-    fails(model.checkWithTuple, {"pair": [5, ISO]}, needle="not string")
-    fails(model.checkWithTuple, {"pair": ["label", "nope"]}, needle="invalid timestamp")
-    fails(model.checkWithTuple, {"pair": "notlist"}, needle="not json array")
+    ok(model.check_with_tuple, {"pair": ["label", ISO]})
+    fails(model.check_with_tuple, {"pair": ["label"]}, needle="expected 2 items")
+    fails(model.check_with_tuple, {"pair": [5, ISO]}, needle="not string")
+    fails(model.check_with_tuple, {"pair": ["label", "nope"]}, needle="invalid timestamp")
+    fails(model.check_with_tuple, {"pair": "notlist"}, needle="not json array")
 
 
 # --- discriminated union (by `type`) ---------------------------------------------------------
@@ -153,15 +153,15 @@ def test_tuple_shape_and_elements():
 
 @register_test
 def test_greek_discriminates_on_type():
-    ok(model.checkGreek, {"type": "alpha", "a": 1})
-    ok(model.checkGreek, {"type": "beta", "at": ISO})
+    ok(model.check_greek, {"type": "alpha", "a": 1})
+    ok(model.check_greek, {"type": "beta", "at": ISO})
 
 
 @register_test
 def test_greek_rejects_bad_discriminator():
-    fails(model.checkGreek, {"a": 1}, needle='missing discriminator "type"')
-    fails(model.checkGreek, {"type": "gamma"}, needle="unexpected value")
-    fails(model.checkGreek, "not a dict", needle="not allowed here")
+    fails(model.check_greek, {"a": 1}, needle='missing discriminator "type"')
+    fails(model.check_greek, {"type": "gamma"}, needle="unexpected value")
+    fails(model.check_greek, "not a dict", needle="not allowed here")
 
 
 # --- sub-discriminated union (by `[type, v]`): the regression the fix targets ----------------
@@ -169,17 +169,17 @@ def test_greek_rejects_bad_discriminator():
 
 @register_test
 def test_versioned_splits_on_type_then_v():
-    ok(model.checkVersioned, {"type": "va", "v": 1, "a": 9})
-    ok(model.checkVersioned, {"type": "va", "v": 2, "at": ISO})
-    ok(model.checkVersioned, {"type": "vb", "v": 1, "b": "z"})
+    ok(model.check_versioned, {"type": "va", "v": 1, "a": 9})
+    ok(model.check_versioned, {"type": "va", "v": 2, "at": ISO})
+    ok(model.check_versioned, {"type": "vb", "v": 1, "b": "z"})
 
 
 @register_test
 def test_versioned_rejects_bad_sub_discriminator():
     # reads `v` off the object, not the extracted `type` string (the bug would raise/mismatch here)
-    fails(model.checkVersioned, {"type": "va", "v": 99, "a": 1}, needle="unexpected value")
-    fails(model.checkVersioned, {"type": "va", "a": 1}, needle='missing discriminator "v"')
-    fails(model.checkVersioned, {"type": "vc"}, needle="unexpected value")
+    fails(model.check_versioned, {"type": "va", "v": 99, "a": 1}, needle="unexpected value")
+    fails(model.check_versioned, {"type": "va", "a": 1}, needle='missing discriminator "v"')
+    fails(model.check_versioned, {"type": "vc"}, needle="unexpected value")
 
 
 # --- one-of union (by present key) -----------------------------------------------------------
@@ -187,14 +187,14 @@ def test_versioned_rejects_bad_sub_discriminator():
 
 @register_test
 def test_target_detects_present_key():
-    ok(model.checkTarget, {"book": "b1"})
-    ok(model.checkTarget, {"at": ISO})
+    ok(model.check_target, {"book": "b1"})
+    ok(model.check_target, {"at": ISO})
 
 
 @register_test
 def test_target_rejects_no_matching_key():
-    fails(model.checkTarget, {"nope": 1}, needle="no matching keys found")
-    fails(model.checkTarget, 5, needle="not allowed here")
+    fails(model.check_target, {"nope": 1}, needle="no matching keys found")
+    fails(model.check_target, 5, needle="not allowed here")
 
 
 # --- literal unions --------------------------------------------------------------------------
@@ -202,12 +202,12 @@ def test_target_rejects_no_matching_key():
 
 @register_test
 def test_literal_unions():
-    ok(model.checkColor, "green")
-    fails(model.checkColor, "purple", needle="unexpected value")
-    fails(model.checkColor, 3, needle="not allowed here")
-    ok(model.checkLevel, 2)
-    fails(model.checkLevel, 9, needle="unexpected value")
-    fails(model.checkLevel, "2", needle="not allowed here")
+    ok(model.check_color, "green")
+    fails(model.check_color, "purple", needle="unexpected value")
+    fails(model.check_color, 3, needle="not allowed here")
+    ok(model.check_level, 2)
+    fails(model.check_level, 9, needle="unexpected value")
+    fails(model.check_level, "2", needle="not allowed here")
 
 
 # --- bool/int strictness (bool is a subclass of int in Python; json keeps them apart) --------
@@ -215,17 +215,17 @@ def test_literal_unions():
 
 @register_test
 def test_bools_are_not_ints():
-    fails(model.checkPlain, {"id": "x", "n": True, "flag": True}, needle="not int")
-    fails(model.checkPlain, {"id": "x", "n": 7, "flag": 1}, needle="not bool")
-    fails(model.checkLevel, True, needle="not allowed here")
-    fails(model.checkVersioned, {"type": "va", "v": True, "a": 1}, needle="unexpected value")
+    fails(model.check_plain, {"id": "x", "n": True, "flag": True}, needle="not int")
+    fails(model.check_plain, {"id": "x", "n": 7, "flag": 1}, needle="not bool")
+    fails(model.check_level, True, needle="not allowed here")
+    fails(model.check_versioned, {"type": "va", "v": True, "a": 1}, needle="unexpected value")
 
 
 @register_test
 def test_bool_literals_are_exact():
-    ok(model.checkToggled, {"on": True})
-    fails(model.checkToggled, {"on": 1}, needle="is not True")
-    fails(model.checkToggled, {"on": False}, needle="is not True")
+    ok(model.check_toggled, {"on": True})
+    fails(model.check_toggled, {"on": 1}, needle="is not True")
+    fails(model.check_toggled, {"on": False}, needle="is not True")
 
 
 # --- engine event / command unions --------------------------------------------------------
@@ -233,12 +233,12 @@ def test_bool_literals_are_exact():
 
 @register_test
 def test_engine_unions():
-    ok(model.checkEvents, {"type": "beta", "at": ISO})
-    ok(model.checkEvents, {"type": "other"})
-    fails(model.checkEvents, {"type": "nope"}, needle="unexpected value")
-    ok(model.checkCommands, {"type": "do-thing", "when": ISO})
-    ok(model.checkCommands, {"type": "undo"})
-    fails(model.checkCommands, {"type": "nope"}, needle="unexpected value")
+    ok(model.check_events, {"type": "beta", "at": ISO})
+    ok(model.check_events, {"type": "other"})
+    fails(model.check_events, {"type": "nope"}, needle="unexpected value")
+    ok(model.check_commands, {"type": "do-thing", "when": ISO})
+    ok(model.check_commands, {"type": "undo"})
+    fails(model.check_commands, {"type": "nope"}, needle="unexpected value")
 
 
 # --- runner ----------------------------------------------------------------------------------

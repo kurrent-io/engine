@@ -62,8 +62,8 @@ Pass a transaction factory instead of `None` — a callable
 ## Validation
 
 Structural validation without an engine: the generated `check*` functions
-take plain dicts and return a list of problems; `model.checkIdentified(obj,
-model.checkUserCommands)` validates the `Identified` wrapper plus body.
+take plain dicts and return a list of problems; `model.check_identified(obj,
+model.check_user_commands)` validates the `Identified` wrapper plus body.
 
 ## Host bridging
 

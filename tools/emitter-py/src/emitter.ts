@@ -40,6 +40,32 @@ type Checkers = Map<KType, Checker>;
 
 const NOOP: Checker = () => '';
 
+/** convert CamelCase to snake_case, handling acronyms properly */
+function camelToSnake(name: string): string {
+  if (name.length < 2) return name.toLowerCase();
+  const upper = (c: string) => /[A-Z]/.test(c);
+  const lower = (c: string) => /[a-z]/.test(c);
+  let out = name[0].toLowerCase();
+  for (let i = 1; i < name.length - 1; i++) {
+    const [c0, c1, c2] = [name[i - 1], name[i], name[i + 1]];
+    // catch lower->upper transitions
+    if (!upper(c0) && upper(c1)) out += '_';
+    // catch acronym endings
+    if (upper(c0) && upper(c1) && lower(c2)) out += '_';
+    out += c1.toLowerCase();
+  }
+  return out + name[name.length - 1].toLowerCase();
+}
+
+/** convert a field name (camelCase or snake_case) to a PascalCase name segment */
+function pascalCase(name: string): string {
+  return name
+    .split('_')
+    .filter((part) => part)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join('');
+}
+
 // annotations
 
 function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
@@ -77,18 +103,18 @@ function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
     let anno = '';
     if (t instanceof KArray) {
       visit(t.itemType, path);
-      anno = `List[${annos.get(t.itemType)}]`;
+      anno = `list[${annos.get(t.itemType)}]`;
     } else if (t instanceof KTuple) {
       for (const it of t.itemTypes) visit(it, path);
-      anno = 'Tuple[' + t.itemTypes.map((it) => annos.get(it)).join(', ') + ']';
+      anno = 'tuple[' + t.itemTypes.map((it) => annos.get(it)).join(', ') + ']';
     } else if (t instanceof KUnion) {
       t.types.forEach((ut, i) => visit(ut, path + String(i)));
       anno = t.types.map((ut) => annos.get(ut)).join(' | ');
     } else if (t instanceof KStruct) {
-      for (const [fn, ft] of t.fields) visit(ft, path + '_' + fn);
+      for (const [fn, ft] of t.fields) visit(ft, path + pascalCase(fn));
     } else if (t instanceof KObject) {
       visit(t.valueType, path);
-      anno = `Dict[str, ${annos.get(t.valueType)}]`;
+      anno = `dict[str, ${annos.get(t.valueType)}]`;
     } else {
       throw new Error(`unhandled type in generateAnnotations: ${t.constructor.name}`);
     }
@@ -101,7 +127,7 @@ function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
       d.indent('    ');
       for (const [k, v] of t.fields) {
         if (t.always.has(k)) d.print(`${k}: ${annos.get(v)}\n`);
-        else d.print(`${k}: Optional[${annos.get(v)}]\n`);
+        else d.print(`${k}: ${annos.get(v)} | None\n`);
       }
       d.dedent();
       d.print('\n');
@@ -315,8 +341,8 @@ function generateCheckers(
     if (t instanceof KUnion) {
       for (const ut of t.types) visit(ut);
       const solution = solveUnion(registry, t.types);
-      const name = t.name ? `check${t.name}` : `_checkAnon${anon.n++}`;
-      d.print(`\ndef ${name}(val: Any, path: str = '<root>') -> List[str]:\n`);
+      const name = t.name ? `check_${camelToSnake(t.name)}` : `_check_anon_${anon.n++}`;
+      d.print(`\ndef ${name}(val: Any, path: str = '<root>') -> list[str]:\n`);
       d.indent('    ');
       checkSolution(d, checkers, solution);
       d.dedent();
@@ -332,12 +358,14 @@ function generateCheckers(
         if (checkers.get(t.itemType) === NOOP) return dd.getvalue();
         dd.print('else:\n');
         dd.indent('    ');
-        const iv = `i${loop.n++}`;
-        dd.print(`for ${iv} in range(len(${val})):\n`);
+        const n = loop.n++;
+        const iv = `i${n}`;
+        const ev = `e${n}`;
+        dd.print(`for ${iv}, ${ev} in enumerate(${val}):\n`);
         dd.indent('    ');
-        // index the element and build its path off the original expressions, so nothing is
-        // clobbered when this checker is inlined inside another
-        dd.print(checkers.get(t.itemType)!(`(${val})[${iv}]`, `${path} + f'[{${iv}}]'`));
+        // build the element's path off the original path expression, so nothing is clobbered
+        // when this checker is inlined inside another
+        dd.print(checkers.get(t.itemType)!(ev, `${path} + f'[{${iv}}]'`));
         return dd.getvalue();
       };
     } else if (t instanceof KTuple) {
@@ -367,16 +395,16 @@ function generateCheckers(
       for (const ft of t.fields.values()) visit(ft);
       let keys: string, func: string;
       if (t.name) {
-        keys = `_${t.name}_ALLOWED_KEYS`;
-        func = `check${t.name}`;
+        keys = `_${camelToSnake(t.name).toUpperCase()}_ALLOWED_KEYS`;
+        func = `check_${camelToSnake(t.name)}`;
       } else {
         const n = anon.n++;
         keys = `_ANON_${n}_ALLOWED_KEYS`;
-        func = `_checkAnon${n}`;
+        func = `_check_anon_${n}`;
       }
       const keyset = '{' + [...t.fields.keys()].map((fn) => `"${fn}"`).join(', ') + '}';
       d.print(`\n${keys} = ${keyset}\n`);
-      d.print(`\ndef ${func}(val: Any, path: str = '<root>') -> List[str]:\n`);
+      d.print(`\ndef ${func}(val: Any, path: str = '<root>') -> list[str]:\n`);
       d.indent('    ');
       d.print('if not isinstance(val, dict):\n');
       d.print("    return [path + f': is a {type(val).__name__}, not json object']\n");
@@ -422,7 +450,7 @@ function generateCheckers(
 
     // named types without a function already defined get a wrapper now
     if (t.name && !(t instanceof KUnion) && !(t instanceof KStruct)) {
-      d.print(`\ndef check${t.name}(val: Any, path: str = '<root>') -> List[str]:\n`);
+      d.print(`\ndef check_${camelToSnake(t.name)}(val: Any, path: str = '<root>') -> list[str]:\n`);
       d.indent('    ');
       d.print('problems = []\n');
       d.print(checker('val', 'path'));

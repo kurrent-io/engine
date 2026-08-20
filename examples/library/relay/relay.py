@@ -531,7 +531,7 @@ class Reader:
 
             # make sure each event is structurally valid
             obj = msg.json()
-            errors = model.checkIdentified(obj, model.checkAdminCommands)
+            errors = model.check_identified(obj, model.check_admin_commands)
             if errors:
                 raise UserError(errors)
 
