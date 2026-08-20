@@ -1,6 +1,6 @@
 import {
   ClientMessage,
-  EncodeProto,
+  encodeProto,
   RemoteTodoQueries,
   ServerMessage,
   TodoEvents,
@@ -56,7 +56,7 @@ export function usePhaseLock(serverUrl: string): [Server, ConnectionState] {
     const sendCommand = (command: TodoEvents) => {
       const raw = {
         id: generateUuid(),
-        data: EncodeProto(command),
+        data: encodeProto(command),
       };
       mem.current.outbox.push(raw);
       wsMaybeSend({ commands: [raw] });

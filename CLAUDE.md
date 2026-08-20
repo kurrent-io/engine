@@ -61,6 +61,13 @@ Library example (`cd examples/library`):
 After changing any `.tsp` model or any codegen in `tools/`, regenerate
 and read the regenerated files rather than assuming their shape.
 
+The example build files are meant for external readers, so their gen
+steps don't depend on the contents of the tools changing.  The tools
+also don't have a proper build system.  When you work on `tools/` and
+want to test an example, manually `(cd tools && pnpm build)` and then
+`touch examples/library/model/model.tsp` (or equivalent) to force the
+example to regenerate.
+
 ## Conventions
 
 - Generated files (`*.gen.ts`, generated `model.py`, `model.go`,

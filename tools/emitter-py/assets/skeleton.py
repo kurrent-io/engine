@@ -42,9 +42,14 @@ class QueryQuestion(TypedDict):
     query: NotRequired[Dict[str, Literal[True]]]
 
 
+class QueryResult(TypedDict):
+    result: Any
+    dirty: bool
+
+
 class QueryAnswer(TypedDict):
     store: Dict[str, StoreValue]
-    query: Dict[str, Tuple[Any, bool]]
+    query: Dict[str, QueryResult]
 
 
 class _QueryResult:
@@ -54,8 +59,7 @@ class _QueryResult:
     def __await__(self) -> Generator[QueryQuestion, QueryAnswer, Any]:
         # ask the graph for the result of a query when it's ready
         ans = yield {"query": {self._id: True}}
-        result, dirty = ans["query"][self._id]
-        return result
+        return ans["query"][self._id]["result"]
 
 
 class _StoreResult:
@@ -193,13 +197,13 @@ class Engine[QX, E, C]:
             storejs = None
         else:
             ExternalStore = self.module.ExternalStore
-            EncodeProto = self.module.EncodeProto
-            if ExternalStore is None or EncodeProto is None:
+            encodeProto = self.module.encodeProto
+            if ExternalStore is None or encodeProto is None:
                 raise ValueError(
-                    "both ExternalStore and EncodeProto must be exported by typescript stub "
+                    "both ExternalStore and encodeProto must be exported by typescript stub "
                     "if a Store is configured (otherwise in-memory store will be used)"
                 )
-            storejs = _quickjs.make_store(self._js, ExternalStore, EncodeProto, store)
+            storejs = _quickjs.make_store(self._js, ExternalStore, encodeProto, store)
 
         callbacks: Dict[str, Any] = {
             "migrate": migrate and self.module[migrate],
@@ -240,7 +244,7 @@ class Engine[QX, E, C]:
 
             return {"next": nextfunc}
 
-        # call javascript engine.newQuery() to get javascript _Query
+        # call javascript engine.newQuery() to get javascript QueryImpl
         _query = self._engine.newQuery(queryfunc, True)
 
         # wrap javascript query in python wrapper

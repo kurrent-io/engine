@@ -38,10 +38,10 @@ emitters).  See README.md for layout, build commands, and the test suite.
   regex-dialect problem disappears (JS is the only dialect).  TypeSpec's std constraint decorators +
   compiler accessor functions (`getMinLength` etc.) mean no new vocabulary is needed.
 - **Serde is one-directional: emitters generate decoders only.**  Per-type generated code exists
-  for the decode direction (plain proto JSON → runtime values: `Decode*` in TS, `to*` converters
-  in Go).  The encode direction is schema-free — the TS skeleton's `EncodeProto` (or
+  for the decode direction (plain proto JSON → runtime values: `decode*` in TS, `to*` converters
+  in Go).  The encode direction is schema-free — the TS skeleton's `encodeProto` (or
   `protoStringify` when serializing) structurally encodes any runtime value back to plain proto.
-  Never add generated per-type encoders; route all encoding through `EncodeProto`.
+  Never add generated per-type encoders; route all encoding through `encodeProto`.
 - **API design principle:** emitters being easy to read and write outranks any shorthand
   inside the core.  When core ergonomics (e.g. TS parameter-property shorthand) conflict with clean
   names at emitter call sites (e.g. `solution.default` vs `solution.dflt`), the call site wins.

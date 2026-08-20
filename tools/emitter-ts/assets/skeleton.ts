@@ -1,8 +1,8 @@
 // utils //////////////////////////////////////////////////////////////////////
 
-// json_typeof returns the json type of a value that came out of parsing json
-// (so 'undefined' is not handled, since it isn't allowed in json)
-export function json_typeof(val: any): string {
+/** jsonTypeof returns the json type of a value that came out of parsing json
+    (so 'undefined' is not handled, since it isn't allowed in json) */
+export function jsonTypeof(val: any): string {
   const t = typeof val;
   if (t === 'object') {
     if (val === null) return 'null';
@@ -50,9 +50,9 @@ if (!(globalThis as any).generateUuid) {
   };
 }
 
-// protoJSONReplacer is a JSON.stringify() replacer; it is more efficient than EncodeProto because
-// JSON.stringify() doesn't have to recreate the whole tree of an object like EncodeProto does.
-// But EncodeProto is more like an inverse operation of the Decode* family of functions.
+/** protoJSONReplacer is a JSON.stringify() replacer; it is more efficient than encodeProto because
+    JSON.stringify() doesn't have to recreate the whole tree of an object like encodeProto does.
+    But encodeProto is more like an inverse operation of the decode* family of functions. */
 export function protoJSONReplacer(_k: string, v: any): any {
   if (v instanceof Map) return [...v.entries()];
   if (v instanceof Set) return [...v.keys()];
@@ -60,12 +60,12 @@ export function protoJSONReplacer(_k: string, v: any): any {
   return v;
 }
 
-// protoStringify is like JSON.stringify(), but it handles Map and Set
+/** protoStringify is like JSON.stringify(), but it handles Map and Set */
 export function protoStringify(obj: any): any {
   return JSON.stringify(obj, protoJSONReplacer);
 }
 
-export function EncodeProto(base: any): any {
+export function encodeProto(base: any): any {
   switch (typeof base) {
     case 'boolean':
     case 'bigint':
@@ -84,16 +84,16 @@ export function EncodeProto(base: any): any {
     case 'symbol':
     case 'function':
     default:
-      throw new Error(`base of type "${typeof base}" not handled by EncodeProto`);
+      throw new Error(`base of type "${typeof base}" not handled by encodeProto`);
   }
 
   // check if object has toJSON()
   if (base.toJSON) return base.toJSON();
 
-  if (Array.isArray(base)) return base.map(EncodeProto);
-  if (base instanceof Map) return [...base.entries()].map(EncodeProto);
+  if (Array.isArray(base)) return base.map(encodeProto);
+  if (base instanceof Map) return [...base.entries()].map(encodeProto);
   if (base instanceof Set) return [...base.keys()]; // object keys not supported
-  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, EncodeProto(v)]));
+  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, encodeProto(v)]));
 }
 
 const copySym = Symbol();
@@ -1163,14 +1163,14 @@ function copyOnWriteSet<K>(base: Set<K>, parent?: () => void) {
 
 // futures ////////////////////////////////////////////////////////////////////
 
-/* A Future is a function that yields nothing, is woken up with nothing, and eventually returns T */
+/** A Future is a function that yields nothing, is woken up with nothing, and eventually returns T */
 export type Future<T> = Generator<void, T, void>;
 
-/* A FutureContext corresponds to the first generator in our callstack.  Though it may be delegating
-   yields to some child generator through yield* statements, when a condition is met to wake up the
-   child, the .next() has to be sent to the root generator, not the child (or grandchild).
+/** A FutureContext corresponds to the first generator in our callstack.  Though it may be delegating
+    yields to some child generator through yield* statements, when a condition is met to wake up the
+    child, the .next() has to be sent to the root generator, not the child (or grandchild).
 
-   FutureContext makes that trivial. */
+    FutureContext makes that trivial. */
 export class FutureContext {
   #coro: Generator;
   #awake: boolean = false;
@@ -1214,16 +1214,16 @@ export class FutureContext {
 // the type-to-store conversion internally.  Then any generated typed getters built around the
 // Store interface shall be merely typecasting wrappers.
 
-// Store is the interface for creating read and write transasctions.  An implementation of Store
-// is callback-based and should support multiple parallel gets and sets at the API level, even if
-// they must be serialized internally.  The run{R,W}Txn functions are used to convert the callback
-// interface of WTxn and RTxn to the StoreGenerator protocol.
-//
-// The store should accept rich values (including Date, Map, and Set) via .set() and it should
-// return rich values with .get(), even if it can't store them.  For sets, EncodeProto and
-// protoStringify can help lower values to plain json objects or json string.  For gets, the
-// generated decoder is passed along with each .get() that can lift values from plain json objects
-// to rich objects.
+/** Store is the interface for creating read and write transasctions.  An implementation of Store
+    is callback-based and should support multiple parallel gets and sets at the API level, even if
+    they must be serialized internally.  The run{R,W}Txn functions are used to convert the callback
+    interface of WTxn and RTxn to the StoreGenerator protocol.
+
+    The store should accept rich values (including Date, Map, and Set) via .set() and it should
+    return rich values with .get(), even if it can't store them.  For sets, encodeProto and
+    protoStringify can help lower values to plain json objects or json string.  For gets, the
+    generated decoder is passed along with each .get() that can lift values from plain json objects
+    to rich objects. */
 export interface Store {
   withWTxn<T>(fx: FutureContext, fn: (txn: WTxn) => Future<T>): Future<T>;
   withRTxn<T>(fx: FutureContext, fn: (txn: RTxn) => Future<T>): Future<T>;
@@ -1232,8 +1232,8 @@ export interface Store {
 export type StoreValue = { value: unknown } | { err: Error };
 export type StoreDone = { value: true } | { err: Error };
 
-// Every .set can use the same EncodeProto, but reads need to know what generated decoder to use.
-// null means "identity"
+/** Every .set can use the same encodeProto, but reads need to know what generated decoder to use.
+    null means "identity" */
 export type StoreDecoder = null | ((value: unknown) => unknown);
 
 export interface WTxn {
@@ -1249,7 +1249,7 @@ export interface RTxn {
 export type WStoreQuestion = {
   // keys to look up, plus the generated decoder to take them from plain json -> rich types
   get?: Record<string, StoreDecoder>;
-  // key-values to set (no encoder needed; EncodeProto or protoStringify work on all storable types)
+  // key-values to set (no encoder needed; encodeProto or protoStringify work on all storable types)
   set?: Record<string, unknown>;
   // key-values to delete
   del?: Record<string, true>;
@@ -1272,7 +1272,7 @@ export type StoreAnswer = {
 export type WStoreGenerator<T> = Generator<WStoreQuestion, T, StoreAnswer>;
 export type RStoreGenerator<T> = Generator<RStoreQuestion, T, StoreAnswer>;
 
-// function to interact with the StoreGenerator
+/** function to interact with the StoreGenerator */
 export function* txnGet(key: string, decoder: StoreDecoder): RStoreGenerator<unknown> {
   const ans = (yield { get: { [key]: decoder } }).get[key];
   if ('err' in ans) {
@@ -1281,7 +1281,7 @@ export function* txnGet(key: string, decoder: StoreDecoder): RStoreGenerator<unk
   return ans.value;
 }
 
-// a function to interact with the StoreGenerator
+/** a function to interact with the StoreGenerator */
 export function* txnSet(key: string, value: unknown): WStoreGenerator<void> {
   const ans = (yield { set: { [key]: value } }).set[key];
   if ('err' in ans) {
@@ -1289,7 +1289,7 @@ export function* txnSet(key: string, value: unknown): WStoreGenerator<void> {
   }
 }
 
-// a function to interact with the StoreGenerator
+/** a function to interact with the StoreGenerator */
 export function* txnDel(key: string): WStoreGenerator<void> {
   const ans = (yield { del: { [key]: true } }).del[key];
   if ('err' in ans) {
@@ -1297,14 +1297,14 @@ export function* txnDel(key: string): WStoreGenerator<void> {
   }
 }
 
-// a function to hide some of the boilerplate of opening a WTxn
+/** a function to hide some of the boilerplate of opening a WTxn */
 export function* withWTxn<T>(fx: FutureContext, s: Store, fn: () => WStoreGenerator<T>): Future<T> {
   return yield* s.withWTxn(fx, function* (txn) {
     return yield* runWTxn(fx, txn, fn());
   });
 }
 
-// a function to hide some of the boilerplate of opening a RTxn
+/** a function to hide some of the boilerplate of opening a RTxn */
 export function* withRTxn<T>(fx: FutureContext, s: Store, fn: () => RStoreGenerator<T>): Future<T> {
   return yield* s.withRTxn(fx, function* (txn) {
     return yield* runRTxn(fx, txn, fn());
@@ -1626,23 +1626,23 @@ class OverlayTxn {
 
 type MaybePromise<T> = T | Promise<T>;
 
-// ExternalStoreTxn is part of ExternalStore.
+/** ExternalStoreTxn is part of ExternalStore. */
 export interface ExternalStoreTxn {
-  // get gets a value (specific decoder is provided, if needed)
+  /** get gets a value (specific decoder is provided, if needed) */
   get(key: string, decoder: StoreDecoder): MaybePromise<unknown>;
-  // set sets a value (store backend may call EncodeProto if needed)
+  /** set sets a value (store backend may call encodeProto if needed) */
   set(key: string, value: unknown): MaybePromise<void>;
-  // del deletes a value
+  /** del deletes a value */
   del(key: string): MaybePromise<void>;
-  // commit the transaction
+  /** commit the transaction */
   commit(): MaybePromise<void>;
-  // abort the transaction.  You do not need to call abort() directly; it will be called
-  // automatically after any of the other methods fail (including if commit() fails).
+  /** abort the transaction.  You do not need to call abort() directly; it will be called
+      automatically after any of the other methods fail (including if commit() fails). */
   abort(): MaybePromise<void>;
 }
 
-/* ExternalStore implements Store with automatic conversions between native return values and
-   the generator-based reducers runtime */
+/** ExternalStore implements Store with automatic conversions between native return values and
+    the generator-based reducers runtime */
 export class ExternalStore {
   #txnFn: (writable: boolean) => MaybePromise<ExternalStoreTxn>;
 
@@ -1753,17 +1753,17 @@ export type Reducer<T> = Generator<ReducerQuestion, T, ReducerAnswer>;
 // yield* rx.get.project(key): get the current value for key, possibly setting it from old
 // yield* rx.old.project(key): explicitly get the old value for key
 
-// wrap a Reducer so it acts like a WStoreGenerator, returning a set of updated keys
+/** wrap a Reducer so it acts like a WStoreGenerator, returning a set of updated keys */
 export function* runReducer(
   g: Reducer<any[] | void>,
   simulate?: boolean,
-): WStoreGenerator<[string[], any[]]> {
+): WStoreGenerator<{ updates: string[]; markedSent: any[] }> {
   // our cache of get's we've already completed
   const old: Record<string, unknown> = Object.create(null);
   // our planned sets and dels that we submit at the end
   const cur: Record<string, unknown> = Object.create(null);
 
-  function* finish(retVal: any[]): WStoreGenerator<[string[], any[]]> {
+  function* finish(retVal: any[]): WStoreGenerator<{ updates: string[]; markedSent: any[] }> {
     const updates = [];
     const question: WStoreQuestion = { get: {}, set: {}, del: {} };
     for (const [k, v] of Object.entries(cur)) {
@@ -1783,7 +1783,7 @@ export function* runReducer(
       }
     }
     // are there any store updates to make?
-    if (updates.length === 0 || simulate) return [updates, retVal];
+    if (updates.length === 0 || simulate) return { updates, markedSent: retVal };
     let nupdated = 0;
     while (nupdated < updates.length) {
       // actually yield the write request to the store
@@ -1798,7 +1798,7 @@ export function* runReducer(
         nupdated++;
       }
     }
-    return [updates, retVal];
+    return { updates, markedSent: retVal };
   }
 
   let ans: ReducerAnswer = { old: {}, get: {}, set: {}, del: {} };
@@ -1914,23 +1914,23 @@ export function* runReducer(
       })
 */
 
-// user-facing query api
+/** user-facing query api */
 export interface Query<T> {
-  // latest holds the most recent value passed to subscribe callback.  It is updated immediately
-  // after subscribe callbacks are made, on a per-Query basis.
+  /** latest holds the most recent value passed to subscribe callback.  It is updated immediately
+      after subscribe callbacks are made, on a per-Query basis. */
   latest: T | undefined;
-  // subscribe returns an unsubscribe function
+  /** subscribe returns an unsubscribe function */
   subscribe(callback: (val: T) => void): () => void;
-  // close will stop the query from running again.
-  // Dependent queries which are not also closed will start crashing.
+  /** close will stop the query from running again.
+      Dependent queries which are not also closed will start crashing. */
   close(): void;
 }
 
-// LocalQuery extends Query with the ability to compose queries by calling awaitResult() inside a
-// QueryFunction body.  This isn't possible with typespec-defined Queries, which can only handle
-// json-serializable args, not references to existing Query objects.
+/** LocalQuery extends Query with the ability to compose queries by calling awaitResult() inside a
+    QueryFunction body.  This isn't possible with typespec-defined Queries, which can only handle
+    json-serializable args, not references to existing Query objects. */
 export interface LocalQuery<T> extends Query<T> {
-  // awaitResult has no effect when executed outside of a query function
+  /** awaitResult has no effect when executed outside of a query function */
   awaitResult(): QueryGenerator<T>;
 }
 
@@ -1944,8 +1944,8 @@ export type QueryQuestion = {
 export type QueryAnswer = {
   // the value for each store lookup
   store: Record<string, StoreValue>;
-  // the [result, dirty] for each asked query
-  query: Record<string, [unknown, boolean]>;
+  // the {result, dirty} for each asked query
+  query: Record<string, { result: unknown; dirty: boolean }>;
 };
 
 export type QueryGenerator<T> = Generator<QueryQuestion, T, QueryAnswer>;
@@ -1957,13 +1957,13 @@ interface QueryWrapper<QX> {
   // the id of this query
   id: string;
   closed: boolean; // TODO: somehow use this to fail dependent queries after a query is closed
-  // returns `[result, dirty]` indicating if the result and if it changed
-  run(qx: QX, commitKeys: Record<string, true>): QueryGenerator<[unknown, boolean]>;
+  // returns `{result, dirty}` indicating if the result and if it changed
+  run(qx: QX, commitKeys: Record<string, true>): QueryGenerator<{ result: unknown; dirty: boolean }>;
   // call subscribers with the latest result
   notify(): void;
 }
 
-class _Query<QX, T> {
+class QueryImpl<QX, T> {
   id: string;
   latest: T | undefined = undefined;
   closed: boolean = false;
@@ -1988,7 +1988,7 @@ class _Query<QX, T> {
     // don't try to coordinate our own #result vaule with the graph being executed; just use this as
     // an idiomatic way to ask the graph run for the result from our .id.
     const ans = yield { query: { [this.id]: true } };
-    const [result] = ans.query[this.id];
+    const { result } = ans.query[this.id];
     return result as T;
   }
 
@@ -2021,7 +2021,7 @@ class _Query<QX, T> {
     // check if any query dependency changed its result
     for (const qid of Object.keys(this.#queryDeps)) {
       const ans = yield { query: { [qid]: true } };
-      const [, dirty] = ans['query'][qid];
+      const { dirty } = ans['query'][qid];
       if (dirty) return false;
     }
 
@@ -2029,13 +2029,13 @@ class _Query<QX, T> {
   }
 
   // part of graph api
-  *run(qx: QX, commitKeys: Record<string, true>): QueryGenerator<[unknown, boolean]> {
+  *run(qx: QX, commitKeys: Record<string, true>): QueryGenerator<{ result: unknown; dirty: boolean }> {
     // shift current values to old values
     const oldResult = this.#result;
     this.#runs++;
 
     if (yield* this.#shouldSkip(commitKeys)) {
-      return [this.#result, false];
+      return { result: this.#result, dirty: false };
     }
 
     // rebuild deps
@@ -2051,7 +2051,7 @@ class _Query<QX, T> {
       if (done) {
         this.#result = value;
         const dirty = this.#runs === 1 || this.#result !== oldResult;
-        return [this.#result, dirty];
+        return { result: this.#result, dirty };
       }
       // capture dependencies before yielding up to the graph for answers
       // {store: {store_key: true}, query: {query_id: true}}
@@ -2084,9 +2084,9 @@ class GraphRun<QX> {
   // {key: true}
   #commitKeys: Record<string, true>;
 
-  // the [result, dirty] of queries which have ran
-  // {query_id: [value, dirty]}
-  #ran: Record<string, [unknown, boolean]> = {};
+  // the {result, dirty} of queries which have ran
+  // {query_id: {result, dirty}}
+  #ran: Record<string, { result: unknown; dirty: boolean }> = {};
 
   constructor(qx: QX, commitKeys: Record<string, true>) {
     this.#qx = qx;
@@ -2104,7 +2104,7 @@ class GraphRun<QX> {
 
     // every query which is currently running
     // {query_id: generator}
-    const active: Record<string, QueryGenerator<[unknown, boolean]>> = {};
+    const active: Record<string, QueryGenerator<{ result: unknown; dirty: boolean }>> = {};
     // a record of {query_id: answer} to feed to coroutines
     let runnable: Record<string, QueryAnswer> = {};
     // which queries are unblocked by a given answer
@@ -2189,18 +2189,18 @@ class GraphRun<QX> {
     // return a callback to notify query subscribers
     return () => {
       for (const q of queries) {
-        const [, dirty] = this.#ran[q.id];
+        const { dirty } = this.#ran[q.id];
         if (dirty) q.notify();
       }
     };
   }
 }
 
-/* QueryGraph is responsible for tracking queries generated by the UI and rerunning them when new
-   data is present.  It tracks dependencies of a query function by injecting a query context, which
-   provides the actual key-value lookup capability to the function.  It is informed of changes to
-   the store by the Midend, such as some keys being updated by the UI, keys of an old overlay being
-   discarded, or new forecast data from the UI itself. */
+/** QueryGraph is responsible for tracking queries generated by the UI and rerunning them when new
+    data is present.  It tracks dependencies of a query function by injecting a query context, which
+    provides the actual key-value lookup capability to the function.  It is informed of changes to
+    the store by the Midend, such as some keys being updated by the UI, keys of an old overlay being
+    discarded, or new forecast data from the UI itself. */
 export class QueryGraph<QX> {
   #qx: QX;
   #dirty: Record<string, true> = {};
@@ -2218,7 +2218,7 @@ export class QueryGraph<QX> {
 
   newQuery<T>(fn: QueryFunction<QX, T>): LocalQuery<T> {
     const id = `${this.#id++}`;
-    const q = new _Query(id, fn);
+    const q = new QueryImpl(id, fn);
     this.#queries[id] = q;
     this.#newQueries.push(q);
     return q;
@@ -2314,14 +2314,14 @@ class RemoteQuery<T> {
   }
 }
 
-// QueriesIO is implemented by the user and passed into the RemoteQueries subclass.  Only the user
-// knows the transport over which query data should flow.
+/** QueriesIO is implemented by the user and passed into the RemoteQueries subclass.  Only the user
+    knows the transport over which query data should flow. */
 export interface QueriesIO {
-  // createQuery takes, query id, args, and an onResults hook, returning a closer function
+  /** createQuery takes, query id, args, and an onResults hook, returning a closer function */
   createQuery(raw: any[], onResult: (result: any) => void): () => void;
 }
 
-// RemoteQueries is the base class behind the generated, strongly-typed remote query interfaces.
+/** RemoteQueries is the base class behind the generated, strongly-typed remote query interfaces. */
 export class RemoteQueries {
   #io: QueriesIO;
 
@@ -2338,24 +2338,24 @@ export class RemoteQueries {
 
 // engines ////////////////////////////////////////////////////////////////////
 
-// Identified wraps a proto type T with a client id.  An Identified event may have originated from
-// KurrentDB, or it may have been emitted by a forecaster, or it may be a command we are about to
-// send.
+/** Identified wraps a proto type T with a client id.  An Identified event may have originated from
+    KurrentDB, or it may have been emitted by a forecaster, or it may be a command we are about to
+    send. */
 export type Identified<T> = {
   id: string;
   data: T;
 };
 
-// Committed extends Identified with stream position data that originates from KurrentDB.
+/** Committed extends Identified with stream position data that originates from KurrentDB. */
 export type Committed<T> = Identified<T> & {
   position: number;
 };
 
-export function DecodeIdentified<T>(val: any, subdecoder: (val: any) => T): Identified<T> {
+export function decodeIdentified<T>(val: any, subdecoder: (val: any) => T): Identified<T> {
   return { ...val, data: subdecoder(val.data) } as Identified<T>;
 }
 
-export function DecodeCommitted<T>(val: any, subdecoder: (val: any) => T): Committed<T> {
+export function decodeCommitted<T>(val: any, subdecoder: (val: any) => T): Committed<T> {
   return { ...val, data: subdecoder(val.data) } as Committed<T>;
 }
 
@@ -2399,7 +2399,7 @@ function matchSent<C>(tpl: any, cmd: C): boolean {
   return Object.entries(tpl).every(([k, v]) => matchSent(v, (cmd as Record<string, any>)[k]));
 }
 
-/* Engine builds a sync engine out of a Store implementation and a reducer to process incoming
+/** Engine builds a sync engine out of a Store implementation and a reducer to process incoming
    events.
 
    Optionally, it also receives the following user configurations:
@@ -2525,7 +2525,7 @@ export class Engine<QX, RX, E, C> {
     this.#rx = rx;
     this.#store = store ?? new InMemStore();
     this.#decodeEvent = callbacks.decodeEvent;
-    this.#decodeCommand = (value: any) => DecodeIdentified(value, callbacks.decodeCommand);
+    this.#decodeCommand = (value: any) => decodeIdentified(value, callbacks.decodeCommand);
     this.#migrate = callbacks.migrate ?? null;
     this.#reducer = callbacks.reducer;
     this.#forecaster = callbacks.forecaster ?? null;
@@ -2542,7 +2542,7 @@ export class Engine<QX, RX, E, C> {
 
   //// public api ////
 
-  // request info needed to resume a connection: last committed checkpoint and unsent commands
+  /** request info needed to resume a connection: last committed checkpoint and unsent commands */
   reconnect(
     cb: (result: { checkpoint: number | undefined; commands: Identified<any>[] }) => void,
   ): void {
@@ -2550,11 +2550,11 @@ export class Engine<QX, RX, E, C> {
     this.#schedule();
   }
 
-  // New events from the wire come here.  They must be in plain json format (the decodeEvent
-  // callback from the constructor is applied universally to the raw incoming events).
+  /** New events from the wire come here.  They must be in plain json format (the decodeEvent
+      callback from the constructor is applied universally to the raw incoming events). */
   recvEvents(raw: Committed<any>[]): void {
     for (const r of raw) {
-      const event = DecodeCommitted(r, this.#decodeEvent);
+      const event = decodeCommitted(r, this.#decodeEvent);
       this.#recvdEvents.push(event);
     }
     this.#schedule();
@@ -2570,9 +2570,9 @@ export class Engine<QX, RX, E, C> {
     this.#schedule();
   }
 
-  // After forecasting and saving to the store, these will appear in an onCommands() callback.
-  // Note that the provided commands should be in rich format (Date, Maps, and Sets all intact),
-  // but they will be encoded to plain json for the onCommands() callback.
+  /** After forecasting and saving to the store, these will appear in an onCommands() callback.
+      Note that the provided commands should be in rich format (Date, Maps, and Sets all intact),
+      but they will be encoded to plain json for the onCommands() callback. */
   sendCommands(commands: C[]): void {
     if (!this.#onCommands) {
       throw new Error('if sendCommands() is used, the onCommands callback is required');
@@ -2581,24 +2581,24 @@ export class Engine<QX, RX, E, C> {
     this.#schedule();
   }
 
-  // normally forecasted events are discarded when the event id that was submitted is observed in
-  // recvEvents().  But if the command was rejected, then it may be necessary to explicitly flag the
-  // command as sent, so the forecasted events from that rejected command can be discarded.
+  /** normally forecasted events are discarded when the event id that was submitted is observed in
+      recvEvents().  But if the command was rejected, then it may be necessary to explicitly flag the
+      command as sent, so the forecasted events from that rejected command can be discarded. */
   markSent(...id: string[]): void {
     this.#roundTripped.push(...id);
     this.#schedule();
   }
 
-  // add a new Query to the graph
+  /** add a new Query to the graph */
   newQuery<T>(fn: QueryFunction<QX, T>): LocalQuery<T> {
     this.#newQueries = true;
     this.#schedule();
     return this.#graph.newQuery(fn);
   }
 
-  // simulate runs some events through the provided reducer-like function.  A temporary overlay is
-  // used and the real Storage is unaffected.  The events should be provided in plain-json format,
-  // the same as for recvEvents().
+  /** simulate runs some events through the provided reducer-like function.  A temporary overlay is
+      used and the real Storage is unaffected.  The events should be provided in plain-json format,
+      the same as for recvEvents(). */
   simulate<T>(
     fn: (rx: RX, decodedEvents: E[]) => Reducer<T>,
     cb: (result: T) => void,
@@ -2765,7 +2765,7 @@ export class Engine<QX, RX, E, C> {
 
       // run the reducer with our new events
       const eventsData = events.map((event) => event.data);
-      const [updates, markedSent] = yield* runReducer(self.#reducer(self.#rx, eventsData));
+      const { updates, markedSent } = yield* runReducer(self.#reducer(self.#rx, eventsData));
 
       // discard unsent commands that we now know are sent
       if (self.#unsent.size > 0) {
@@ -2818,7 +2818,7 @@ export class Engine<QX, RX, E, C> {
     // rebuild overlay with current forecasts
     const forecasts = [...this.#unsent.values()].flat();
     if (forecasts.length > 0) {
-      const [updates, _markedSent] = yield* withWTxn(this.#fx, this.#overlay, function* () {
+      const { updates } = yield* withWTxn(this.#fx, this.#overlay, function* () {
         return yield* runReducer(self.#reducer(self.#rx, forecasts));
       });
       self.#graph.dirty(updates);
@@ -2842,7 +2842,7 @@ export class Engine<QX, RX, E, C> {
     this.#sendCommands = [];
 
     // encode once now for both storage and the onCommands callback
-    const encoded = commands.map(EncodeProto);
+    const encoded = commands.map(encodeProto);
 
     // open a write txn to the real store
     yield* withWTxn(this.#fx, this.#store, function* () {
@@ -2881,7 +2881,7 @@ export class Engine<QX, RX, E, C> {
     if (forecasts.length === 0 || !this.#live) return;
 
     // open a write txn against the existing overlay
-    const [updates, _markedSent] = yield* withWTxn(this.#fx, this.#overlay, function* () {
+    const { updates } = yield* withWTxn(this.#fx, this.#overlay, function* () {
       return yield* runReducer(self.#reducer(self.#rx, forecasts));
     });
     this.#graph.dirty(updates);
@@ -2991,10 +2991,10 @@ export class ReducerTester<RX, E, S> {
     }
   }
 
-  #run(g: Reducer<void | any[]>): [string[], any[]] {
+  #run(g: Reducer<void | any[]>): { updates: string[]; markedSent: any[] } {
     // do the "FutureContext" dance.
     let fx: FutureContext;
-    let result: [string[], any[]] | undefined = undefined;
+    let result: { updates: string[]; markedSent: any[] } | undefined = undefined;
     const self = this;
     const coro = (function* () {
       result = yield* withWTxn(fx!, self.#store, function* () {
@@ -3011,10 +3011,10 @@ export class ReducerTester<RX, E, S> {
     return result;
   }
 
-  // run events against provided reducer
+  /** run events against provided reducer */
   run(events: E[]): { updates: string[]; markedSent: any[] } {
     const g = this.#reducer(this.#rx, events);
-    const [updates, markedSent] = this.#run(g);
+    const { updates, markedSent } = this.#run(g);
     updates.sort();
     return { updates, markedSent };
   }

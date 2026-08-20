@@ -711,7 +711,7 @@ func NewFileSource(path string) Source {
 func (s FileSource) ToSource() (string, string, error) {
 	byts, err := os.ReadFile(s.path)
 	if err != nil {
-		return "", "", nil
+		return "", "", err
 	}
 	return s.path, string(byts), nil
 }
@@ -1145,12 +1145,12 @@ func (q *Query[T]) Result(qx QueryContext) T {
 	query.Set(id, true)
 	question := q.vm.NewObject()
 	question.Set("query", query)
-	// receive {query: {id: [result, dirty]}}
-	answer := qx.Ask(query)
+	// receive {query: {id: {result, dirty}}}
+	answer := qx.Ask(question)
 	return answer.(*goja.Object).
 		Get("query").(*goja.Object).
-		Get("id").(*goja.Object).
-		Get("0").
+		Get(id).(*goja.Object).
+		Get("result").
 		Export().(T)
 }
 

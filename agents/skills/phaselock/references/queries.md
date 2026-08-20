@@ -89,11 +89,11 @@ Generation produces, per interface:
 
 - `TodoQuery` — the wire shape, a tagged tuple:
   `["TodoQueries.allLists", ...args]`.
-- `checkTodoQuery(raw)` / `DecodeTodoQuery(raw)` — validate and revive a
+- `checkTodoQuery(raw)` / `decodeTodoQuery(raw)` — validate and revive a
   tuple from the wire (dates decoded, etc.).
 - `TodoQueryDefs<QX>` — the interface a server implements: one generator
   per query, given the query context plus the declared args.
-- `LocalTodoQueries(engine, defs)` — binds defs to an engine, yielding an
+- `new LocalTodoQueries(engine, defs)` — binds defs to an engine, yielding an
   object with one method per query returning live `Query<T>` handles.
 - `RemoteTodoQueries(io)` — the client side: same shaped object, but each
   method encodes a tuple and subscribes via your transport.
@@ -110,10 +110,10 @@ class ServerQueryDefs implements TodoQueryDefs<TodoQX> {
 }
 
 // per connection: identity-specific defs, live handles, dispatch
-const queries = LocalTodoQueries(engine, new ServerQueryDefs(/* identity */));
+const queries = new LocalTodoQueries(engine, new ServerQueryDefs(/* identity */));
 const errs = checkTodoQuery(raw);
 if (errs.length) return closeConnection(errs);
-const q = dispatchTodoQuery(queries, DecodeTodoQuery(raw));
+const q = dispatchTodoQuery(queries, decodeTodoQuery(raw));
 q.subscribe((result) => send({ queryResults: { [qid]: result } }));
 // q.close() when the client unsubscribes or disconnects
 ```
@@ -131,7 +131,7 @@ so it serves any queries object, local or remote; `useLocalQuery` is the
 marked special case, because local queries have a superset of powers
 (arbitrary query functions, composition).
 
-Results cross the wire as plain JSON (`EncodeProto` on the way out, generated
+Results cross the wire as plain JSON (`encodeProto` on the way out, generated
 decoders on the way in). Query arguments must therefore be JSON-representable
 data — one reason why local queries can compose with other query objects
 but server-defined ones take only data arguments.

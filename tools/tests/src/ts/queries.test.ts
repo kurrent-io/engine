@@ -34,10 +34,10 @@ const SOURCE = `
   }
 `;
 
-/* Stand-in for the runtime skeleton: json_typeof and EncodeProto behave like the real ones;
+/* Stand-in for the runtime skeleton: jsonTypeof and encodeProto behave like the real ones;
    RemoteQueries records what generated methods pass to the transport. */
 const STUB_SKELETON = `
-export function json_typeof(val: any): string {
+export function jsonTypeof(val: any): string {
   const t = typeof(val);
   if (t === "object") {
     if (val === null) return "null";
@@ -46,7 +46,7 @@ export function json_typeof(val: any): string {
   return t;
 }
 
-export function EncodeProto(base: any): any {
+export function encodeProto(base: any): any {
   switch (typeof base) {
     case "boolean":
     case "bigint":
@@ -58,11 +58,11 @@ export function EncodeProto(base: any): any {
       if (base === null) return base;
       break;
     default:
-      throw new Error("type not handled by EncodeProto: " + typeof base);
+      throw new Error("type not handled by encodeProto: " + typeof base);
   }
   if (base.toJSON) return base.toJSON();
-  if (Array.isArray(base)) return base.map(EncodeProto);
-  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, EncodeProto(v)]));
+  if (Array.isArray(base)) return base.map(encodeProto);
+  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, encodeProto(v)]));
 }
 
 export type QueryGenerator<T> = Generator<any, T, any>;
@@ -148,14 +148,14 @@ describe('wire message checker', () => {
 
 describe('wire message decoder', () => {
   it('produces the typed tuple, reviving dates', () => {
-    const decoded = M.DecodeAdminQuery(['AdminQueries.patronsSince', ISO]);
+    const decoded = M.decodeAdminQuery(['AdminQueries.patronsSince', ISO]);
     expect(decoded[0]).toBe('AdminQueries.patronsSince');
     expect(decoded[1]).toBeInstanceOf(Date);
     expect(decoded[1].toISOString()).toBe('2024-01-02T03:04:05.000Z');
   });
 
   it('passes nullable args through', () => {
-    expect(M.DecodeAdminQuery(['AdminQueries.patronsNamed', 'bob', null])).toEqual([
+    expect(M.decodeAdminQuery(['AdminQueries.patronsNamed', 'bob', null])).toEqual([
       'AdminQueries.patronsNamed',
       'bob',
       null,
@@ -239,7 +239,7 @@ describe('local provider', () => {
       },
     };
 
-    const local = M.LocalAdminQueries(eng, defs);
+    const local = new M.LocalAdminQueries(eng, defs);
     local.patronsNamed('bob', 5);
     local.allPatrons();
     expect(captured).toHaveLength(2);
@@ -273,10 +273,10 @@ describe('dispatcher', () => {
 
   it('routes a decoded message to the matching provider method', () => {
     const queries = fakeQueries();
-    const q1 = M.dispatchAdminQuery(queries, M.DecodeAdminQuery(['AdminQueries.allPatrons']));
+    const q1 = M.dispatchAdminQuery(queries, M.decodeAdminQuery(['AdminQueries.allPatrons']));
     const q2 = M.dispatchAdminQuery(
       queries,
-      M.DecodeAdminQuery(['AdminQueries.patronsNamed', 'bob', 3]),
+      M.decodeAdminQuery(['AdminQueries.patronsNamed', 'bob', 3]),
     );
     expect(q1).toBe('q-all');
     expect(q2).toBe('q-named');
@@ -285,13 +285,13 @@ describe('dispatcher', () => {
 
   it('passes nullable wire args as absent', () => {
     const queries = fakeQueries();
-    M.dispatchAdminQuery(queries, M.DecodeAdminQuery(['AdminQueries.patronsNamed', 'bob', null]));
+    M.dispatchAdminQuery(queries, M.decodeAdminQuery(['AdminQueries.patronsNamed', 'bob', null]));
     expect(queries.calls).toEqual([['patronsNamed', 'bob', undefined]]);
   });
 
   it('revived args arrive as their decoded types', () => {
     const queries = fakeQueries();
-    M.dispatchAdminQuery(queries, M.DecodeAdminQuery(['AdminQueries.patronsSince', ISO]));
+    M.dispatchAdminQuery(queries, M.decodeAdminQuery(['AdminQueries.patronsSince', ISO]));
     expect(queries.calls[0][1]).toBeInstanceOf(Date);
   });
 
@@ -316,10 +316,10 @@ describe('generated type surface', () => {
     expect(text).toContain(
       'export class RemoteAdminQueries extends RemoteQueries implements AdminQueries {',
     );
-    expect(text).toContain('export interface LocalAdminQueries extends AdminQueries {');
-    expect(text).toContain('patronsNamed(name: string, limit?: number): LocalQuery<PatronInfo[]>;');
-    expect(text).toContain('export function LocalAdminQueries<QX>(');
-    expect(text).toContain('): LocalAdminQueries {');
+    expect(text).toContain('export class LocalAdminQueries<QX> implements AdminQueries {');
+    expect(text).toContain(
+      'patronsNamed(name: string, limit?: number): LocalQuery<PatronInfo[]> {',
+    );
     expect(text).toContain(
       'export function dispatchAdminQuery(queries: AdminQueries, query: AdminQuery): Query<any> {',
     );

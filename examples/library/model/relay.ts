@@ -1,4 +1,4 @@
-export { RelayEngine, ExternalStore, EncodeProto } from './model.gen';
+export { RelayEngine, ExternalStore, encodeProto } from './model.gen';
 export {
   relayMigrate,
   relayReducer,

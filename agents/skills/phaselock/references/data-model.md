@@ -300,8 +300,8 @@ What each emitter produces:
 | `-go` | `model.go` | Go types, converters, `Check*`, typed query contexts, `New<Name>Engine` over goja |
 
 Serde is one-directional: only *decoders* are generated per type (plain
-JSON → runtime values, e.g. TypeScript's `Decode*`). There are no
+JSON → runtime values, e.g. TypeScript's `decode*`). There are no
 `Encode<Name>` functions — the encode direction is schema-free. Use
-`EncodeProto` to turn any runtime value (`Date`, `Map`, `Set` included)
+`encodeProto` to turn any runtime value (`Date`, `Map`, `Set` included)
 back into plain JSON, or `protoStringify` to serialize it to a string
 directly.

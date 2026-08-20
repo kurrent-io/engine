@@ -1,7 +1,7 @@
 export {
   checkTodoEvents,
   checkTodoQuery,
-  DecodeTodoQuery,
+  decodeTodoQuery,
   LocalTodoQueries,
   TodoEngine,
   dispatchTodoQuery,

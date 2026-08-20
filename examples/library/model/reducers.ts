@@ -40,8 +40,8 @@ import {
   CancelHold,
   DeciderEvents,
   DeciderRX,
-  DecodeAdminCommands,
-  DecodeUserCommands,
+  decodeAdminCommands,
+  decodeUserCommands,
   Edition,
   EndCheckout,
   EndVHold,
@@ -970,7 +970,7 @@ export function* validateAdminCommands(
   const newUuids: string[] = [];
   for (const e of events) {
     // check for errors
-    const d = DecodeAdminCommands(e);
+    const d = decodeAdminCommands(e);
     const err = yield* validateAdminOne(rx, d, newUuids);
     if (err) return [newUuids, err];
     // update our read model between each validation
@@ -988,7 +988,7 @@ export function* validateUserCommands(
 ): Reducer<[string[], string]> {
   const newUuids: string[] = [];
   for (const e of events) {
-    const d = DecodeUserCommands(e);
+    const d = decodeUserCommands(e);
     const err = yield* validatePatronOne(rx, patron, d, newUuids);
     if (err) return [newUuids, err];
     yield* relayReduceOne(rx, d);

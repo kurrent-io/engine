@@ -45,6 +45,10 @@ type Checkers = Map<KType, Checker>;
 
 const NOOP: Checker = () => '';
 
+function lowerFirst(name: string): string {
+  return name[0].toLowerCase() + name.slice(1);
+}
+
 function generateAnnotations(d: Denter, annos: Annos, t: KType): void {
   const visit = (t: KType): void => {
     // visit each type only once
@@ -128,7 +132,7 @@ function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void
       // - typeof([]) = "object"
       // - typeof(null) = "object"
       // so we use a custom helper function specific to handling decoded json
-      d.print(`switch(json_typeof(${subj})){\n`);
+      d.print(`switch(jsonTypeof(${subj})){\n`);
       d.indent('  ');
       for (const [jtyp, subsln] of solution.options) {
         d.print(`case "${jtyp}":\n`);
@@ -136,7 +140,7 @@ function decodeSolution(d: Denter, decoders: Decoders, solution: Solution): void
         visit(subsln, 'x');
         d.dedent();
       }
-      d.print(`default: throw new Error(\`unexpected json type: \${json_typeof(${subj})}\`);\n`);
+      d.print(`default: throw new Error(\`unexpected json type: \${jsonTypeof(${subj})}\`);\n`);
       d.dedent();
       d.print('}\n');
     } else if (solution instanceof CheckLiteral) {
@@ -224,13 +228,13 @@ function generateDecoders(
       t instanceof KJson
     ) {
       decoders.set(t, null);
-      // builtin types and their aliases need no Decode{name}() function
+      // builtin types and their aliases need no decode{name}() function
       return;
     }
 
     if (t instanceof KDate) {
       decoders.set(t, (val) => `new Date(${val} as string)`);
-      // no Decode{name}() needed
+      // no decode{name}() needed
       return;
     }
 
@@ -247,7 +251,7 @@ function generateDecoders(
           name = `Anon${anon.n}`;
           anon.n += 1;
         }
-        d.print(`\nfunction decode${name}(val: any): ${annos.get(t)} {\n`);
+        d.print(`\n${t.name ? 'export ' : ''}function decode${name}(val: any): ${annos.get(t)} {\n`);
         d.indent('  ');
         decodeSolution(d, decoders, solution);
         d.dedent();
@@ -341,17 +345,19 @@ function generateDecoders(
 
     // either define a named decoder or inline it
     if (t.name) {
-      // we always export a named decoder...
-      const decodeVal = decoder === null ? 'val' : decoder('val');
-      d.print(`\nexport function Decode${t.name}(val: any): ${annos.get(t)} {\n`);
-      d.print(`  return ${decodeVal} as ${annos.get(t)};\n`);
-      d.print('}\n');
+      // we always export a named decoder (named unions with a solution already exported theirs)...
+      if (!(t instanceof KUnion && decoder !== null)) {
+        const decodeVal = decoder === null ? 'val' : decoder('val');
+        d.print(`\nexport function decode${t.name}(val: any): ${annos.get(t)} {\n`);
+        d.print(`  return ${decodeVal} as ${annos.get(t)};\n`);
+        d.print('}\n');
+      }
       // ... but if the decoder is the identity_decoder, we don't use it ourselves
       if (decoder === null) {
         decoders.set(t, null);
       } else {
         const nm = t.name;
-        decoders.set(t, (val) => `Decode${nm}(${val})`);
+        decoders.set(t, (val) => `decode${nm}(${val})`);
       }
     } else {
       decoders.set(t, decoder);
@@ -375,7 +381,7 @@ function jsonTypeCond(jtyp: string, subj: string): string {
     case 'int':
       return `Number.isInteger(${subj})`;
     case 'object':
-      return `json_typeof(${subj}) === "object"`;
+      return `jsonTypeof(${subj}) === "object"`;
     case 'array':
       return `Array.isArray(${subj})`;
     default:
@@ -415,7 +421,7 @@ function checkSolution(d: Denter, checkers: Checkers, solution: Solution): void 
         d.print('}\n');
       }
       d.print(
-        `problems.push(${subjPath} + ": type " + json_typeof(${subjVar}) + " not allowed here");\n`,
+        `problems.push(${subjPath} + ": type " + jsonTypeof(${subjVar}) + " not allowed here");\n`,
       );
       d.print('return problems;\n');
     } else if (solution instanceof CheckLiteral) {
@@ -495,7 +501,7 @@ function generateCheckers(
         t,
         (val, path) =>
           `if (typeof ${val} !== "string") {\n` +
-          `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not string");\n` +
+          `  problems.push(${path} + ": is of type " + jsonTypeof(${val}) + ", not string");\n` +
           `}\n`,
       );
       return;
@@ -505,7 +511,7 @@ function generateCheckers(
         t,
         (val, path) =>
           `if (!Number.isInteger(${val})) {\n` +
-          `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not int");\n` +
+          `  problems.push(${path} + ": is of type " + jsonTypeof(${val}) + ", not int");\n` +
           `}\n`,
       );
       return;
@@ -515,7 +521,7 @@ function generateCheckers(
         t,
         (val, path) =>
           `if (typeof ${val} !== "boolean") {\n` +
-          `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not bool");\n` +
+          `  problems.push(${path} + ": is of type " + jsonTypeof(${val}) + ", not bool");\n` +
           `}\n`,
       );
       return;
@@ -525,7 +531,7 @@ function generateCheckers(
         t,
         (val, path) =>
           `if (${val} !== null) {\n` +
-          `  problems.push(${path} + ": is of type " + json_typeof(${val}) + ", not null");\n` +
+          `  problems.push(${path} + ": is of type " + jsonTypeof(${val}) + ", not null");\n` +
           `}\n`,
       );
       return;
@@ -581,7 +587,7 @@ function generateCheckers(
         const dd = new Denter();
         dd.print(`if (!Array.isArray(${val})) {\n`);
         dd.print(
-          `  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json array");\n`,
+          `  problems.push(${path} + ": is a " + jsonTypeof(${val}) + ", not json array");\n`,
         );
         if (checkers.get(t.itemType) === NOOP) {
           dd.print('}\n');
@@ -589,12 +595,14 @@ function generateCheckers(
         }
         dd.print('} else {\n');
         dd.indent('  ');
-        const iv = `i${loop.n++}`;
-        dd.print(`for (let ${iv} = 0; ${iv} < ${val}.length; ${iv}++) {\n`);
+        const n = loop.n++;
+        const iv = `i${n}`;
+        const ev = `e${n}`;
+        dd.print(`for (const [${iv}, ${ev}] of ${val}.entries()) {\n`);
         dd.indent('  ');
-        // index the element and build its path off the original expressions, so nothing is
-        // clobbered when this checker is inlined inside another
-        dd.print(checkers.get(t.itemType)!(`(${val})[${iv}]`, `${path} + "[" + ${iv} + "]"`));
+        // build the element's path off the original path expression, so nothing is clobbered
+        // when this checker is inlined inside another
+        dd.print(checkers.get(t.itemType)!(ev, `${path} + "[" + ${iv} + "]"`));
         dd.dedent();
         dd.print('}\n');
         dd.dedent();
@@ -608,7 +616,7 @@ function generateCheckers(
         const n = t.itemTypes.length;
         dd.print(`if (!Array.isArray(${val})) {\n`);
         dd.print(
-          `  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json array");\n`,
+          `  problems.push(${path} + ": is a " + jsonTypeof(${val}) + ", not json array");\n`,
         );
         dd.print(`} else if (${val}.length !== ${n}) {\n`);
         dd.print(`  problems.push(${path} + ": expected ${n} items, not " + ${val}.length);\n`);
@@ -630,21 +638,21 @@ function generateCheckers(
       for (const ft of t.fields.values()) visit(ft);
       let keys: string, func: string;
       if (t.name) {
-        keys = `_${t.name}_ALLOWED_KEYS`;
+        keys = `${lowerFirst(t.name)}AllowedKeys`;
         func = `check${t.name}`;
       } else {
         const n = anon.n++;
-        keys = `_Anon${n}_ALLOWED_KEYS`;
+        keys = `anon${n}AllowedKeys`;
         func = `checkAnon${n}`;
       }
-      const keyset = '[' + [...t.fields.keys()].map((fn) => `"${fn}"`).join(', ') + ']';
-      d.print(`\nconst ${keys} = new Set(${keyset});\n`);
+      const keyset = '{ ' + [...t.fields.keys()].map((fn) => `"${fn}": true`).join(', ') + ' }';
+      d.print(`\nconst ${keys} = ${keyset};\n`);
       d.print(
         `\n${t.name ? 'export ' : ''}function ${func}(val: any, path: string = "<root>"): string[] {\n`,
       );
       d.indent('  ');
-      d.print(`if (json_typeof(val) !== "object") {\n`);
-      d.print(`  return [path + ": is a " + json_typeof(val) + ", not json object"];\n`);
+      d.print(`if (jsonTypeof(val) !== "object") {\n`);
+      d.print(`  return [path + ": is a " + jsonTypeof(val) + ", not json object"];\n`);
       d.print('}\n');
       d.print('const problems: string[] = [];\n');
       for (const [fn, ft] of t.fields) {
@@ -660,7 +668,7 @@ function generateCheckers(
         }
         d.print('}\n');
       }
-      d.print(`if (Object.keys(val).some((k) => !${keys}.has(k))) {\n`);
+      d.print(`if (Object.keys(val).some((k) => !Object.hasOwn(${keys}, k))) {\n`);
       d.print(`  problems.push(path + ": contains extra keys");\n`);
       d.print('}\n');
       d.print('return problems;\n');
@@ -671,9 +679,9 @@ function generateCheckers(
       visit(t.valueType);
       checker = (val, path) => {
         const dd = new Denter();
-        dd.print(`if (json_typeof(${val}) !== "object") {\n`);
+        dd.print(`if (jsonTypeof(${val}) !== "object") {\n`);
         dd.print(
-          `  problems.push(${path} + ": is a " + json_typeof(${val}) + ", not json object");\n`,
+          `  problems.push(${path} + ": is a " + jsonTypeof(${val}) + ", not json object");\n`,
         );
         if (checkers.get(t.valueType) === NOOP) {
           dd.print('}\n');
@@ -805,7 +813,7 @@ function generateStore(d: Denter, annos: Annos, decoders: Decoders, store: KStor
   d.print(`\nexport const ${ctxName}QueryContext = {\n`);
   d.indent('  ');
   // generate getters like:
-  // topic: (topic_uuid: Uuid) => queryGet<Topic>(`topic.${topic_uuid}`, (x) => DecodeTopic(x))
+  // topic: (topic_uuid: Uuid) => queryGet<Topic>(`topic.${topic_uuid}`, (x) => decodeTopic(x))
   d.print('get: {\n');
   d.indent('  ');
   const originalItems = store.originalItems;
@@ -835,7 +843,7 @@ function generateStore(d: Denter, annos: Annos, decoders: Decoders, store: KStor
   d.indent('  ');
 
   // generate old getters like:
-  // topic: (topic_uuid: Uuid) => reducerOld<Topic>(`topic.${topic_uuid}`, (x) => DecodeTopic(x))
+  // topic: (topic_uuid: Uuid) => reducerOld<Topic>(`topic.${topic_uuid}`, (x) => decodeTopic(x))
   d.print('old: {\n');
   d.indent('  ');
   for (const si of originalItems) {
@@ -854,7 +862,7 @@ function generateStore(d: Denter, annos: Annos, decoders: Decoders, store: KStor
   d.print('},\n');
 
   // generate getters like:
-  // topic: (topic_uuid: Uuid) => reducerGet<Topic>(`topic.${topic_uuid}`, (x) => DecodeTopic(x))
+  // topic: (topic_uuid: Uuid) => reducerGet<Topic>(`topic.${topic_uuid}`, (x) => decodeTopic(x))
   d.print('get: {\n');
   d.indent('  ');
   for (const si of originalItems) {
@@ -942,8 +950,8 @@ function generateEngine(d: Denter, annos: Annos, f: KEngine): void {
   const qx = `${ctxName}QueryContext`;
   const RX = `${ctxName}RX`;
   const QX = `${ctxName}QX`;
-  const decodeEvent = `Decode${f.eventType.name}`;
-  const decodeCommand = `Decode${f.commandType.name}`;
+  const decodeEvent = `decode${f.eventType.name}`;
+  const decodeCommand = `decode${f.commandType.name}`;
 
   d.print(`
 export class ${f.name} extends Engine<${QX}, ${RX}, ${eventType}, ${commandType}> {
@@ -1033,7 +1041,7 @@ function queryId(kq: KQueries, q: KQuery): string {
  * discriminated by the id literal.  Optional arguments are nullable on the wire (a JSON array
  * has no way to omit an element).  Naming the union routes it through the same annotation,
  * decoder, and checker generation as any declared type, which is what gives the serving side
- * `check<Stem>Query` for ingress and `Decode<Stem>Query` for typed dispatch.
+ * `check<Stem>Query` for ingress and `decode<Stem>Query` for typed dispatch.
  */
 function queryWireType(registry: KTypeRegistry, kq: KQueries): KType {
   const wire = registry.union(
@@ -1097,33 +1105,27 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
   d.print('}\n');
 
   // local provider: hosts the defs on any engine with a compatible query context.  Its
-  // queries are LocalQuery-typed so they compose via awaitResult(); the interface merges with
-  // the constructor function below, mirroring the Remote class being both type and value.
-  d.print(`\nexport interface Local${name} extends ${name} {\n`);
+  // queries are LocalQuery-typed so they compose via awaitResult().
+  d.print(`\nexport class Local${name}<QX> implements ${name} {\n`);
   d.indent('  ');
-  for (const q of kq.queries) {
-    d.print(`${q.name}(${params(q)}): LocalQuery<${result(q)}>;\n`);
-  }
-  d.dedent();
-  d.print('}\n');
-
-  d.print(`\nexport function Local${name}<QX>(\n`);
+  d.print(`#eng: { newQuery<X>(fn: QueryFunction<QX, X>): LocalQuery<X> };\n`);
+  d.print(`#defs: ${defsName}<QX>;\n`);
+  d.print('\n');
+  d.print(`constructor(\n`);
   d.print(`  eng: { newQuery<X>(fn: QueryFunction<QX, X>): LocalQuery<X> },\n`);
   d.print(`  defs: ${defsName}<QX>,\n`);
-  d.print(`): Local${name} {\n`);
-  d.indent('  ');
-  d.print('return {\n');
-  d.indent('  ');
+  d.print(`) {\n`);
+  d.print('  this.#eng = eng;\n');
+  d.print('  this.#defs = defs;\n');
+  d.print('}\n');
   for (const q of kq.queries) {
     const argNames = q.args.map(([an]) => an);
-    d.print(`${q.name}(${params(q)}): LocalQuery<${result(q)}> {\n`);
+    d.print(`\n${q.name}(${params(q)}): LocalQuery<${result(q)}> {\n`);
     d.print(
-      `  return eng.newQuery((qx: QX) => defs.${q.name}(${['qx', ...argNames].join(', ')}));\n`,
+      `  return this.#eng.newQuery((qx: QX) => this.#defs.${q.name}(${['qx', ...argNames].join(', ')}));\n`,
     );
-    d.print('},\n');
+    d.print('}\n');
   }
-  d.dedent();
-  d.print('};\n');
   d.dedent();
   d.print('}\n');
 
@@ -1133,7 +1135,7 @@ function generateQueries(d: Denter, annos: Annos, decoders: Decoders, kq: KQueri
   for (const q of kq.queries) {
     const raw = [
       `${idsName}.${q.name}`,
-      ...q.args.map(([an, , opt]) => `EncodeProto(${an}${opt ? ' ?? null' : ''})`),
+      ...q.args.map(([an, , opt]) => `encodeProto(${an}${opt ? ' ?? null' : ''})`),
     ];
     const dec = decoders.get(q.result);
     const decodeFn =

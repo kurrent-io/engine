@@ -73,7 +73,7 @@ The `tests/` package has two layers.
 expose different surfaces: TS emits decoders, Python/Go emit checkers).  All three are driven from
 one shared fixture, `tests/fixtures/main.tsp`, emitted into `tests/tsp-output/` by `pnpm gen`.
 
-- `src/ts/decode.test.ts` — feeds plain JSON to the emitted `DecodeX` functions and checks the
+- `src/ts/decode.test.ts` — feeds plain JSON to the emitted `decodeX` functions and checks the
   typed result: identity/date/optional-date/nested/tuple decode, discriminated (`type`) and
   sub-discriminated (`[type, v]`) union dispatch, one-of, literal unions, throw paths.
 - `py/test_checkers.py` — feeds native dicts/lists to the emitted `checkX` functions and inspects

@@ -3,7 +3,7 @@ import type { AllStreamResolvedEvent } from '@kurrent/kurrentdb-client';
 import {
   checkTodoEvents,
   checkTodoQuery,
-  DecodeTodoQuery,
+  decodeTodoQuery,
   dispatchTodoQuery,
   ExternalStore,
   LocalTodoQueries,
@@ -59,7 +59,7 @@ function handleWebsocketConnection(client: KurrentDBClient, eng: TodoEngine, soc
   /* normally you'd probably instantiate a ServerQueryDefs with connection info, like
      userid or what groups they're in, but this demo doesn't have users */
   const defs = new ServerQueryDefs(/* userid or other connection-specific info */);
-  const queries = LocalTodoQueries(eng, defs);
+  const queries = new LocalTodoQueries(eng, defs);
 
   // one close function to close everything and log the reason
   let dead = false;
@@ -184,7 +184,7 @@ function handleWebsocketConnection(client: KurrentDBClient, eng: TodoEngine, soc
                   closeConnection('message', `invalid query: ${errs.join(', ')}`);
                   return;
                 }
-                const decoded = DecodeTodoQuery(raw);
+                const decoded = decodeTodoQuery(raw);
                 let query: Query<any> | undefined = undefined;
                 if (!paused) {
                   query = dispatchTodoQuery(queries, decoded);

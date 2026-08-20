@@ -5,7 +5,7 @@ export {
   AdminEngine,
   AdminQueryContext,
   AdminReducerContext,
-  DecodeLibraryEvents,
+  decodeLibraryEvents,
   InMemStore,
 } from './model.gen';
 export { userMigrate, userReducer, userForecaster, adminMigrate, adminReducer } from './reducers';

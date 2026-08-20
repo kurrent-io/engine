@@ -31,7 +31,7 @@ Store choices:
 - `ExternalStore` — adapt any transactional key-value store by supplying
   a transaction factory (used server-side more than in browsers). The
   Store is responsible for accepting rich values for `set` and returning
-  rich values for `get`.  `set` can use EncodeProto to lower to plain JSON
+  rich values for `get`.  `set` can use encodeProto to lower to plain JSON
   or protoStringify to lower to json-encoded string; `get` receives a
   decoder parameter to lift from plain JSON to rich object.  If the store
   natively handles rich types, the decoder can be ignored.
