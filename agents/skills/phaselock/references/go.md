@@ -5,10 +5,12 @@ JavaScript interpreter (no cgo). The generated `model.go` wraps the
 embedded engine with typed native APIs, so host code mostly avoids raw
 JavaScript values.
 
-**Status: proof of concept.** The Go host works for evaluation and
-experiments but is not ready for serious use: the Go generator does not
-handle some model shapes at all, and the Go-native store path
-(`NewGoStore`) is untested — use `NewInMemStore`.
+**Status:** The Go host works end to end — engine, live queries, and
+persistent stores via `NewGoStore`. Expect rough edges in packaging: the
+generation step is multi-layered (emit `model.gen.ts` and `model.go`,
+bundle the entry stub, glue the two together at runtime), and the
+generated module is vendored into your project. Some model types allowed
+in TypeSpec are not supported by the Go host yet.
 
 ## Bundle
 

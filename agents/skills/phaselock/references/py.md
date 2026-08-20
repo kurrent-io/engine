@@ -7,10 +7,11 @@ extension ships as its own package (`kurrent-phaselock-quickjs`,
 imported as `kurrent.phaselock._quickjs`); `model.py` imports it
 internally.
 
-**Status: proof of concept.** The Python host works for evaluation and
-experiments but is not ready for serious use; in particular the
-Python-native store path is untested — pass `None` to use the in-memory
-store.
+**Status:** The Python host works end to end — engine, live queries, and
+external stores. Expect rough edges in packaging: the generation step is
+multi-layered (emit `model.gen.ts` and `model.py`, bundle the entry stub,
+glue the two together at runtime), and the QuickJS extension must
+currently be built from source.
 
 ## Bundle
 
