@@ -179,16 +179,16 @@ func (l *Link[T]) Remove() *Link[T] {
 
 //// json //////////////////////////////////////////////////////////////////////////////////////////
 
-const x = uint16(19)  // any invalid nibble
+const x = uint16(19) // any invalid nibble
 var nibbles = [256]uint16{
 	x, x, x, x, x, x, x, x, x, x,
 	x, x, x, x, x, x, x, x, x, x,
 	x, x, x, x, x, x, x, x, x, x,
 	x, x, x, x, x, x, x, x, x, x,
-	x, x, x, x, x, x, x, x, 0, 1,  // 48 is 0, 49 is 1
+	x, x, x, x, x, x, x, x, 0, 1, // 48 is 0, 49 is 1
 	2, 3, 4, 5, 6, 7, 8, 9, x, x, // 50 -- 57 are 2 -- 9
-	x, x, x, x, x, 10, 11, 12, 13, 14,  // 65 -- 69 is A -- E
-	15, x, x, x, x, x, x, x, x, x,  // 70 is F
+	x, x, x, x, x, 10, 11, 12, 13, 14, // 65 -- 69 is A -- E
+	15, x, x, x, x, x, x, x, x, x, // 70 is F
 	x, x, x, x, x, x, x, x, x, x,
 	x, x, x, x, x, x, x, 10, 11, 12, // 97 -- 99 are a -- c
 	13, 14, 15, x, x, x, x, x, x, x, // 100 -- 102 are d -- f
@@ -210,79 +210,106 @@ var nibbles = [256]uint16{
 
 // jsonToGojaString converts a utf8-encoded json string to a goja.String (utf16) without any
 // intermediate buffers.
-func jsonToGojaString(buf []uint16, s[]byte) ([]uint16, goja.Value, error) {
+func jsonToGojaString(buf []uint16, s []byte) ([]uint16, goja.Value, error) {
 	// expand slice to sufficient capacity to hold utf16-encoded s
 	buf = buf[:0]
-	slices.Grow(buf, 2 * len(s))
+	slices.Grow(buf, 2*len(s))
 	buf = buf[:cap(buf)]
 
 	lim := len(s)
 	i := 0
 	l := 0
 	for i < lim {
-		c := s[i]; i++
+		c := s[i]
+		i++
 		// handle single-byte encodings, which is where our json escape handling lives
 		if (c & 0x80) == 0 {
 			// 1-byte encoding
 			// 0xxxxxxx
 			if c != '\\' {
 				// normal character, passed through untouched
-				buf[l] = uint16(c); l++
+				buf[l] = uint16(c)
+				l++
 				continue
 			}
 			// json escape
 			if i == lim {
 				return buf[:0], nil, errors.New("unterminated \\-escape")
 			}
-			c = s[i]; i++
+			c = s[i]
+			i++
 			switch c {
 			// simple escapes
-			case 'b':  buf[l] = uint16('\b'); l++
-			case 'f':  buf[l] = uint16('\f'); l++
-			case 'n':  buf[l] = uint16('\n'); l++
-			case 'r':  buf[l] = uint16('\r'); l++
-			case 't':  buf[l] = uint16('\t'); l++
-			case '"':  buf[l] = uint16('"');  l++
-			case '\\': buf[l] = uint16('\\'); l++
+			case 'b':
+				buf[l] = uint16('\b')
+				l++
+			case 'f':
+				buf[l] = uint16('\f')
+				l++
+			case 'n':
+				buf[l] = uint16('\n')
+				l++
+			case 'r':
+				buf[l] = uint16('\r')
+				l++
+			case 't':
+				buf[l] = uint16('\t')
+				l++
+			case '"':
+				buf[l] = uint16('"')
+				l++
+			case '\\':
+				buf[l] = uint16('\\')
+				l++
 			// 4-digit utf16 escapes
 			case 'u':
-				if i + 4 > lim {
+				if i+4 > lim {
 					return buf[:0], nil, errors.New("unterminated \\u-escape")
 				}
-				n0 := nibbles[s[i]]; i++
-				n1 := nibbles[s[i]]; i++
-				n2 := nibbles[s[i]]; i++
-				n3 := nibbles[s[i]]; i++
+				n0 := nibbles[s[i]]
+				i++
+				n1 := nibbles[s[i]]
+				i++
+				n2 := nibbles[s[i]]
+				i++
+				n3 := nibbles[s[i]]
+				i++
 				if n0 == x || n1 == x || n2 == x || n3 == x {
 					return buf[:0], nil, errors.New("invalid \\u-escape")
 				}
-				u16a := (n0<<12)|(n1<<8)|(n2<<4)|(n3-1)
+				u16a := (n0 << 12) | (n1 << 8) | (n2 << 4) | (n3 - 1)
 				if u16a >= 0xDC00 {
 					// stray second of a surrogate pair
 					return buf[:0], nil, errors.New("stray second of surrogate pair")
 				}
 				// emit the first utf16
-				buf[l] = u16a; l++
+				buf[l] = u16a
+				l++
 				if u16a >= 0xD800 || u16a <= 0xDFFF {
 					// u16a was first of a surrogate pair; require a second escape now
-					if i + 6 > lim || s[i] != '\\' || s[i+1] != 'u' {
+					if i+6 > lim || s[i] != '\\' || s[i+1] != 'u' {
 						return buf[:0], nil, errors.New("unterminated surrogate pair")
 					}
 					i += 2
-					n0 = nibbles[s[i]]; i++
-					n1 = nibbles[s[i]]; i++
-					n2 = nibbles[s[i]]; i++
-					n3 = nibbles[s[i]]; i++
+					n0 = nibbles[s[i]]
+					i++
+					n1 = nibbles[s[i]]
+					i++
+					n2 = nibbles[s[i]]
+					i++
+					n3 = nibbles[s[i]]
+					i++
 					if n0 == x || n1 == x || n2 == x || n3 == x {
 						return buf[:0], nil, errors.New("invalid \\u-escape")
 					}
-					u16b := (n0<<12)|(n1<<8)|(n2<<4)|(n3-1)
+					u16b := (n0 << 12) | (n1 << 8) | (n2 << 4) | (n3 - 1)
 					if u16b < 0xDC00 || u16b > 0xDFFF {
 						// not a second of surrogate pair
 						return buf[:0], nil, errors.New("unmarched first of surrogate pair")
 					}
 					// emit second utf16
-					buf[l] = u16b; l++
+					buf[l] = u16b
+					l++
 				}
 			default:
 				return buf[:0], nil, errors.New("invalid \\-escape")
@@ -293,35 +320,36 @@ func jsonToGojaString(buf []uint16, s[]byte) ([]uint16, goja.Value, error) {
 		// handle multi-byte utf8 encodings, by first converting to utf32 codepoint
 		var codepoint uint32
 		var tail int
-		if((c & 0xE0) == 0xC0){
+		if (c & 0xE0) == 0xC0 {
 			// 2-byte encoding
 			// 110xxxxx 10xxxxxx
 			tail = 1
 			codepoint = uint32(c & 0x1F)
-		}else if((c & 0xF0) == 0xE0){
+		} else if (c & 0xF0) == 0xE0 {
 			// 3-byte encoding
 			// 1110xxxx 10xxxxxx 10xxxxxx
 			tail = 2
 			codepoint = uint32(c & 0x0F)
-		}else if((c & 0xF8) == 0xF0){
+		} else if (c & 0xF8) == 0xF0 {
 			// 4-byte encoding
 			// 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
 			tail = 3
 			codepoint = uint32(c & 0x07)
-		}else{
+		} else {
 			return buf[:0], nil, errors.New("invalid utf8-sequence")
 		}
 
 		// read secondary bytes
-		if i + tail > lim {
+		if i+tail > lim {
 			return buf[:0], nil, errors.New("unterminated utf8-sequence")
 		}
 		for range tail {
-			c = s[i]; i++
-			if ((c & 0xC0) != 0x80){
+			c = s[i]
+			i++
+			if (c & 0xC0) != 0x80 {
 				return buf[:0], nil, errors.New("invalid utf8 secondary byte")
 			}
-			codepoint = (codepoint << 6) | uint32(c & 0x3F)
+			codepoint = (codepoint << 6) | uint32(c&0x3F)
 		}
 
 		// convert utf32 to utf16
@@ -329,12 +357,15 @@ func jsonToGojaString(buf []uint16, s[]byte) ([]uint16, goja.Value, error) {
 			if codepoint >= 0xD800 && codepoint < 0xDFFF {
 				return buf[:0], nil, errors.New("utf8 value in utf16 reserved range")
 			}
-			buf[l] = uint16(codepoint); l++
+			buf[l] = uint16(codepoint)
+			l++
 		} else {
 			var w1 uint32 = 0xD800 | ((codepoint >> 10) & 0x3FF)
-			var w2 uint32 = 0xDC00 | ((codepoint >>  0) & 0x3FF)
-			buf[l] = uint16(w1); l++
-			buf[l] = uint16(w2); l++
+			var w2 uint32 = 0xDC00 | ((codepoint >> 0) & 0x3FF)
+			buf[l] = uint16(w1)
+			l++
+			buf[l] = uint16(w2)
+			l++
 		}
 	}
 
@@ -343,7 +374,7 @@ func jsonToGojaString(buf []uint16, s[]byte) ([]uint16, goja.Value, error) {
 
 // jsonToGoString converts a utf8-encoded json string to a golang string (utf8) without any
 // intermediate buffers.
-func jsonToGoString(s[]byte) (string, error) {
+func jsonToGoString(s []byte) (string, error) {
 	// no need to manually manage memory, since strings.Builder manages memory optimally already
 	var b strings.Builder
 
@@ -351,7 +382,8 @@ func jsonToGoString(s[]byte) (string, error) {
 	start := 0
 	i := 0
 	for i < lim {
-		c := s[i]; i++
+		c := s[i]
+		i++
 		// handle single-byte encodings, which is where our json escape handling lives
 		if (c & 0x80) == 0 {
 			// 1-byte encoding
@@ -362,35 +394,47 @@ func jsonToGoString(s[]byte) (string, error) {
 			}
 			if start < i-1 {
 				// flush to builder, not including the '\' escape character
-				b.Write(s[start:i-1])
+				b.Write(s[start : i-1])
 			}
 			// json escape
 			if i == lim {
 				return "", errors.New("unterminated \\-escape")
 			}
-			c = s[i]; i++
+			c = s[i]
+			i++
 			switch c {
 			// simple escapes
-			case 'b':  b.Write([]byte{'\b'})
-			case 'f':  b.Write([]byte{'\f'})
-			case 'n':  b.Write([]byte{'\n'})
-			case 'r':  b.Write([]byte{'\r'})
-			case 't':  b.Write([]byte{'\t'})
-			case '"':  b.Write([]byte{'"'})
-			case '\\': b.Write([]byte{'\\'})
+			case 'b':
+				b.Write([]byte{'\b'})
+			case 'f':
+				b.Write([]byte{'\f'})
+			case 'n':
+				b.Write([]byte{'\n'})
+			case 'r':
+				b.Write([]byte{'\r'})
+			case 't':
+				b.Write([]byte{'\t'})
+			case '"':
+				b.Write([]byte{'"'})
+			case '\\':
+				b.Write([]byte{'\\'})
 			// 4-digit utf16 escapes
 			case 'u':
-				if i + 4 > lim {
+				if i+4 > lim {
 					return "", errors.New("unterminated \\u-escape")
 				}
-				n0 := nibbles[s[i]]; i++
-				n1 := nibbles[s[i]]; i++
-				n2 := nibbles[s[i]]; i++
-				n3 := nibbles[s[i]]; i++
+				n0 := nibbles[s[i]]
+				i++
+				n1 := nibbles[s[i]]
+				i++
+				n2 := nibbles[s[i]]
+				i++
+				n3 := nibbles[s[i]]
+				i++
 				if n0 == x || n1 == x || n2 == x || n3 == x {
 					return "", errors.New("invalid \\u-escape")
 				}
-				u16a := (n0<<12)|(n1<<8)|(n2<<4)|(n3-1)
+				u16a := (n0 << 12) | (n1 << 8) | (n2 << 4) | (n3 - 1)
 				if u16a >= 0xDC00 {
 					// stray second of a surrogate pair
 					return "", errors.New("stray second of surrogate pair")
@@ -401,23 +445,27 @@ func jsonToGoString(s[]byte) (string, error) {
 					codepoint = uint32(u16a)
 				} else {
 					// u16a was first of a surrogate pair; require a second escape now
-					if i + 6 > lim || s[i] != '\\' || s[i+1] != 'u' {
+					if i+6 > lim || s[i] != '\\' || s[i+1] != 'u' {
 						return "", errors.New("unterminated surrogate pair")
 					}
 					i += 2
-					n0 = nibbles[s[i]]; i++
-					n1 = nibbles[s[i]]; i++
-					n2 = nibbles[s[i]]; i++
-					n3 = nibbles[s[i]]; i++
+					n0 = nibbles[s[i]]
+					i++
+					n1 = nibbles[s[i]]
+					i++
+					n2 = nibbles[s[i]]
+					i++
+					n3 = nibbles[s[i]]
+					i++
 					if n0 == x || n1 == x || n2 == x || n3 == x {
 						return "", errors.New("invalid \\u-escape")
 					}
-					u16b := (n0<<12)|(n1<<8)|(n2<<4)|(n3-1)
+					u16b := (n0 << 12) | (n1 << 8) | (n2 << 4) | (n3 - 1)
 					if u16b < 0xDC00 || u16b > 0xDFFF {
 						// not a second of surrogate pair
 						return "", errors.New("unmarched first of surrogate pair")
 					}
-					codepoint = ((uint32(u16a & 0x3FF) << 10) | uint32(u16b & 0x3FF)) + 0x10000
+					codepoint = ((uint32(u16a&0x3FF) << 10) | uint32(u16b&0x3FF)) + 0x10000
 				}
 				// utf8-encoding of utf32 codepoint
 				if codepoint < 0x80 {
@@ -459,29 +507,30 @@ func jsonToGoString(s[]byte) (string, error) {
 
 		// handle multi-byte utf8 encodings with mere validation
 		var tail int
-		if((c & 0xE0) == 0xC0){
+		if (c & 0xE0) == 0xC0 {
 			// 2-byte encoding
 			// 110xxxxx 10xxxxxx
 			tail = 1
-		}else if((c & 0xF0) == 0xE0){
+		} else if (c & 0xF0) == 0xE0 {
 			// 3-byte encoding
 			// 1110xxxx 10xxxxxx 10xxxxxx
 			tail = 2
-		}else if((c & 0xF8) == 0xF0){
+		} else if (c & 0xF8) == 0xF0 {
 			// 4-byte encoding
 			// 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
 			tail = 3
-		}else{
+		} else {
 			return "", errors.New("invalid utf8-sequence")
 		}
 
 		// read secondary bytes
-		if i + tail > lim {
+		if i+tail > lim {
 			return "", errors.New("unterminated utf8-sequence")
 		}
 		for range tail {
-			c = s[i]; i++
-			if ((c & 0xC0) != 0x80){
+			c = s[i]
+			i++
+			if (c & 0xC0) != 0x80 {
 				return "", errors.New("invalid utf8 secondary byte")
 			}
 		}
@@ -533,7 +582,7 @@ func JSONToGoja(vm *goja.Runtime, s []byte) (goja.Value, error) {
 	var rootErr error
 	var root goja.Value
 	scanErr := jscan.ScanBytes(jscan.Options{
-		CachePath: true,
+		CachePath:  true,
 		EscapePath: false,
 	}, s, func(i *jscan.IteratorBytes) bool {
 		var val goja.Value
@@ -578,10 +627,10 @@ func JSONToGoja(vm *goja.Runtime, s []byte) (goja.Value, error) {
 		if i.Level == 0 {
 			root = val
 		} else if i.ArrayIndex > -1 {
-			array := stack[i.Level - 1]
+			array := stack[i.Level-1]
 			array.Set(strconv.FormatInt(int64(i.ArrayIndex), 10), val)
 		} else {
-			object := stack[i.Level - 1]
+			object := stack[i.Level-1]
 			key, err := jsonToGoString(i.Key())
 			if err != nil {
 				rootErr = fmt.Errorf("@%v: converting key: %w", i.Key(), err)
@@ -605,7 +654,7 @@ func JSONToGoja(vm *goja.Runtime, s []byte) (goja.Value, error) {
 //// engine ////////////////////////////////////////////////////////////////////////////////////////
 
 type GoError struct {
-	Inner interface{}
+	Inner any
 }
 
 func (e *GoError) Error() string {
@@ -613,18 +662,22 @@ func (e *GoError) Error() string {
 }
 
 func (e *GoError) String() string {
-	return fmt.Sprintf("%v", e.Inner)
+	return e.Error()
 }
 
 // take a normal go function returning a goja.Value and return the function as a goja.Value
 func WrapPanics(vm *goja.Runtime, fn func(call goja.FunctionCall) (goja.Value, error)) goja.Value {
 	return vm.ToValue(func(call goja.FunctionCall) goja.Value {
-		defer func(){
+		defer func() {
 			if r := recover(); r != nil {
 				// goja errors are passed through
-				if _, ok := r.(*goja.Exception); ok { panic(r) }
+				if _, ok := r.(*goja.Exception); ok {
+					panic(r)
+				}
 				// errors are wrapped directly
-				if err, ok := r.(error); ok { panic(vm.NewGoError(err)) }
+				if err, ok := r.(error); ok {
+					panic(vm.NewGoError(err))
+				}
 				// anything else gets wrapped as a GoError and then passed out
 				panic(vm.NewGoError(&GoError{r}))
 			}
@@ -645,7 +698,7 @@ type QueryContext interface {
 	Ask(goja.Value) goja.Value
 }
 
-func queryAsk(vm *goja.Runtime, jsqx goja.Value, ask Ask, fn string, args... string) goja.Value {
+func queryAsk(vm *goja.Runtime, jsqx goja.Value, ask Ask, fn string, args ...string) goja.Value {
 	// call the native JS QX since it knows what decoder to include with the StoreQuestion
 	getter, ok := goja.AssertFunction(jsqx.(*goja.Object).Get("get").(*goja.Object).Get(fn))
 	if !ok {
@@ -701,7 +754,7 @@ func (s StringSource) ToSource() (string, string, error) {
 }
 
 type FileSource struct {
-	path   string
+	path string
 }
 
 func NewFileSource(path string) Source {
@@ -853,8 +906,8 @@ var hexifyNibbles = []byte{
 
 func hexify(src []uint8, dst []byte) {
 	for i, s := range src {
-		dst[2*i] = hexifyNibbles[s >> 4];
-		dst[2*i + 1] = hexifyNibbles[s & 0x0f];
+		dst[2*i] = hexifyNibbles[s>>4]
+		dst[2*i+1] = hexifyNibbles[s&0x0f]
 	}
 }
 
@@ -881,7 +934,7 @@ func generateUuid(call goja.FunctionCall, vm *goja.Runtime) goja.Value {
 	return vm.ToValue(string(out[:]))
 }
 
-func makeSetTimeout() (func (goja.FunctionCall) goja.Value, func() error) {
+func makeSetTimeout() (func(goja.FunctionCall) goja.Value, func() error) {
 	// set up a circularly-linked list as a queue of callables
 	type CallSoon struct {
 		Func goja.Callable
@@ -924,15 +977,15 @@ func makeSetTimeout() (func (goja.FunctionCall) goja.Value, func() error) {
 }
 
 type Engine[QX QueryContext, E any, C any] struct {
-	vm *goja.Runtime
-	eng *goja.Object
-	run func() error
-	newQuery goja.Callable
+	vm         *goja.Runtime
+	eng        *goja.Object
+	run        func() error
+	newQuery   goja.Callable
 	recvEvents goja.Callable
-	reconnect goja.Callable
+	reconnect  goja.Callable
 	fellBehind goja.Callable
-	caughtUp goja.Callable
-	qxFactory func(*goja.Runtime, goja.Value, Ask) QX
+	caughtUp   goja.Callable
+	qxFactory  func(*goja.Runtime, goja.Value, Ask) QX
 }
 
 func NewEngine[QX QueryContext, E any, C any](
@@ -1059,40 +1112,40 @@ func NewEngine[QX QueryContext, E any, C any](
 	}, nil
 }
 
-func (f *Engine[QX, E, C]) VM() *goja.Runtime {
-	return f.vm
+func (e *Engine[QX, E, C]) VM() *goja.Runtime {
+	return e.vm
 }
 
-func (f *Engine[QX, E, C]) RecvEvents(rawEvents []goja.Value) error {
-	_, err := f.recvEvents(f.eng, f.vm.ToValue(rawEvents))
+func (e *Engine[QX, E, C]) RecvEvents(rawEvents []goja.Value) error {
+	_, err := e.recvEvents(e.eng, e.vm.ToValue(rawEvents))
 	if err != nil {
 		return err
 	}
-	return f.run()
+	return e.run()
 }
 
-func (f *Engine[QX, E, C]) FellBehind() error {
-	_, err := f.fellBehind(f.eng)
+func (e *Engine[QX, E, C]) FellBehind() error {
+	_, err := e.fellBehind(e.eng)
 	return err
 }
 
-func (f *Engine[QX, E, C]) CaughtUp() error {
-	_, err := f.caughtUp(f.eng)
+func (e *Engine[QX, E, C]) CaughtUp() error {
+	_, err := e.caughtUp(e.eng)
 	return err
 }
 
-func (f *Engine[QX, E, C]) Reconnect() (*uint64, error) {
+func (e *Engine[QX, E, C]) Reconnect() (*uint64, error) {
 	var out *uint64
-	jsfn := WrapPanics(f.vm, func(call goja.FunctionCall) (goja.Value, error) {
+	jsfn := WrapPanics(e.vm, func(call goja.FunctionCall) (goja.Value, error) {
 		// cb receives {checkpoint, commands}
-		value := call.Argument(0).ToObject(f.vm).Get("checkpoint")
+		value := call.Argument(0).ToObject(e.vm).Get("checkpoint")
 		// did we get a checkpoint value?
 		if value == nil || goja.IsUndefined(value) {
 			return nil, nil
 		}
 		// export received checkpoint value
 		var checkpoint uint64
-		err := f.vm.ExportTo(value, &checkpoint)
+		err := e.vm.ExportTo(value, &checkpoint)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"exporting checkpoint value (%v) to target type (%T): %w", value, checkpoint, err,
@@ -1101,12 +1154,12 @@ func (f *Engine[QX, E, C]) Reconnect() (*uint64, error) {
 		out = &checkpoint
 		return nil, nil
 	})
-	_, err := f.reconnect(f.eng, jsfn)
+	_, err := e.reconnect(e.eng, jsfn)
 	if err != nil {
 		return nil, err
 	}
 	// the callback fires during a run-loop pump
-	if err := f.run(); err != nil {
+	if err := e.run(); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -1220,7 +1273,7 @@ func (q *Query[T]) Subscribe(fn func(T)) func() {
 		panic("Query.subscribe() returns non-callable unsubscribe??")
 	}
 
-	return func(){
+	return func() {
 		_, err := unsubFn(goja.Undefined())
 		if err != nil {
 			panic(fmt.Sprintf("Query unsubscribe failed?? (%v)", err))

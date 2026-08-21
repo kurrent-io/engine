@@ -159,7 +159,7 @@ func setupEngine(
 	query := model.NewQuery(eng, func(
 		vm *goja.Runtime, qx model.DeciderQueryContext,
 	) []model.DeciderEvents {
-		out := qx.Decider_events()
+		out := qx.DeciderEvents()
 		return out
 	})
 

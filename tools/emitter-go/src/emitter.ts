@@ -66,11 +66,17 @@ function itemName(t: KType): string | null {
   return null;
 }
 
+/** convert a name (camelCase or snake_case) to PascalCase */
 function pascal(s: string): string {
-  return s.slice(0, 1).toUpperCase() + s.slice(1);
+  return s
+    .split('_')
+    .filter((part) => part)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join('');
 }
 function camel(s: string): string {
-  return s.slice(0, 1).toLowerCase() + s.slice(1);
+  const p = pascal(s);
+  return p.slice(0, 1).toLowerCase() + p.slice(1);
 }
 
 const JSON_TYPE_TO_REFLECT_TYPE: Record<string, string> = {
@@ -307,13 +313,14 @@ function generateTypes(
     if (t instanceof KDate) {
       imports.add('time');
       annos.set(t, 'time.Time');
+      // converters run on decoded values, where timestamps are already JS Date objects
+      // (goja exports a Date as time.Time)
       d.print('\nfunc ToDate(value goja.Value) time.Time {\n');
       d.indent('\t');
-      d.print('strtime := value.Export().(string)\n');
-      d.print('out, err := time.Parse("2006-01-02T15:04:05Z", strtime)\n');
-      d.print('if err != nil {\n');
+      d.print('out, ok := value.Export().(time.Time)\n');
+      d.print('if !ok {\n');
       d.indent('\t');
-      d.print('panic(fmt.Sprintf("invalid timestamp (%v): %v", strtime, err))\n');
+      d.print('panic(fmt.Sprintf("value is not a Date (%v)", value))\n');
       d.dedent();
       d.print('}\n');
       d.print('return out\n');
@@ -327,9 +334,9 @@ function generateTypes(
     let converter: Converter;
 
     if (t instanceof KLiteral) {
-      if (typeof t.value === 'string') anno = `string/*${t.value}*/`;
-      else if (typeof t.value === 'boolean') anno = `bool/*${t.value}*/`;
-      else anno = `int64/*${t.value}*/`;
+      if (typeof t.value === 'string') anno = `string /*${t.value}*/`;
+      else if (typeof t.value === 'boolean') anno = `bool /*${t.value}*/`;
+      else anno = `int64 /*${t.value}*/`;
       converter = (v) => `${v}.Export().(${anno})`;
     } else if (t instanceof KArray) {
       visit(t.itemType, path);
@@ -338,7 +345,9 @@ function generateTypes(
       const name = pascal(t.name ?? (it ? `sliceOf${it}` : getAnon(anon)));
       d.print(`\nfunc to${name}(vm *goja.Runtime, value goja.Value) ${anno} {\n`);
       d.indent('\t');
-      d.print('if value == nil || goja.IsUndefined(value) { return nil }\n');
+      d.print('if value == nil || goja.IsUndefined(value) {\n');
+      d.print('\treturn nil\n');
+      d.print('}\n');
       d.print(`var out ${anno}\n`);
       d.print(`vm.ForOf(value, func(i goja.Value) bool {\n`);
       d.indent('\t');
@@ -358,9 +367,12 @@ function generateTypes(
       const name = pascal(t.name ?? (vt ? `recordOf${vt}` : getAnon(anon)));
       d.print(`\nfunc to${name}(vm *goja.Runtime, value goja.Value) ${anno} {\n`);
       d.indent('\t');
-      d.print('if value == nil || goja.IsUndefined(value) { return nil }\n');
+      d.print('if value == nil || goja.IsUndefined(value) {\n');
+      d.print('\treturn nil\n');
+      d.print('}\n');
       d.print(`obj := value.(*goja.Object)\n`);
-      d.print(`out := ${anno}{}\n`);
+      // a space between a trailing type comment and the composite-literal brace, per gofmt
+      d.print(`out := ${anno}${anno.endsWith('*/') ? ' ' : ''}{}\n`);
       d.print(`for _, key := range obj.Keys() {\n`);
       d.indent('\t');
       d.print(`vin := obj.Get(key)\n`);
@@ -387,19 +399,20 @@ function generateTypes(
       const uniformLiteral = t.types.every((ut) => ut instanceof KLiteral) && bases.size === 1;
 
       if (allStructs) {
-        // union of named struct types: an interface each member opts into
+        // union of named struct types: an interface each member opts into.  The marker method is
+        // unexported so the union stays sealed to this package.
         d.print(`\ntype ${name} interface {\n`);
         d.indent('\t');
         d.print(`json.Marshaler\n`);
         d.print(`json.Unmarshaler\n`);
-        d.print(`Is${name}()\n`);
+        d.print(`is${name}()\n`);
         d.dedent();
         d.print(`}\n`);
         converter = convertUnion(d, name, t, registry, converters);
-        d.print('\n');
+        // one-line funcs are blank-line separated so gofmt doesn't want their bodies aligned
         for (const ut of t.types) {
           if (ut instanceof KNull) continue;
-          d.print(`func (x ${annos.get(ut)}) Is${name}() {}\n`);
+          d.print(`\nfunc (x ${annos.get(ut)}) is${name}() {}\n`);
         }
       } else if (uniformLiteral) {
         // union of literals sharing one base type (e.g. an enum): a defined type over that base.
@@ -431,7 +444,7 @@ function generateTypes(
       d.print(`\ntype ${name} goja.Object\n`);
       d.print(`\nfunc (x *${name}) MarshalJSON() ([]byte, error) {\n`);
       d.indent('\t');
-      d.print(`return (*goja.Object)(x).MarshalJSON()`);
+      d.print(`return (*goja.Object)(x).MarshalJSON()\n`);
       d.dedent();
       d.print(`}\n`);
       d.print(`\nfunc (x *${name}) UnmarshalJSON(data []byte) error {\n`);
@@ -847,14 +860,18 @@ function generateCheckers(
           dd.print(`} else {\n`);
           dd.indent('\t');
           dd.print(`i := 0\n`);
-          dd.print(`err := vm.Try(func(){vm.ForOf(${v}, func(item goja.Value) bool {\n`);
+          dd.print(`err := vm.Try(func() {\n`);
+          dd.indent('\t');
+          dd.print(`vm.ForOf(${v}, func(item goja.Value) bool {\n`);
           dd.indent('\t');
           dd.print(`xpath := fmt.Sprintf("%s[%d]", ${path}, i)\n`);
           dd.print(`i++\n`);
           dd.print(checkers.get(t.itemType)!('item', 'xpath'));
           dd.print(`return true\n`);
           dd.dedent();
-          dd.print(`})})\n`);
+          dd.print(`})\n`);
+          dd.dedent();
+          dd.print(`})\n`);
           dd.print(`if err != nil {\n`);
           dd.print(`\terrs = append(errs, fmt.Errorf("%v: ForOf: %w", ${path}, err))\n`);
           dd.print(`}\n`);
@@ -939,16 +956,20 @@ function generateCheckers(
       for (const ft of t.fields.values()) visit(ft);
       let keys: string, func: string;
       if (t.name) {
-        keys = `_${t.name}_ALLOWED_KEYS`;
+        keys = `${camel(t.name)}AllowedKeys`;
         func = `check${t.name}`;
       } else {
         const a = getAnon(anon);
-        keys = `_${a.toUpperCase()}_ALLOWED_KEYS`;
+        keys = `${a}AllowedKeys`;
         func = `check${a}`;
       }
       d.print(`\nvar ${keys} = map[string]bool{\n`);
       d.indent('\t');
-      for (const fn of t.fields.keys()) d.print(`"${fn}": true,\n`);
+      // pad the keys so the values align, as gofmt would have it
+      const width = Math.max(...[...t.fields.keys()].map((fn) => fn.length));
+      for (const fn of t.fields.keys()) {
+        d.print(`"${fn}":${' '.repeat(width - fn.length + 1)}true,\n`);
+      }
       d.dedent();
       d.print(`}\n`);
       d.print(`\nfunc ${func}(vm *goja.Runtime, value goja.Value, path string) []error {\n`);
@@ -983,7 +1004,9 @@ function generateCheckers(
       }
       d.print(`for _, key := range obj.Keys() {\n`);
       d.indent('\t');
-      d.print(`if ${keys}[key] { continue }\n`);
+      d.print(`if ${keys}[key] {\n`);
+      d.print(`\tcontinue\n`);
+      d.print(`}\n`);
       d.print(`\n`);
       d.print(`errs = append(errs, fmt.Errorf("%v: contains extra keys", path))\n`);
       d.dedent();
@@ -1030,7 +1053,7 @@ function generateStore(d: Denter, annos: Annos, converters: Converters, store: K
   const originalItems = [...store.originalItems].sort(byName);
   for (const si of originalItems) {
     d.print(`${pascal(si.name)}(`);
-    if (si.params.length) d.print(si.params.join(', ') + ' string');
+    if (si.params.length) d.print(si.params.map(camel).join(', ') + ' string');
     d.print(`) ${annos.get(si.type)}\n`);
   }
   d.dedent();
@@ -1058,12 +1081,12 @@ function generateStore(d: Denter, annos: Annos, converters: Converters, store: K
 
   for (const si of [...store.items].sort(byName)) {
     d.print(`\nfunc (qx *${impl}) ${pascal(si.name)}(`);
-    if (si.params.length) d.print(si.params.join(', ') + ' string');
+    if (si.params.length) d.print(si.params.map(camel).join(', ') + ' string');
     d.print(`) ${annos.get(si.type)} {\n`);
     d.indent('\t');
     d.print(`vm := qx.vm\n`);
     d.print(`value := queryAsk(vm, qx.jsqx, qx.ask, "${si.name}"`);
-    for (const p of si.params) d.print(`, ${p}`);
+    for (const p of si.params) d.print(`, ${camel(p)}`);
     d.print(`)\n`);
     d.print(`out := ${converters.get(si.type)!('value')}\n`);
     d.print(`return out\n`);
@@ -1157,18 +1180,19 @@ export function generateGo(lowered: LoweredProgram, skeleton: string, pkg: strin
   for (const imprt of sorted) if (imprt.includes('.')) d.print(`"${imprt}"\n`);
   d.dedent();
   d.print(')\n');
+  d.print('\n');
   d.print('var (\n');
   d.indent('\t');
-  d.print('reflectTypeInt      = reflect.TypeOf(int64(0))\n');
-  d.print('reflectTypeBool     = reflect.TypeOf(false)\n');
-  d.print('reflectTypeMap      = reflect.TypeOf(map[string]interface{}{})\n');
-  d.print('reflectTypeArray    = reflect.TypeOf([]interface{}{})\n');
-  d.print('reflectTypeString   = reflect.TypeOf("")\n');
-  d.print('reflectTypeNil      = reflect.TypeOf(nil)\n');
-  d.print('reflectTypeFloat    = reflect.TypeOf(float64(0))\n');
+  d.print('reflectTypeInt    = reflect.TypeOf(int64(0))\n');
+  d.print('reflectTypeBool   = reflect.TypeOf(false)\n');
+  d.print('reflectTypeMap    = reflect.TypeOf(map[string]any{})\n');
+  d.print('reflectTypeArray  = reflect.TypeOf([]any{})\n');
+  d.print('reflectTypeString = reflect.TypeOf("")\n');
+  d.print('reflectTypeNil    = reflect.TypeOf(nil)\n');
+  d.print('reflectTypeFloat  = reflect.TypeOf(float64(0))\n');
   d.print('\n');
   d.print('// return types we do not expect to appear in a valid protos-based type:\n');
-  d.print('// reflectTypeArrayPtr = reflect.TypeOf((*[]interface{})(nil))\n');
+  d.print('// reflectTypeArrayPtr = reflect.TypeOf((*[]any)(nil))\n');
   d.print('// reflectTypeFunc     = reflect.TypeOf((func(FunctionCall) Value)(nil))\n');
   d.print('// reflectTypeCtor     = reflect.TypeOf((func(ConstructorCall) *Object)(nil))\n');
   d.print('// reflectTypeError    = reflect.TypeOf((*error)(nil)).Elem()\n');
@@ -1179,5 +1203,5 @@ export function generateGo(lowered: LoweredProgram, skeleton: string, pkg: strin
   d.print(skeleton);
   d.print(sub.getvalue());
 
-  return d.getvalue() + '\n';
+  return d.getvalue();
 }

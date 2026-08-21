@@ -66,7 +66,7 @@ Queries use generated typed contexts and native Go result types:
 
 ```go
 q := model.NewQuery(engine, func(vm *goja.Runtime, qx model.DeciderQueryContext) []model.DeciderEvents {
-    return qx.Decider_events()
+    return qx.DeciderEvents()
 })
 unsubscribe := q.Subscribe(func(out []model.DeciderEvents) { ... })
 ```
