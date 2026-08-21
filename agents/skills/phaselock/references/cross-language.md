@@ -1,24 +1,34 @@
 # Cross-language runtimes
 
-The core idea of PhaseLock is that business logic is expressed as *code,
-not schema*. Reducers therefore have to be written in some language, and
-TypeScript is the chosen one. That makes TypeScript-as-host naturally
-seamless — as a byproduct, not by design. Cross-language hosts are still
-first-class, and two design choices are what make them palatable:
+The core idea of PhaseLock is that business logic is naturally expressed in
+code.  Any code *can* express business logic, but by writing it in a language
+that can easily be embedded in many others, it can genuinely be written once
+and used everywhere.  PhaseLock chose TypeScript as the business logic language
+because of its strong typing, excellent library ecosystem, and the ready
+availability of embedded JavaScript engines.  Naturally, PhaseLock works
+seamlessly in Node.js-like backends and browser-like frontends.  But proper
+support for cross-language hosts embedding business logic as TypeScript is a
+core goal of the project.  PhaseLock is designed with several properties that
+make this easier:
 
-- **Input events are mostly opaque.** A host pipes events into the
-  engine without interpreting them; it only handles the envelope.
-- **Query results come out in the host's native types.** The read side
-  can be written in the host language: a query body constructs a native
-  value, and the query graph tunnels it by reference — never
-  serialized — to the subscriber. Reading state is not a foreign-function
-  exercise.
+- **Query results come out in the hosts' native types.**  The read side can be
+  written in the host language: a query body receives native values from the
+  Store and query results are tunneled opaquely to the subscriber.
+
+- **Cross-language converted types are always read-only.**  There is never a
+  need to sync changes in a host object to match the JS object, nor vice versa,
+  which eliminates the hardest problem in a dual-language stack.
 
 Because the generated query contexts are ordinary typed code in each
 language, model changes propagate as native type errors: change the
 `.tsp`, regenerate, and your host language type-checking or compiler
 breaks where the host code no longer matches the model. Cross-language type
 checking is real, not aspirational.
+
+**Status:** The current cross-language integrations (Go and Python) are a
+first attempt at cross-language support, and they prove the concept but will
+each be fully rewritten.  As a result, neither has been packaged for end users
+yet.
 
 ## What a host does
 
@@ -52,7 +62,7 @@ language with the best client for that system, and a performance-
 critical worker that only consults queries while doing its primary job
 is well served by embedding the engine in the faster language.
 
-## Officially supported hosts
+## Demonstrated host languages
 
 | Host | JS engine | Guide |
 |------|-----------|-------|
@@ -60,10 +70,11 @@ is well served by embedding the engine in the faster language.
 | Python | QuickJS | `py.md` |
 | Go | goja (pure Go) | `go.md` |
 
-Official support for C#, Kotlin, and Swift is planned (see ROADMAP.md).
-Requests for other languages: open a GitHub issue or ask in Discord. A
-motivated user or agent can add a host today, using the existing
-emitters and their runtime skeletons as examples.
+Official support for C#, Kotlin, and Swift is planned.  Requests for other
+languages: open a [GitHub issue][gh] or ask in [Discord][dc].
+
+[gh]: https://github.com/kurrent-io/phaselock
+[dc]: https://discord.gg/Phn9pmCw3t
 
 ## Bundling
 

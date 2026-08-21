@@ -146,7 +146,7 @@ examples under `examples/`, each with a README:
   clients subscribing to declared queries over the wire.
 - `library` — the full story: per-audience stores, a sanitizing Python
   relay, a Go decider resolving conflicts, forecasts with rejection
-  handling, cross-language packaging.
+  handling, cross-language hosting.
 
 The references use symbols from these apps (`TodoEngine`, `VHold`,
 `try-hold`, patrons). `references/examples.md` gives enough context to

@@ -2,16 +2,15 @@
 
 Python components run the TypeScript business logic via QuickJS. The
 generated `model.py` wraps the embedded engine with typed native APIs,
-so host code never touches JavaScript values directly. The QuickJS
-extension ships as its own package (`kurrent-phaselock-quickjs`,
-imported as `kurrent.phaselock._quickjs`); `model.py` imports it
-internally.
+so host code never touches JavaScript values directly.
 
-**Status:** The Python host works end to end — engine, live queries, and
-external stores. Expect rough edges in packaging: the generation step is
-multi-layered (emit `model.gen.ts` and `model.py`, bundle the entry stub,
-glue the two together at runtime), and the QuickJS extension must
-currently be built from source.
+**Status:** Proof of concept. Running the engine in other host languages
+is a real goal of the project, but the exact details are still in flux.
+The current Python integration is not yet packaged because it is
+expected to get a full rewrite.  In particular, the QuickJS Python extension
+required for the Python integration is not published except in source form.
+Still, the proof of concept works; the Python integration shows Python-native
+storage and Python-native queries supporting mypy type annotations.
 
 ## Bundle
 

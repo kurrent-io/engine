@@ -264,7 +264,6 @@ emitters for the languages you target:
   "devDependencies": {
     "@kurrent/phaselock-typespec": "...",
     "@kurrent/phaselock-typespec-ts": "...",
-    "@kurrent/phaselock-typespec-go": "...",
     "@typespec/compiler": "^1.0.0"
   },
   "scripts": { "gen": "tsp compile model.tsp" }
@@ -284,7 +283,10 @@ options:
 
 Python (`out-file: model.py`) and Go (`package: model`,
 `out-file: model.go`) emitters are configured the same way, usually
-emitting directly into the consuming component's directory.
+emitting directly into the consuming component's directory. Both are
+proof-of-concept and not published as packages — they are available only
+in source form from the PhaseLock repository; see `py.md` and `go.md`
+for status.
 
 Each emitter prepends its runtime skeleton (the engine, store, and query
 machinery) to the generated model code, so the output file is
