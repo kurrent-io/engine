@@ -1,6 +1,6 @@
-// Proof: pretokenized, schema-derived decoding for a Go host.
+// Proof: schema-derived decoding and encoding for a Go host.
 //
-// Pipeline: transport bytes -> one tokenization pass filling a reusable
+// Decode pipeline: transport bytes -> one tokenization pass filling a reusable
 // token array (plus an arena for strings that needed decoding) -> generated
 // recursive-descent decoders indexing the array -> real values.  Native
 // decoders return the generated rich native types (the same family used to
@@ -17,6 +17,14 @@
 // (identical cost for JSON and msgpack), discriminator scans walk a
 // cache-hot array without consuming anything.
 //
+// Encode pipeline: rich values -> generated walks streaming into W, the
+// per-format writer contract -> transport bytes.  No token intermediate:
+// encoding never looks ahead.  The walks own the byte layout -- canonical
+// field order with the discriminator first, sets sorted, dates in one
+// canonical form -- so decoders scanning bytes we wrote hit the
+// discriminator on the first probe, and equal logical values produce
+// identical bytes.
+//
 // Demonstrated:
 //   - typed native output: sealed-interface unions, struct fields, real
 //     time.Time and set types; decoders declare what they emit
@@ -24,18 +32,41 @@
 //     surface as an immediate fatal at construction; check = decode+discard
 //   - union dispatch per solver Solution: CheckJsonType (token kind),
 //     GetField+CheckLiteral (non-consuming discriminator scan), HasField
-//     (oneof), CheckLength (patched element counts)
+//     (oneof, a non-consuming key-set scan: the variant key need not be
+//     first or alone), CheckLength (patched element counts)
 //   - scalar lifting during the walk: RFC3339 -> time.Time / JS Date,
 //     string arrays -> map[string]struct{} / JS Set
 //   - two transports producing one token representation: JSON (stock,
 //     hand-rolled, full escape/surrogate handling) and msgpack (user code)
+//   - encode walks from both rich forms: typed native (infallible except
+//     nil union members) and JS (checked goja reads, collected path errors)
+//   - two writers behind one W contract: JSON (stock) and msgpack (user
+//     code), plus TeeW fanning one walk into both at once
+//
+// Not built here: rich-to-rich conversion, the triangle's Native <-> JS
+// edge.  The options: Native->JS can reuse the native encode walks against
+// a goja-building W, but only if the proto scalars are lifted into the W
+// contract (Time, BeginSet/EndSet) so each writer owns its own lowering --
+// byte writers emit RFC3339 strings and arrays, the JS writer mints real
+// Date/Set.  JS->Native cannot be a W (a structural event stream can't
+// construct typed values); reuse lands on the input side instead: a goja
+// tokenizer emitting the shared Tok representation, plus a KTime kind
+// carrying epoch millis, feeds the stock decode walks unchanged.  Together
+// that collapses all six registry conversions onto these four walk families
+// with pluggable ends, and makes JS->Native agree with bytes->native by
+// construction.  The alternative -- a third generated family of direct
+// rich-to-rich walks -- is one pass instead of two but more emitter
+// surface; asks are a handful per query run, so reuse wins unless profiling
+// says otherwise.
 package main
 
 import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -92,12 +123,13 @@ type Tok struct {
 
 // --- decode state ---
 
-type DecodeError struct {
+// PathError locates one mismatch; decode and encode walks both collect them.
+type PathError struct {
 	Path string
 	Msg  string
 }
 
-func (e DecodeError) Error() string { return e.Path + ": " + e.Msg }
+func (e PathError) Error() string { return e.Path + ": " + e.Msg }
 
 // D is the state threaded through one decode: the tokenized message, a read
 // position, the current path, and the error accumulator.  An encoding error
@@ -108,7 +140,7 @@ type D struct {
 	toks  []Tok
 	pos   int
 	path  []string
-	errs  []DecodeError
+	errs  []PathError
 	fatal error
 }
 
@@ -133,7 +165,7 @@ func NewJSONDecoder(r io.Reader) *D {
 // finish reports one entry point's results.  Errors report per call, so a
 // decoder can be reused for successive values on one stream; a transport
 // error poisons it for good.
-func (d *D) finish() ([]DecodeError, error) {
+func (d *D) finish() ([]PathError, error) {
 	errs := d.errs
 	d.errs = nil
 	return errs, d.fatal
@@ -147,7 +179,7 @@ func (d *D) errf(format string, args ...any) {
 	if d.fatal != nil {
 		return
 	}
-	d.errs = append(d.errs, DecodeError{
+	d.errs = append(d.errs, PathError{
 		Path: "$" + strings.Join(d.path, ""),
 		Msg:  fmt.Sprintf(format, args...),
 	})
@@ -367,11 +399,29 @@ func (d *D) discriminant(key string) (Tok, bool) {
 	}
 }
 
-// firstKey returns the first key token of the object at the current
-// position.  The caller has verified KBeginObj; nothing is consumed.
-func (d *D) firstKey() (Tok, bool) {
-	kt := d.toks[d.pos+1]
-	return kt, kt.Kind == KKey
+// oneofKey returns the first key token of the object at the current position
+// that is one of keys; foreign fields are skipped, not misdispatched.  The
+// caller has verified KBeginObj; nothing is consumed.
+func (d *D) oneofKey(keys ...string) (Tok, bool) {
+	pos := d.pos + 1
+	for {
+		kt := d.toks[pos]
+		if kt.Kind != KKey {
+			return Tok{}, false // KEndObj
+		}
+		k := string(d.span(kt))
+		for _, want := range keys {
+			if k == want {
+				return kt, true
+			}
+		}
+		vt := d.toks[pos+1]
+		if vt.Kind == KBeginObj || vt.Kind == KBeginArr {
+			pos = int(vt.End)
+		} else {
+			pos += 2
+		}
+	}
 }
 
 // endArr consumes the closing token, complaining about extra elements.
@@ -386,18 +436,23 @@ func (d *D) endArr() {
 	}
 }
 
-// --- JS heap helpers for the JS-building decoders ---
+// --- JS heap helpers for the JS-facing walks ---
 
 type JS struct {
-	vm   *goja.Runtime
-	date goja.Constructor
-	set  goja.Constructor
+	vm       *goja.Runtime
+	date     goja.Constructor
+	set      goja.Constructor
+	setCtor  *goja.Object
+	setToArr goja.Callable
 }
 
 func NewJS(vm *goja.Runtime) *JS {
 	date, _ := goja.AssertConstructor(vm.Get("Date"))
-	set, _ := goja.AssertConstructor(vm.Get("Set"))
-	return &JS{vm: vm, date: date, set: set}
+	setCtor, _ := vm.Get("Set").(*goja.Object)
+	set, _ := goja.AssertConstructor(setCtor)
+	fn, _ := vm.RunString("(s) => Array.from(s)")
+	setToArr, _ := goja.AssertFunction(fn)
+	return &JS{vm: vm, date: date, set: set, setCtor: setCtor, setToArr: setToArr}
 }
 
 func (j *JS) Time(t time.Time) goja.Value {
@@ -412,6 +467,217 @@ func (j *JS) StrSet(ss []string) goja.Value {
 	}
 	v, _ := j.set(nil, j.vm.NewArray(items...))
 	return v
+}
+
+// ExportStrSet reads a JS Set of strings back out.
+func (j *JS) ExportStrSet(v goja.Value) ([]string, bool) {
+	o, ok := v.(*goja.Object)
+	if !ok || !j.vm.InstanceOf(o, j.setCtor) {
+		return nil, false
+	}
+	arr, err := j.setToArr(goja.Undefined(), o)
+	if err != nil {
+		return nil, false
+	}
+	items, ok := arr.Export().([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		s, ok := it.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+// --- encode writers ---
+
+// W is the per-format writer contract: generated walks stream one value into
+// it in strict order, and transports own all format knowledge.  Container
+// counts arrive up front -- the walk always knows them -- so headerful
+// formats (msgpack) never buffer; formats that don't need counts ignore
+// them.
+type W interface {
+	BeginObj(n int)
+	Key(k string)
+	EndObj()
+	BeginArr(n int)
+	EndArr()
+	Str(s string)
+	Int(i int64)
+	Float(f float64)
+	Bool(b bool)
+	Null()
+}
+
+// TeeW fans one generated walk into several outputs.
+type TeeW struct{ A, B W }
+
+func (t TeeW) BeginObj(n int)  { t.A.BeginObj(n); t.B.BeginObj(n) }
+func (t TeeW) Key(k string)    { t.A.Key(k); t.B.Key(k) }
+func (t TeeW) EndObj()         { t.A.EndObj(); t.B.EndObj() }
+func (t TeeW) BeginArr(n int)  { t.A.BeginArr(n); t.B.BeginArr(n) }
+func (t TeeW) EndArr()         { t.A.EndArr(); t.B.EndArr() }
+func (t TeeW) Str(s string)    { t.A.Str(s); t.B.Str(s) }
+func (t TeeW) Int(i int64)     { t.A.Int(i); t.B.Int(i) }
+func (t TeeW) Float(f float64) { t.A.Float(f); t.B.Float(f) }
+func (t TeeW) Bool(b bool)     { t.A.Bool(b); t.B.Bool(b) }
+func (t TeeW) Null()           { t.A.Null(); t.B.Null() }
+
+// dateStr is the canonical date encoding: UTC, millisecond precision, `Z`
+// suffix -- byte-identical to JS Date.toISOString().
+func dateStr(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z07:00")
+}
+
+// --- encode state ---
+
+// E is the state threaded through one encode: the destination writer, the
+// current path, and the error accumulator.  A mismatch records a path error
+// and writes null in its place so the walk stays total; callers discard the
+// bytes when any errors were reported.  Native-sourced walks fail only on
+// nil union members; JS-sourced walks check every read.
+type E struct {
+	w    W
+	path []string
+	errs []PathError
+}
+
+func NewE(w W) *E { return &E{w: w} }
+
+// finish reports one entry point's results; the E is reusable afterwards.
+func (e *E) finish() []PathError {
+	errs := e.errs
+	e.errs = nil
+	return errs
+}
+
+func (e *E) push(seg string) { e.path = append(e.path, seg) }
+func (e *E) pop()            { e.path = e.path[:len(e.path)-1] }
+
+func (e *E) errf(format string, args ...any) {
+	e.errs = append(e.errs, PathError{
+		Path: "$" + strings.Join(e.path, ""),
+		Msg:  fmt.Sprintf(format, args...),
+	})
+}
+
+// strSet writes a string set as a sorted array -- the canonical set layout,
+// so equal logical values produce identical bytes.
+func (e *E) strSet(ss []string) {
+	slices.Sort(ss)
+	e.w.BeginArr(len(ss))
+	for _, s := range ss {
+		e.w.Str(s)
+	}
+	e.w.EndArr()
+}
+
+// --- JS reads for the encode walks: fetch one value, check it, write it ---
+
+// defined reports whether a property read produced a value.
+func defined(v goja.Value) bool {
+	return v != nil && !goja.IsUndefined(v)
+}
+
+func exportStr(v goja.Value) (string, bool) {
+	if !defined(v) {
+		return "", false
+	}
+	s, ok := v.Export().(string)
+	return s, ok
+}
+
+func exportTime(v goja.Value) (time.Time, bool) {
+	o, ok := v.(*goja.Object)
+	if !ok {
+		return time.Time{}, false
+	}
+	t, ok := o.Export().(time.Time)
+	return t, ok
+}
+
+// jsObj asserts a defined object; the union dispatchers start here.
+func (e *E) jsObj(v goja.Value) (*goja.Object, bool) {
+	if o, ok := v.(*goja.Object); ok {
+		return o, true
+	}
+	e.errf("expected object")
+	return nil, false
+}
+
+func (e *E) jsStr(v goja.Value, seg string) {
+	e.push(seg)
+	if !defined(v) {
+		e.errf("missing required field")
+		e.w.Null()
+	} else if s, ok := v.Export().(string); ok {
+		e.w.Str(s)
+	} else {
+		e.errf("expected string")
+		e.w.Null()
+	}
+	e.pop()
+}
+
+func (e *E) jsBool(v goja.Value, seg string) {
+	e.push(seg)
+	if !defined(v) {
+		e.errf("missing required field")
+		e.w.Null()
+	} else if b, ok := v.Export().(bool); ok {
+		e.w.Bool(b)
+	} else {
+		e.errf("expected bool")
+		e.w.Null()
+	}
+	e.pop()
+}
+
+func (e *E) jsInt(v goja.Value, seg string) {
+	e.push(seg)
+	if !defined(v) {
+		e.errf("missing required field")
+		e.w.Null()
+	} else if i, ok := v.Export().(int64); ok {
+		e.w.Int(i)
+	} else {
+		e.errf("expected int")
+		e.w.Null()
+	}
+	e.pop()
+}
+
+func (e *E) jsDate(v goja.Value, seg string) {
+	e.push(seg)
+	if !defined(v) {
+		e.errf("missing required field")
+		e.w.Null()
+	} else if t, ok := exportTime(v); ok {
+		e.w.Str(dateStr(t))
+	} else {
+		e.errf("expected Date")
+		e.w.Null()
+	}
+	e.pop()
+}
+
+func (e *E) jsStrSet(j *JS, v goja.Value, seg string) {
+	e.push(seg)
+	if !defined(v) {
+		e.errf("missing required field")
+		e.w.Null()
+	} else if ss, ok := j.ExportStrSet(v); ok {
+		e.strSet(ss)
+	} else {
+		e.errf("expected Set of strings")
+		e.w.Null()
+	}
+	e.pop()
 }
 
 // --- stock JSON tokenizer ---
@@ -762,6 +1028,126 @@ func isNumByte(c byte) bool {
 		c == '+' || c == '-'
 }
 
+// --- stock JSON writer ---
+
+// JSONWriter implements W over an appended buffer, reusable via Reset.
+// Successive top-level values come out newline-separated, matching what the
+// tokenizer accepts.
+type JSONWriter struct {
+	buf   []byte
+	stack []jsonFrame
+}
+
+type jsonFrame struct {
+	obj bool
+	n   int // entries written
+}
+
+func (w *JSONWriter) Bytes() []byte { return w.buf }
+func (w *JSONWriter) Reset()        { w.buf = w.buf[:0]; w.stack = w.stack[:0] }
+
+// preValue positions for a value: separators between top-level values and
+// between array elements; object values follow their key bare.
+func (w *JSONWriter) preValue() {
+	if len(w.stack) == 0 {
+		if len(w.buf) > 0 {
+			w.buf = append(w.buf, '\n')
+		}
+		return
+	}
+	f := &w.stack[len(w.stack)-1]
+	if !f.obj {
+		if f.n > 0 {
+			w.buf = append(w.buf, ',')
+		}
+		f.n++
+	}
+}
+
+func (w *JSONWriter) BeginObj(int) {
+	w.preValue()
+	w.buf = append(w.buf, '{')
+	w.stack = append(w.stack, jsonFrame{obj: true})
+}
+
+func (w *JSONWriter) Key(k string) {
+	f := &w.stack[len(w.stack)-1]
+	if f.n > 0 {
+		w.buf = append(w.buf, ',')
+	}
+	f.n++
+	w.str(k)
+	w.buf = append(w.buf, ':')
+}
+
+func (w *JSONWriter) EndObj() {
+	w.stack = w.stack[:len(w.stack)-1]
+	w.buf = append(w.buf, '}')
+}
+
+func (w *JSONWriter) BeginArr(int) {
+	w.preValue()
+	w.buf = append(w.buf, '[')
+	w.stack = append(w.stack, jsonFrame{})
+}
+
+func (w *JSONWriter) EndArr() {
+	w.stack = w.stack[:len(w.stack)-1]
+	w.buf = append(w.buf, ']')
+}
+
+func (w *JSONWriter) Str(s string) {
+	w.preValue()
+	w.str(s)
+}
+
+func (w *JSONWriter) Int(i int64) {
+	w.preValue()
+	w.buf = strconv.AppendInt(w.buf, i, 10)
+}
+
+func (w *JSONWriter) Float(f float64) {
+	w.preValue()
+	w.buf = strconv.AppendFloat(w.buf, f, 'g', -1, 64)
+}
+
+func (w *JSONWriter) Bool(b bool) {
+	w.preValue()
+	if b {
+		w.buf = append(w.buf, "true"...)
+	} else {
+		w.buf = append(w.buf, "false"...)
+	}
+}
+
+func (w *JSONWriter) Null() {
+	w.preValue()
+	w.buf = append(w.buf, "null"...)
+}
+
+// str writes one escaped string.  Bytes >= 0x20 pass through untouched
+// (UTF-8 sequences included); JSON never requires escaping non-ASCII.
+func (w *JSONWriter) str(s string) {
+	w.buf = append(w.buf, '"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '"' || c == '\\':
+			w.buf = append(w.buf, '\\', c)
+		case c >= 0x20:
+			w.buf = append(w.buf, c)
+		case c == '\n':
+			w.buf = append(w.buf, `\n`...)
+		case c == '\r':
+			w.buf = append(w.buf, `\r`...)
+		case c == '\t':
+			w.buf = append(w.buf, `\t`...)
+		default:
+			w.buf = append(w.buf, fmt.Sprintf(`\u%04x`, c)...)
+		}
+	}
+	w.buf = append(w.buf, '"')
+}
+
 // ============================ //generated-types ============================
 // The rich native family: used both to author commands and as the target of
 // transport decoding.  Union membership is carried by the nominal type, so
@@ -823,27 +1209,27 @@ func (*QueryHolds) isQueryCall()    {}
 // The exported entry points are the API; the walks compose beneath them.
 
 // DecodeUserCommands decodes one UserCommands value.
-func DecodeUserCommands(d *D) (UserCommands, []DecodeError, error) {
+func DecodeUserCommands(d *D) (UserCommands, []PathError, error) {
 	v := decodeUserCommands(d)
 	errs, fatal := d.finish()
 	return v, errs, fatal
 }
 
 // CheckUserCommands validates one UserCommands value without keeping it.
-func CheckUserCommands(d *D) ([]DecodeError, error) {
+func CheckUserCommands(d *D) ([]PathError, error) {
 	_, errs, fatal := DecodeUserCommands(d)
 	return errs, fatal
 }
 
 // DecodeQueryCall decodes one QueryCall value.
-func DecodeQueryCall(d *D) (QueryCall, []DecodeError, error) {
+func DecodeQueryCall(d *D) (QueryCall, []PathError, error) {
 	v := decodeQueryCall(d)
 	errs, fatal := d.finish()
 	return v, errs, fatal
 }
 
 // DecodeEdition decodes one Edition value.
-func DecodeEdition(d *D) (*Edition, []DecodeError, error) {
+func DecodeEdition(d *D) (*Edition, []PathError, error) {
 	v := decodeEdition(d)
 	errs, fatal := d.finish()
 	return v, errs, fatal
@@ -885,21 +1271,17 @@ func decodeHoldTarget(d *D) HoldTarget {
 		d.skipValue()
 		return nil
 	}
-	kt, ok := d.firstKey() // HasField
+	kt, ok := d.oneofKey("book", "edition") // HasField
 	if !ok {
-		d.errf("expected a oneof key")
+		d.errf("no oneof key of (book|edition)")
 		d.skipValue()
 		return nil
 	}
 	switch string(d.span(kt)) {
 	case "book":
 		return decodeTargetBook(d)
-	case "edition":
+	default: // "edition"
 		return decodeTargetEdition(d)
-	default:
-		d.errf("unknown oneof key %q (want book|edition)", d.span(kt))
-		d.skipValue()
-		return nil
 	}
 }
 
@@ -1140,14 +1522,14 @@ func decodeQueryHolds(d *D) *QueryHolds {
 // store data); query dispatch is host business and gets no JS walk.
 
 // DecodeUserCommandsJS decodes one UserCommands value into the JS heap.
-func DecodeUserCommandsJS(d *D, j *JS) (goja.Value, []DecodeError, error) {
+func DecodeUserCommandsJS(d *D, j *JS) (goja.Value, []PathError, error) {
 	v := decodeUserCommandsJS(d, j)
 	errs, fatal := d.finish()
 	return v, errs, fatal
 }
 
 // DecodeEditionJS decodes one Edition value into the JS heap.
-func DecodeEditionJS(d *D, j *JS) (goja.Value, []DecodeError, error) {
+func DecodeEditionJS(d *D, j *JS) (goja.Value, []PathError, error) {
 	v := decodeEditionJS(d, j)
 	errs, fatal := d.finish()
 	return v, errs, fatal
@@ -1187,21 +1569,17 @@ func decodeHoldTargetJS(d *D, j *JS) goja.Value {
 		d.skipValue()
 		return goja.Null()
 	}
-	kt, ok := d.firstKey()
+	kt, ok := d.oneofKey("book", "edition")
 	if !ok {
-		d.errf("expected a oneof key")
+		d.errf("no oneof key of (book|edition)")
 		d.skipValue()
 		return goja.Null()
 	}
 	switch string(d.span(kt)) {
 	case "book":
 		return decodeTargetBookJS(d, j)
-	case "edition":
+	default: // "edition"
 		return decodeTargetEditionJS(d, j)
-	default:
-		d.errf("unknown oneof key %q (want book|edition)", d.span(kt))
-		d.skipValue()
-		return goja.Null()
 	}
 }
 
@@ -1411,11 +1789,277 @@ func decodeEditionJS(d *D, j *JS) goja.Value {
 	return o
 }
 
+// ======================= //generated-native-encoders =======================
+// Typed walks from the native family into any writer.  The walks own the
+// byte layout: declaration order with the discriminator first (so the
+// decode-side discriminator scan hits the first key on bytes we wrote),
+// sets sorted, dates in the canonical form.
+
+// EncodeUserCommands encodes one UserCommands value.
+func EncodeUserCommands(e *E, v UserCommands) []PathError {
+	encodeUserCommands(e, v)
+	return e.finish()
+}
+
+// EncodeQueryCall encodes one QueryCall value.
+func EncodeQueryCall(e *E, v QueryCall) []PathError {
+	encodeQueryCall(e, v)
+	return e.finish()
+}
+
+// EncodeEdition encodes one Edition value.
+func EncodeEdition(e *E, v *Edition) []PathError {
+	encodeEdition(e, v)
+	return e.finish()
+}
+
+func encodeUserCommands(e *E, v UserCommands) {
+	switch c := v.(type) {
+	case *TryHold:
+		encodeTryHold(e, c)
+	case *CancelHold:
+		encodeCancelHold(e, c)
+	case *RenamePatron:
+		encodeRenamePatron(e, c)
+	default:
+		e.errf("nil UserCommands member")
+		e.w.Null()
+	}
+}
+
+func encodeTryHold(e *E, v *TryHold) {
+	e.w.BeginObj(6)
+	e.w.Key("type")
+	e.w.Str("try-hold")
+	e.w.Key("id")
+	e.w.Str(v.Id)
+	e.w.Key("patron")
+	e.w.Str(v.Patron)
+	e.w.Key("target")
+	e.push(".target")
+	encodeHoldTarget(e, v.Target)
+	e.pop()
+	e.w.Key("open")
+	e.w.Bool(v.Open)
+	e.w.Key("timestamp")
+	e.w.Str(dateStr(v.Timestamp))
+	e.w.EndObj()
+}
+
+func encodeCancelHold(e *E, v *CancelHold) {
+	e.w.BeginObj(2)
+	e.w.Key("type")
+	e.w.Str("cancel-hold")
+	e.w.Key("id")
+	e.w.Str(v.Id)
+	e.w.EndObj()
+}
+
+func encodeRenamePatron(e *E, v *RenamePatron) {
+	e.w.BeginObj(4)
+	e.w.Key("type")
+	e.w.Str("rename-patron")
+	e.w.Key("id")
+	e.w.Str(v.Id)
+	e.w.Key("name")
+	e.w.Str(v.Name)
+	e.w.Key("timestamp")
+	e.w.Str(dateStr(v.Timestamp))
+	e.w.EndObj()
+}
+
+func encodeHoldTarget(e *E, v HoldTarget) {
+	switch t := v.(type) {
+	case *TargetBook:
+		encodeTargetBook(e, t)
+	case *TargetEdition:
+		encodeTargetEdition(e, t)
+	default:
+		e.errf("nil HoldTarget member")
+		e.w.Null()
+	}
+}
+
+func encodeTargetBook(e *E, v *TargetBook) {
+	e.w.BeginObj(1)
+	e.w.Key("book")
+	e.w.Str(v.Book)
+	e.w.EndObj()
+}
+
+func encodeTargetEdition(e *E, v *TargetEdition) {
+	e.w.BeginObj(1)
+	e.w.Key("edition")
+	e.w.Str(v.Edition)
+	e.w.EndObj()
+}
+
+func encodeEdition(e *E, v *Edition) {
+	e.w.BeginObj(3)
+	e.w.Key("isbn")
+	e.w.Str(v.Isbn)
+	e.w.Key("title")
+	e.w.Str(v.Title)
+	e.w.Key("tags")
+	e.strSet(slices.Collect(maps.Keys(v.Tags)))
+	e.w.EndObj()
+}
+
+func encodeQueryCall(e *E, v QueryCall) {
+	switch q := v.(type) {
+	case *QueryAllBooks:
+		e.w.BeginArr(1)
+		e.w.Str("all-books")
+		e.w.EndArr()
+	case *QueryPatron:
+		e.w.BeginArr(2)
+		e.w.Str("patron")
+		e.w.Str(q.Patron)
+		e.w.EndArr()
+	case *QueryHolds:
+		e.w.BeginArr(3)
+		e.w.Str("holds")
+		e.w.Str(q.Patron)
+		e.w.Int(q.Limit)
+		e.w.EndArr()
+	default:
+		e.errf("nil QueryCall member")
+		e.w.Null()
+	}
+}
+
+// ========================= //generated-js-encoders =========================
+// The same walks reading rich values from the goja heap: how the store
+// serializes reducer output.  The source object's property order never
+// matters -- the walk reads by name and writes the canonical layout -- and
+// every read is checked, collecting path errors like the decode direction.
+
+// EncodeUserCommandsJS encodes one UserCommands value from the JS heap.
+func EncodeUserCommandsJS(e *E, j *JS, v goja.Value) []PathError {
+	encodeUserCommandsJS(e, j, v)
+	return e.finish()
+}
+
+// EncodeEditionJS encodes one Edition value from the JS heap.
+func EncodeEditionJS(e *E, j *JS, v goja.Value) []PathError {
+	encodeEditionJS(e, j, v)
+	return e.finish()
+}
+
+func encodeUserCommandsJS(e *E, j *JS, v goja.Value) {
+	o, ok := e.jsObj(v)
+	if !ok {
+		e.w.Null()
+		return
+	}
+	ts, ok := exportStr(o.Get("type"))
+	if !ok {
+		e.errf("missing union discriminator %q", "type")
+		e.w.Null()
+		return
+	}
+	switch ts {
+	case "try-hold":
+		encodeTryHoldJS(e, j, o)
+	case "cancel-hold":
+		encodeCancelHoldJS(e, j, o)
+	case "rename-patron":
+		encodeRenamePatronJS(e, j, o)
+	default:
+		e.errf("unknown discriminator value %q", ts)
+		e.w.Null()
+	}
+}
+
+func encodeTryHoldJS(e *E, j *JS, o *goja.Object) {
+	e.w.BeginObj(6)
+	e.w.Key("type")
+	e.w.Str("try-hold")
+	e.w.Key("id")
+	e.jsStr(o.Get("id"), ".id")
+	e.w.Key("patron")
+	e.jsStr(o.Get("patron"), ".patron")
+	e.w.Key("target")
+	e.push(".target")
+	encodeHoldTargetJS(e, j, o.Get("target"))
+	e.pop()
+	e.w.Key("open")
+	e.jsBool(o.Get("open"), ".open")
+	e.w.Key("timestamp")
+	e.jsDate(o.Get("timestamp"), ".timestamp")
+	e.w.EndObj()
+}
+
+func encodeCancelHoldJS(e *E, j *JS, o *goja.Object) {
+	e.w.BeginObj(2)
+	e.w.Key("type")
+	e.w.Str("cancel-hold")
+	e.w.Key("id")
+	e.jsStr(o.Get("id"), ".id")
+	e.w.EndObj()
+}
+
+func encodeRenamePatronJS(e *E, j *JS, o *goja.Object) {
+	e.w.BeginObj(4)
+	e.w.Key("type")
+	e.w.Str("rename-patron")
+	e.w.Key("id")
+	e.jsStr(o.Get("id"), ".id")
+	e.w.Key("name")
+	e.jsStr(o.Get("name"), ".name")
+	e.w.Key("timestamp")
+	e.jsDate(o.Get("timestamp"), ".timestamp")
+	e.w.EndObj()
+}
+
+func encodeHoldTargetJS(e *E, j *JS, v goja.Value) {
+	o, ok := e.jsObj(v)
+	if !ok {
+		e.w.Null()
+		return
+	}
+	// HasField: probe the union's key set in declaration order
+	if bv := o.Get("book"); defined(bv) {
+		e.w.BeginObj(1)
+		e.w.Key("book")
+		e.jsStr(bv, ".book")
+		e.w.EndObj()
+		return
+	}
+	if ev := o.Get("edition"); defined(ev) {
+		e.w.BeginObj(1)
+		e.w.Key("edition")
+		e.jsStr(ev, ".edition")
+		e.w.EndObj()
+		return
+	}
+	e.errf("no oneof key of (book|edition)")
+	e.w.Null()
+}
+
+func encodeEditionJS(e *E, j *JS, v goja.Value) {
+	o, ok := e.jsObj(v)
+	if !ok {
+		e.w.Null()
+		return
+	}
+	e.w.BeginObj(3)
+	e.w.Key("isbn")
+	e.jsStr(o.Get("isbn"), ".isbn")
+	e.w.Key("title")
+	e.jsStr(o.Get("title"), ".title")
+	e.w.Key("tags")
+	e.jsStrSet(j, o.Get("tags"), ".tags")
+	e.w.EndObj()
+}
+
 // ===================== //user-code-transport-extension =====================
-// A msgpack transport plugged in from user land: tokenize the message into
-// the shared Tok representation, hand it to NewD, done.  Strings span the
-// source directly (msgpack strings are raw UTF-8, no escapes), so the arena
-// is never used; element counts come free from the container headers.
+// A msgpack transport plugged in from user land, both directions.  Decode:
+// tokenize the message into the shared Tok representation, hand it to NewD,
+// done.  Strings span the source directly (msgpack strings are raw UTF-8,
+// no escapes), so the arena is never used; element counts come free from
+// the container headers.  Encode: implement W; the walk's up-front container
+// counts become msgpack headers directly.
 
 type mpTokenizer struct {
 	src   []byte
@@ -1611,11 +2255,84 @@ func (t *mpTokenizer) container(n uint64, isMap bool) error {
 	return nil
 }
 
-// ================================ //demo ===================================
-// The msgpack library appears here only to author test bytes; the transport
-// itself is the hand-rolled tokenizer above.
+// --- msgpack writer: the encode half of the transport ---
 
-func report(label string, v any, errs []DecodeError, fatal error) {
+// MsgpackWriter implements W.  Ints above the fixint ranges always take the
+// int64 form -- valid msgpack, not minimal-width.
+type MsgpackWriter struct{ buf []byte }
+
+func (w *MsgpackWriter) Bytes() []byte { return w.buf }
+func (w *MsgpackWriter) Reset()        { w.buf = w.buf[:0] }
+
+func (w *MsgpackWriter) BeginObj(n int) { w.container(n, 0x80, 0xde) }
+func (w *MsgpackWriter) BeginArr(n int) { w.container(n, 0x90, 0xdc) }
+func (w *MsgpackWriter) EndObj()        {}
+func (w *MsgpackWriter) EndArr()        {}
+func (w *MsgpackWriter) Key(k string)   { w.Str(k) }
+
+// container writes a fixmap/fixarray header, or the paired 16/32-bit wide
+// form (wide16 and wide16+1) past 15 entries.
+func (w *MsgpackWriter) container(n int, fix, wide16 byte) {
+	switch {
+	case n < 16:
+		w.buf = append(w.buf, fix|byte(n))
+	case n <= math.MaxUint16:
+		w.buf = append(w.buf, wide16, byte(n>>8), byte(n))
+	default:
+		w.buf = append(w.buf, wide16+1,
+			byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+	}
+}
+
+func (w *MsgpackWriter) Str(s string) {
+	switch n := len(s); {
+	case n < 32:
+		w.buf = append(w.buf, 0xa0|byte(n))
+	case n <= math.MaxUint8:
+		w.buf = append(w.buf, 0xd9, byte(n))
+	case n <= math.MaxUint16:
+		w.buf = append(w.buf, 0xda, byte(n>>8), byte(n))
+	default:
+		w.buf = append(w.buf, 0xdb,
+			byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+	}
+	w.buf = append(w.buf, s...)
+}
+
+func (w *MsgpackWriter) Int(i int64) {
+	switch {
+	case i >= 0 && i <= 0x7f, i < 0 && i >= -32:
+		w.buf = append(w.buf, byte(i)) // fixint, both signs
+	default:
+		w.buf = append(w.buf, 0xd3,
+			byte(i>>56), byte(i>>48), byte(i>>40), byte(i>>32),
+			byte(i>>24), byte(i>>16), byte(i>>8), byte(i))
+	}
+}
+
+func (w *MsgpackWriter) Float(f float64) {
+	bits := math.Float64bits(f)
+	w.buf = append(w.buf, 0xcb,
+		byte(bits>>56), byte(bits>>48), byte(bits>>40), byte(bits>>32),
+		byte(bits>>24), byte(bits>>16), byte(bits>>8), byte(bits))
+}
+
+func (w *MsgpackWriter) Bool(b bool) {
+	if b {
+		w.buf = append(w.buf, 0xc3)
+	} else {
+		w.buf = append(w.buf, 0xc2)
+	}
+}
+
+func (w *MsgpackWriter) Null() { w.buf = append(w.buf, 0xc0) }
+
+// ================================ //demo ===================================
+// The msgpack library appears here only to author decode-test bytes and to
+// cross-check encoded output; the transport itself is the hand-rolled
+// tokenizer and writer above.
+
+func report(label string, v any, errs []PathError, fatal error) {
 	fmt.Printf("%s\n  value: %#v\n", label, v)
 	for _, e := range errs {
 		fmt.Printf("  error: %s\n", e)
@@ -1715,4 +2432,80 @@ func main() {
 	// 8) Invalid encoding: fatal at construction, before any walk runs.
 	v8, e8, f8 := DecodeUserCommands(NewJSONDecoder(strings.NewReader(`{"type":"try-h`)))
 	report("8) truncated JSON -> fatal", v8, e8, f8)
+
+	// 9) typed native -> JSON.  The walk owns the layout: discriminator
+	//    first (one-probe scans for any decoder), canonical field order.
+	cmd := &TryHold{
+		Id: "h-9", Patron: "p-2", Target: &TargetBook{Book: "b-1"},
+		Open:      true,
+		Timestamp: time.Date(2026, 8, 21, 10, 30, 0, 0, time.UTC),
+	}
+	jw := &JSONWriter{}
+	if errs := EncodeUserCommands(NewE(jw), cmd); len(errs) > 0 {
+		fmt.Println("  encode errors:", errs)
+	}
+	fmt.Printf("9) native -> JSON (discriminator first)\n  bytes: %s\n", jw.Bytes())
+	v9, e9, f9 := DecodeUserCommands(NewJSONDecoder(bytes.NewReader(jw.Bytes())))
+	report("   round trip back to native", v9, e9, f9)
+
+	// 10) the same value through the user msgpack writer, decoded back by
+	//     the user msgpack tokenizer, and cross-checked by the library.
+	mw := &MsgpackWriter{}
+	_ = EncodeUserCommands(NewE(mw), cmd)
+	v10, e10, f10 := DecodeUserCommands(NewMsgpackDecoder(bytes.NewReader(mw.Bytes())))
+	report("10) native -> msgpack -> native round trip", v10, e10, f10)
+	var interop map[string]any
+	if err := msgpack.Unmarshal(mw.Bytes(), &interop); err != nil {
+		fmt.Println("   library cross-check error:", err)
+	} else {
+		fmt.Printf("   library cross-check: type=%v open=%v\n\n",
+			interop["type"], interop["open"])
+	}
+
+	// 11) JS -> JSON: v5 was minted from a Go map with random field order;
+	//     the walk reads by name, so the output layout is canonical anyway.
+	jw.Reset()
+	if errs := EncodeUserCommandsJS(NewE(jw), j, v5); len(errs) > 0 {
+		fmt.Println("  encode errors:", errs)
+	}
+	fmt.Printf("11) JS -> JSON (canonical layout regardless of source order)\n"+
+		"  bytes: %s\n\n", jw.Bytes())
+
+	// 12) JS -> JSON set lowering: the Set from 6 comes out a sorted array.
+	jw.Reset()
+	if errs := EncodeEditionJS(NewE(jw), j, v6); len(errs) > 0 {
+		fmt.Println("  encode errors:", errs)
+	}
+	fmt.Printf("12) JS -> JSON (Set -> sorted array)\n  bytes: %s\n\n", jw.Bytes())
+
+	// 13) one walk, two transports at once; native set from a Go map comes
+	//     out sorted on both.
+	jw.Reset()
+	mw.Reset()
+	_ = EncodeEdition(NewE(TeeW{A: jw, B: mw}), v6b)
+	v13, e13, f13 := DecodeEdition(NewMsgpackDecoder(bytes.NewReader(mw.Bytes())))
+	fmt.Printf("13) native -> TeeW{JSON, msgpack}\n  json: %s\n", jw.Bytes())
+	report("    msgpack half decoded back", v13, e13, f13)
+
+	// 14) tuple union: the array length written up front is the decode-side
+	//     discriminator.
+	jw.Reset()
+	_ = EncodeQueryCall(NewE(jw), &QueryHolds{Patron: "p-9", Limit: 3})
+	v14, e14, f14 := DecodeQueryCall(NewJSONDecoder(bytes.NewReader(jw.Bytes())))
+	fmt.Printf("14) native -> JSON tuple\n  bytes: %s\n", jw.Bytes())
+	report("    round trip back to native", v14, e14, f14)
+
+	// 15) JS encode error collection: every bad read lands a path error and
+	//     a null placeholder; callers discard the bytes on any errors.
+	badJS, err := vm.RunString(
+		`({type:"try-hold", id:7, open:"yes", target:{}, timestamp:"x"})`)
+	if err != nil {
+		panic(err)
+	}
+	jw.Reset()
+	errs15 := EncodeUserCommandsJS(NewE(jw), j, badJS)
+	fmt.Printf("15) JS encode error collection\n  bytes (discarded): %s\n", jw.Bytes())
+	for _, e := range errs15 {
+		fmt.Printf("  error: %s\n", e)
+	}
 }
