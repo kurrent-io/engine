@@ -17,6 +17,13 @@ There's still a lot to do:
   - reduce the IO boilerplate needed to populate events from KurrentDB
   - serve as canonical examples for the IO handling
 
+- Reimplement go and python bindings to match new cross-language plan:
+  - No more JS wrapper types; native types should be fully-native
+  - Native queries read native types directly from storage, no JS layer
+  - Generate type registry per framework for handling conversions
+  - StoreGenerator redesign around the type registry
+  - Eliminate "plain-json object" as central type in Engine UI.
+
 - Support additional languages, starting with C#, Kotlin, and Swift
 
 - Additional frontend demos:
@@ -26,6 +33,7 @@ There's still a lot to do:
   - PhaseLock engine in a Shared Worker serving multiple tabs
 
 - Additional backend demos:
+  - Pure TypeScript backend for library demo
   - Cloudflare CDN-based log distribution
   - Cloudflare CDN-based server-side queries
     - Will require implementing a Store MVCC capability

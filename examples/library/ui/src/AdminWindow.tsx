@@ -27,7 +27,7 @@ const { Text } = Typography;
 type AdminBookInfo = {
   id: string;
   restricted: boolean;
-  state: 'open' | 'rstr' | 'held' | 'out';
+  state: 'open' | 'restricted' | 'held' | 'out';
   patronId?: string;
   holdId?: string;
   checkoutId?: string;
@@ -177,7 +177,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
           books.push({
             id: bookId,
             restricted: book.restricted,
-            state: book.restricted ? 'rstr' : 'open',
+            state: book.restricted ? 'restricted' : 'open',
           });
         }
       }
@@ -196,7 +196,7 @@ export default function AdminWindow({ relayUrl }: { relayUrl: string }) {
   function handleBookClick(book: AdminBookInfo) {
     switch (book.state) {
       case 'open':
-      case 'rstr':
+      case 'restricted':
         setPendingAction({ type: 'book', bookId: book.id, restricted: book.restricted });
         break;
       case 'held':
